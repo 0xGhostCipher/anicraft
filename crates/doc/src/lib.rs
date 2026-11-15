@@ -9,7 +9,9 @@ pub use anicraft_actions as actions;
 
 pub mod aids;
 pub mod armature;
+pub mod spring;
 pub mod skin;
+pub mod weights;
 pub mod warp;
 mod bitmap;
 mod color_effect;
@@ -32,22 +34,22 @@ pub mod templates;
 pub mod sound;
 pub mod swatch;
 
-pub use filter::{Filter, FilterSide, MAX_BLUR, MAX_QUALITY, MAX_RAMP_STOPS, REST_SNAP, default_bevel_ramp, default_glow_ramp, pinned_stop, ramp_at};
+pub use filter::{FILTER_PARAMS, Filter, FilterEntry, FilterParam, FilterProp, FilterSide, MAX_FILTER_SLOTS, active as active_filters, any_active as any_active_filter, pairs_up as filters_pair_up, MAX_BLUR, MAX_QUALITY, MAX_RAMP_STOPS, REST_SNAP, default_bevel_ramp, default_glow_ramp, pinned_stop, ramp_at};
 pub use bitmap::{Bitmap, BitmapId, ImageError, MAX_BITMAP_EDGE, Pixels, base64_decode, base64_encode, decode_png, image_to_png};
-pub use easing::Easing;
+pub use easing::{CustomEase, EaseDir, EaseFamily, EasePoint, Easing, Handle, MAX_EASE_NAME, MAX_EASE_POINTS, MAX_EASE_SAMPLES, MAX_EASE_Y, MAX_SAVED_EASES, SampledEase, SavedEase, ease_name};
 pub use color_effect::{ADVANCED_ADD, ADVANCED_MUL, ColorEffect, ColorStyle, ColorTransform};
 pub use hints::{HINT_TOLERANCE, HintSide, MAX_SHAPE_HINTS, ShapeHint, hint_index, hint_letter, nearest_outline, placed_on, shapes_centre};
 pub use library::{FolderId, LibraryEntry, LibraryFolder, LibraryItem, LibraryTree, NameError};
-pub use motion::{MotionTween, OnPath, PROPERTIES, Pin, PinError, Property, PropertyKey, Props, Track, motion_path};
+pub use motion::{KeyRef, MotionTween, OnPath, PROPERTIES, Pin, PinError, Property, PropertyKey, Props, Track, filter_properties, motion_path, own_value};
 pub use sound::{EnvelopePoint, FrameSound, Sound, SoundEffect, SoundFormat, SoundId, SoundSync};
 pub use width::{MAX_WIDTH_FACTOR, MAX_WIDTH_POINTS, ProfilePreset, WidthPoint, WidthProfile};
 pub use stroke_style::{Cap, Dash, DashKind, Join, StrokeStyle};
-pub use camera::Camera;
+pub use camera::{Camera, DepthKey};
 pub use swatch::{MAX_SWATCHES, Swatch, SwatchPaint};
 pub use aids::{Aids, GUIDE_REACH, Grid, Guide, GuideAxis, MAX_GUIDES};
 pub use nine_slice::symbol_box;
 pub use armature::{Armature, Bone, BoneId, JointAngle, Limits, Pose};
-pub use eval::{DisplayItem, DisplayList, Group, MAX_SYMBOL_DEPTH, evaluate, evaluate_guided, evaluate_layer_elements, evaluate_player, evaluate_scene, evaluate_scene_camera, evaluate_timeline, evaluate_timeline_at, guide_walk, instance_start};
+pub use eval::{DisplayItem, DisplayList, Group, MAX_SYMBOL_DEPTH, evaluate, evaluate_guided, evaluate_layer_elements, evaluate_shown, evaluate_player, evaluate_scene, evaluate_scene_camera, evaluate_timeline, evaluate_timeline_at, guide_walk, instance_start};
 pub use actions::{Action, ButtonEvent, EventHandler, FrameScript, Language, PluginScript, SourceScript};
 
 use anicraft_geom::{Affine, FillRule, Path, Rect, Vec2};
@@ -562,9 +564,10 @@ pub enum ElementKind {
         /// How the instance blends with what is below it (movie clips and buttons).
         #[serde(default, skip_serializing_if = "BlendMode::is_normal")]
         blend: BlendMode,
-        /// Filters, applied in order (movie clips and buttons).
+        /// Filters, applied in order (movie clips and buttons); each may be switched off
+        /// (ADR 0091).
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
-        filters: Vec<Filter>,
+        filters: Vec<FilterEntry>,
         /// What the instance does on pointer events in the player (buttons and movie clips;
         /// ADR 0024), one handler per event.
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -1001,9 +1004,56 @@ pub enum TweenKind {
     Shape,
 }
 
+/// The property groups a classic tween may ease separately (ADR 0081), as Animate's custom
+/// ease offers them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EaseGroup {
+    /// Where the object is (and how far along a motion guide).
+    Position,
+    /// Its rotation and skew.
+    Rotation,
+    Scale,
+    /// Its colour effect.
+    Color,
+    Filters,
+}
+
+impl EaseGroup {
+    pub const ALL: [EaseGroup; 5] = [EaseGroup::Position, EaseGroup::Rotation, EaseGroup::Scale, EaseGroup::Color, EaseGroup::Filters];
+
+    /// The name commands use (`position`, `rotation`, `scale`, `color`, `filters`).
+    pub fn key(self) -> &'static str {
+        match self {
+            EaseGroup::Position => "position",
+            EaseGroup::Rotation => "rotation",
+            EaseGroup::Scale => "scale",
+            EaseGroup::Color => "color",
+            EaseGroup::Filters => "filters",
+        }
+    }
+
+    pub fn from_key(k: &str) -> Option<EaseGroup> {
+        let k = k.trim().to_ascii_lowercase();
+        let k = if k == "colour" { "color" } else { k.as_str() };
+        EaseGroup::ALL.into_iter().find(|g| g.key() == k)
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            EaseGroup::Position => "Position",
+            EaseGroup::Rotation => "Rotation",
+            EaseGroup::Scale => "Scale",
+            EaseGroup::Color => "Colour",
+            EaseGroup::Filters => "Filters",
+        }
+    }
+}
+
 /// A tween from a keyframe to the next one.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Tween {
+    /// The ease of everything, and of each property group without its own.
     #[serde(default)]
     pub easing: Easing,
     #[serde(default, skip_serializing_if = "is_classic")]
@@ -1011,6 +1061,37 @@ pub struct Tween {
     /// On a guided layer: turn with the motion guide as it bends.
     #[serde(default, skip_serializing_if = "is_false")]
     pub orient: bool,
+    /// Property groups eased their own way (classic tweens; ADR 0081). Empty: one ease for all
+    /// properties.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub groups: Vec<(EaseGroup, Easing)>,
+}
+
+impl Tween {
+    /// A tween of `kind` eased by `easing`.
+    pub fn new(easing: Easing, kind: TweenKind) -> Tween {
+        Tween { easing, kind, ..Tween::default() }
+    }
+
+    /// The ease of group `g`: its own, else the tween's.
+    pub fn ease(&self, g: EaseGroup) -> &Easing {
+        self.groups.iter().find(|(x, _)| *x == g).map_or(&self.easing, |(_, e)| e)
+    }
+
+    /// Whether group `g` has its own ease.
+    pub fn has_own(&self, g: EaseGroup) -> bool {
+        self.groups.iter().any(|(x, _)| *x == g)
+    }
+
+    /// Gives group `g` its own ease, or (with `None`) the tween's again. Groups are kept in
+    /// their fixed order, once each.
+    pub fn set_ease(&mut self, g: EaseGroup, e: Option<Easing>) {
+        self.groups.retain(|(x, _)| *x != g);
+        if let Some(e) = e {
+            self.groups.push((g, e));
+        }
+        self.groups.sort_by_key(|(x, _)| EaseGroup::ALL.iter().position(|y| y == x));
+    }
 }
 
 fn is_false(b: &bool) -> bool {
@@ -1138,6 +1219,14 @@ pub struct Layer {
     /// move a deeper layer less (parallax). Not the nesting depth ([`Timeline::depth`]).
     #[serde(default, skip_serializing_if = "is_zero")]
     pub depth: f32,
+    /// Depth over time (ADR 0082): with keys, the depth at a frame is theirs
+    /// ([`Layer::depth_at`]) and `depth` plays no part. Sorted by frame, one per frame.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub depth_keys: Vec<camera::DepthKey>,
+    /// Attached to the camera (ADR 0082): the camera's moves leave the layer where it is on
+    /// screen (titles, HUDs); its coordinates are the output's.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub attached: bool,
     /// Volume of the sounds on this layer (and in the symbols on it), `0..=1` (ADR 0039).
     #[serde(default = "full", skip_serializing_if = "is_full")]
     pub volume: f32,
@@ -1235,6 +1324,8 @@ impl PartialEq for Layer {
             && self.onion == o.onion
             && self.height_rows == o.height_rows
             && self.depth.to_bits() == o.depth.to_bits()
+            && self.depth_keys == o.depth_keys
+            && self.attached == o.attached
             && self.volume.to_bits() == o.volume.to_bits()
             && self.muted == o.muted
             && self.mask_mode == o.mask_mode
@@ -1268,6 +1359,8 @@ impl Layer {
             height_rows: 1,
             keyframes: vec![Arc::new(Keyframe::new(0, 1))],
             depth: 0.0,
+            depth_keys: Vec::new(),
+            attached: false,
             volume: 1.0,
             muted: false,
             armature: None,
@@ -1684,6 +1777,9 @@ pub struct Document {
     /// How the grid and the guides look (ADR 0076).
     #[serde(default, skip_serializing_if = "aids_is_default")]
     pub aids: Arc<Aids>,
+    /// Eases the artist saved by name (ADR 0081), offered with the presets.
+    #[serde(default, skip_serializing_if = "eases_is_empty")]
+    pub eases: Arc<Vec<SavedEase>>,
     /// Next free id for layers, elements and symbols.
     pub next_id: u64,
 }
@@ -1721,6 +1817,8 @@ struct DocumentFile {
     swatches: Arc<Vec<Swatch>>,
     #[serde(default)]
     aids: Arc<Aids>,
+    #[serde(default)]
+    eases: Arc<Vec<SavedEase>>,
     #[serde(default = "first_id")]
     next_id: u64,
 }
@@ -1731,7 +1829,7 @@ impl From<DocumentFile> for Document {
         if let Some(tl) = f.timeline {
             scenes.insert(0, Arc::new(Scene { name: "Scene 1".into(), timeline: tl, guides: Vec::new() }));
         }
-        Document { stage: f.stage, scenes, library: f.library, bitmaps: f.bitmaps, sounds: f.sounds, library_tree: f.library_tree, document_class: f.document_class, publish: f.publish, aids: f.aids, swatches: f.swatches, next_id: f.next_id }
+        Document { stage: f.stage, scenes, library: f.library, bitmaps: f.bitmaps, sounds: f.sounds, library_tree: f.library_tree, document_class: f.document_class, publish: f.publish, aids: f.aids, swatches: f.swatches, eases: f.eases, next_id: f.next_id }
     }
 }
 
@@ -1741,6 +1839,10 @@ fn first_id() -> u64 {
 
 fn library_tree_is_empty(t: &Arc<LibraryTree>) -> bool {
     t.is_empty()
+}
+
+fn eases_is_empty(e: &Arc<Vec<SavedEase>>) -> bool {
+    e.is_empty()
 }
 
 fn aids_is_default(a: &Arc<Aids>) -> bool {
@@ -1756,13 +1858,13 @@ static NO_TIMELINE: Timeline = Timeline { layers: Vec::new() };
 
 impl PartialEq for Document {
     fn eq(&self, o: &Document) -> bool {
-        self.stage == o.stage && self.next_id == o.next_id && self.document_class == o.document_class && arcs_eq(&self.scenes, &o.scenes) && arcs_eq(&self.library, &o.library) && arcs_eq(&self.bitmaps, &o.bitmaps) && arcs_eq(&self.sounds, &o.sounds) && arc_eq(&self.library_tree, &o.library_tree) && arc_eq(&self.publish, &o.publish) && arc_eq(&self.aids, &o.aids) && arc_eq(&self.swatches, &o.swatches)
+        self.stage == o.stage && self.next_id == o.next_id && self.document_class == o.document_class && arcs_eq(&self.scenes, &o.scenes) && arcs_eq(&self.library, &o.library) && arcs_eq(&self.bitmaps, &o.bitmaps) && arcs_eq(&self.sounds, &o.sounds) && arc_eq(&self.library_tree, &o.library_tree) && arc_eq(&self.publish, &o.publish) && arc_eq(&self.aids, &o.aids) && arc_eq(&self.swatches, &o.swatches) && arc_eq(&self.eases, &o.eases)
     }
 }
 
 impl Default for Document {
     fn default() -> Self {
-        let mut d = Document { stage: Stage::default(), scenes: vec![Arc::new(Scene::new("Scene 1"))], library: Vec::new(), bitmaps: Vec::new(), sounds: Vec::new(), library_tree: Arc::default(), document_class: String::new(), publish: Arc::default(), aids: Arc::default(), swatches: default_swatches(), next_id: 1 };
+        let mut d = Document { stage: Stage::default(), scenes: vec![Arc::new(Scene::new("Scene 1"))], library: Vec::new(), bitmaps: Vec::new(), sounds: Vec::new(), library_tree: Arc::default(), document_class: String::new(), publish: Arc::default(), aids: Arc::default(), swatches: default_swatches(), eases: Arc::default(), next_id: 1 };
         let id = LayerId(d.alloc_id());
         d.timeline_mut(0).layers.push(Arc::new(Layer::new(id, "Layer 1")));
         d
@@ -1843,6 +1945,10 @@ impl Document {
         let aids = self.aids.sanitized();
         if aids != *self.aids {
             self.aids = Arc::new(aids);
+        }
+        let eases = easing::sanitized_eases(&self.eases);
+        if eases != *self.eases {
+            self.eases = Arc::new(eases);
         }
         let mut max_id = 0u64;
         let scan = |l: &Layer, max_id: &mut u64| {
@@ -2039,11 +2145,15 @@ fn sanitize_warps(layer: &mut Arc<Layer>) {
     }
 }
 
-/// Keeps a loaded layer's depth finite and in range (touching it only if it isn't).
+/// Keeps a loaded layer's depth and depth keys finite and in range (touching it only if they
+/// aren't).
 fn sanitize_depth(layer: &mut Arc<Layer>) {
     let d = camera::clamp_depth(layer.depth);
     if d.to_bits() != layer.depth.to_bits() {
         Arc::make_mut(layer).depth = d;
+    }
+    if !layer.depth_keys_clean() {
+        Arc::make_mut(layer).sanitize_depth_keys();
     }
 }
 

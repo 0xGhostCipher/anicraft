@@ -12,6 +12,8 @@ mod cmds_warp;
 pub mod cmds_brush;
 mod cmds_camera;
 mod cmds_draw;
+pub mod cmds_filter;
+pub mod cmds_ease;
 pub mod cmds_envelope;
 pub mod cmds_drop;
 pub mod cmds_erase;
@@ -20,6 +22,7 @@ mod cmds_frames;
 mod cmds_group;
 mod cmds_modify;
 mod cmds_motion;
+mod cmds_retime;
 mod cmds_hints;
 mod cmds_layer;
 pub mod cmds_library;
@@ -29,7 +32,9 @@ pub mod cmds_raw;
 pub mod cmds_rawsub;
 mod cmds_rawpoints;
 pub mod brush_library;
+pub mod filter_library;
 pub mod cmds_recent;
+pub mod cmds_desktop;
 pub mod cmds_template;
 mod cmds_recovery;
 mod cmds_script;
@@ -56,12 +61,13 @@ pub mod render_service;
 pub mod selection;
 pub mod snap;
 pub mod params;
+pub mod plugin_export;
 pub mod player;
 pub mod publish;
 pub mod vfs;
 
 use anicraft_doc::{DisplayList, Document, Element, ElementId, ElementKind, Keyframe, Layer, LayerId, LayerKind, evaluate_layer_elements, evaluate_scene};
-use anicraft_geom::{Rect, Vec2};
+use anicraft_geom::{Affine, Rect, Vec2};
 use serde_json::{Value, json};
 use history::History;
 use std::cell::RefCell;
@@ -129,9 +135,11 @@ impl CommandSpec {
 pub fn commands() -> Vec<CommandSpec> {
     let mut v = Vec::new();
     v.extend(cmds_file::specs());
+    v.extend(plugin_export::specs());
     v.extend(cmds_envelope::specs());
     v.extend(publish::specs());
     v.extend(cmds_recent::specs());
+    v.extend(cmds_desktop::specs());
     v.extend(cmds_drop::specs());
     v.extend(cmds_recovery::specs());
     v.extend(cmds_timeline::specs());
@@ -140,6 +148,8 @@ pub fn commands() -> Vec<CommandSpec> {
     v.extend(cmds_bone::specs());
     v.extend(cmds_warp::specs());
     v.extend(cmds_motion::specs());
+    v.extend(cmds_retime::specs());
+    v.extend(cmds_ease::specs());
     v.extend(cmds_hints::specs());
     v.extend(cmds_scene::specs());
     v.extend(cmds_frames::specs());
@@ -159,6 +169,7 @@ pub fn commands() -> Vec<CommandSpec> {
     v.extend(find::specs());
     v.extend(explorer::specs());
     v.extend(cmds_brush::specs());
+    v.extend(cmds_filter::specs());
     v.extend(cmds_erase::specs());
     v.extend(cmds_paint::specs());
     v.extend(cmds_swatch::specs());
@@ -326,8 +337,10 @@ pub struct Session {
     dl_cache: RefCell<Option<CachedList>>,
     /// Copied elements (and the symbols they use), outside the document so undo leaves it alone.
     pub clipboard: cmds_modify::Clipboard,
-    /// Copied frames (Copy Frames), separate from copied artwork as in Animate.
+    /// Copied frames (Copy Frames), separate from copied artwork.
     pub frame_clipboard: cmds_frames::FrameClipboard,
+    /// A copied ease (Copy Ease, ADR 0081), for Paste Ease.
+    pub ease_clipboard: Option<anicraft_doc::Easing>,
     /// A command is editing a motion tween's target (auto-key, ADR 0016).
     motion_edit: Option<cmds_motion::MotionEdit>,
     /// Installed WebAssembly plug-ins (ADR 0017). They belong to the session, not the
@@ -360,6 +373,11 @@ pub struct Session {
     /// The user's own brush presets (ADR 0068). Like recent files they belong to the session
     /// and survive New and Open; the desktop app keeps them in its preferences.
     pub brushes: brush_library::BrushLibrary,
+    /// The user's filter presets (ADR 0091). Like brushes they belong to the session and
+    /// survive New and Open; the desktop app keeps them in its preferences.
+    pub filter_presets: filter_library::FilterLibrary,
+    /// Copied filters (Copy Filters, ADR 0091), for Paste Filters.
+    pub filter_clipboard: Option<Vec<anicraft_doc::FilterEntry>>,
     /// The open envelope (ADR 0080): view state over the shapes it bends, like a gesture.
     pub(crate) envelope: Option<cmds_envelope::Envelope>,
 }
@@ -421,6 +439,7 @@ impl Session {
             dl_cache: RefCell::new(None),
             clipboard: cmds_modify::Clipboard::default(),
             frame_clipboard: cmds_frames::FrameClipboard::default(),
+            ease_clipboard: None,
             motion_edit: None,
             plugins: anicraft_plugins::Registry::default(),
             step_label: None,
@@ -433,6 +452,8 @@ impl Session {
             published: std::collections::BTreeSet::new(),
             recent: cmds_recent::RecentFiles::default(),
             brushes: brush_library::BrushLibrary::default(),
+            filter_presets: filter_library::FilterLibrary::default(),
+            filter_clipboard: None,
             envelope: None,
         }
     }
@@ -517,9 +538,14 @@ impl Session {
         let plugins = std::mem::take(&mut self.plugins);
         let recent = std::mem::take(&mut self.recent);
         let brushes = std::mem::take(&mut self.brushes);
+        let filter_presets = std::mem::take(&mut self.filter_presets);
+        let filter_clipboard = self.filter_clipboard.take();
         *self = Session::new(doc);
         self.recent = recent;
         self.brushes = brushes;
+        self.filter_presets = filter_presets;
+        // Like copied artwork, copied filters carry across to the next document.
+        self.filter_clipboard = filter_clipboard;
         // The clipboard survives New/Open, so artwork can move between documents.
         self.clipboard = clipboard;
         self.plugins = plugins;
@@ -846,6 +872,32 @@ impl Session {
         dl.items.get(i).map(|it| (it.layer, it.element))
     }
 
+    /// Stage → output for layer `id` at the playhead as the camera shows it (ADR 0082): the
+    /// camera and the layer's depth then, the identity for an attached layer. `None` without a
+    /// camera that does something, while a symbol is open, or when the camera has passed the
+    /// layer. What editing through the camera maps the pointer back with.
+    pub fn camera_view(&self, id: LayerId) -> Option<Affine> {
+        if !self.editing.is_empty() {
+            return None;
+        }
+        let tl = self.doc.timeline(self.scene);
+        let cam = tl.camera_at(self.frame, &self.doc.stage)?;
+        cam.layer_view(&self.doc.stage, tl.layer(id)?, self.frame)
+    }
+
+    /// [`Session::hit_test`] through the scene's camera: the topmost element under output
+    /// point `p` (the movie's pixels) on a visible, unlocked layer, `slop` in output pixels.
+    /// Without a camera that does something this is the stage's hit test.
+    pub fn hit_test_camera(&self, p: Vec2, slop: f32) -> Option<(LayerId, ElementId)> {
+        if !self.editing.is_empty() || self.doc.timeline(self.scene).camera_at(self.frame, &self.doc.stage).is_none() {
+            return self.hit_test(p, slop);
+        }
+        let tl = self.timeline();
+        let dl = anicraft_doc::evaluate_scene_camera(&self.doc, self.scene, self.frame);
+        let i = pick_index(&dl, p, slop, |_, it| tl.layer(it.layer).is_some_and(|layer| !layer.locked && !tl.locked_by_folder(layer.id)))?;
+        dl.items.get(i).map(|it| (it.layer, it.element))
+    }
+
     /// Stage-space bounds of a top-level element at the playhead.
     pub fn element_bounds(&self, id: ElementId) -> Rect {
         let mut r = Rect::EMPTY;
@@ -933,6 +985,29 @@ impl Session {
         Ok(kf.elements_mut_where(|id| sel.contains(&id)))
     }
 
+    /// [`Session::selected_elements_mut`] for the properties an instance keeps however it is
+    /// placed (colour effect, blending, filters). On an armature layer (ADR 0084) the selected
+    /// members are edited in place on every pose of the armature, so the property holds as the
+    /// armature moves and the bones and poses are untouched; elsewhere, as any edit.
+    pub(crate) fn selected_props_mut(&mut self) -> Result<Vec<&mut Element>> {
+        let on_armature = self.timeline().layer(self.layer).is_some_and(|l| l.kind == LayerKind::Armature);
+        if !on_armature {
+            return self.selected_elements_mut();
+        }
+        let sel: std::collections::HashSet<ElementId> = self.selection.on(self.layer).into_iter().collect();
+        if sel.is_empty() {
+            return Err(EngineError::State("nothing is selected".into()));
+        }
+        if self.timeline().locked_by_folder(self.layer) {
+            return Err(EngineError::State("the armature layer is in a locked folder".into()));
+        }
+        let layer = self.layer_mut(None)?;
+        if layer.locked {
+            return Err(EngineError::State(format!("layer '{}' is locked", layer.name)));
+        }
+        Ok(layer.keyframes.iter_mut().flat_map(|k| Arc::make_mut(k).elements_mut_where(|id| sel.contains(&id))).collect())
+    }
+
     /// JSON summary used by `doc.info` and the CLI.
     pub fn info(&self) -> Value {
         let layers: Vec<Value> = self
@@ -942,7 +1017,7 @@ impl Session {
             .map(|l| {
                 json!({
                     "id": l.id.0, "name": l.name, "visible": l.visible, "locked": l.locked, "volume": l.volume, "muted": l.muted,
-                    "keyframes": l.keyframes.iter().map(|k| json!({"start": k.start, "duration": k.duration, "elements": k.elements.len(), "tween": k.tween.map(|t| t.easing.label()), "motion": k.motion.as_ref().map(|m| m.tracks.iter().map(|t| t.property.key()).collect::<Vec<_>>()), "sound": k.sound.as_ref().map(|f| json!({"sound": f.sound.0, "sync": f.sync.key(), "repeat": f.repeat, "loop": f.looping, "effect": f.effect.key()})), "script": k.script.as_ref().map(anicraft_doc::FrameScript::describe)})).collect::<Vec<_>>()
+                    "keyframes": l.keyframes.iter().map(|k| json!({"start": k.start, "duration": k.duration, "elements": k.elements.len(), "tween": k.tween.as_ref().map(|t| t.easing.label()), "motion": k.motion.as_ref().map(|m| m.tracks.iter().map(|t| t.property.key()).collect::<Vec<_>>()), "sound": k.sound.as_ref().map(|f| json!({"sound": f.sound.0, "sync": f.sync.key(), "repeat": f.repeat, "loop": f.looping, "effect": f.effect.key()})), "script": k.script.as_ref().map(anicraft_doc::FrameScript::describe)})).collect::<Vec<_>>()
                 })
             })
             .collect();
@@ -1041,6 +1116,10 @@ mod tests;
 #[cfg(test)]
 mod motion_tests;
 #[cfg(test)]
+mod retime_tests;
+#[cfg(test)]
+mod ease_tests;
+#[cfg(test)]
 mod color_tests;
 #[cfg(test)]
 mod motion_path_tests;
@@ -1048,6 +1127,8 @@ mod motion_path_tests;
 mod motion_pin_tests;
 #[cfg(test)]
 mod plugin_tests;
+#[cfg(test)]
+mod plugin_kinds_tests;
 #[cfg(test)]
 mod tests_sound;
 #[cfg(test)]
@@ -1061,9 +1142,19 @@ mod tests_camera;
 #[cfg(test)]
 mod tests_bone;
 #[cfg(test)]
+mod tests_bone_spring;
+#[cfg(test)]
 mod tests_shape_bone;
 #[cfg(test)]
+mod tests_shape_weights;
+#[cfg(test)]
 mod tests_warp;
+#[cfg(test)]
+mod tests_filter;
+#[cfg(test)]
+mod tests_filter_tracks;
+#[cfg(test)]
+mod desktop_tests;
 #[cfg(test)]
 mod merge_tests;
 #[cfg(test)]

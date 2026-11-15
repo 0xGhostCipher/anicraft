@@ -250,7 +250,20 @@ pub fn evaluate_guided<'a>(layer: &'a Layer, frame: u32, guide: Option<&PathWalk
     Some((start, Cow::Owned(els)))
 }
 
-fn evaluate_tweened<'a>(layer: &'a Layer, frame: u32, guide: Option<&PathWalk>) -> Option<(u32, Cow<'a, [Arc<Element>]>)> {
+/// [`evaluate_guided`] as the movie shows the layer at `fps` frames a second: an armature's
+/// springs (ADR 0084) swing its bones by the motion up to the frame. This is what every
+/// renderer, export, the player and the stage draw; commands edit the keyed pose
+/// ([`evaluate_guided`]). The same as [`evaluate_guided`] without springs.
+pub fn evaluate_shown<'a>(layer: &'a Layer, frame: u32, guide: Option<&PathWalk>, fps: f32) -> Option<(u32, Cow<'a, [Arc<Element>]>)> {
+    let Some(arm) = layer.armature.as_deref().filter(|a| layer.kind == crate::LayerKind::Armature && a.has_springs()) else { return evaluate_guided(layer, frame, guide) };
+    let (start, els) = evaluate_tweened(layer, frame, guide)?;
+    let pose = crate::spring::sprung_pose(layer, frame, fps).unwrap_or_default();
+    let mut els = els.into_owned();
+    crate::armature::apply(arm, &mut els, &pose);
+    Some((start, Cow::Owned(els)))
+}
+
+pub(crate) fn evaluate_tweened<'a>(layer: &'a Layer, frame: u32, guide: Option<&PathWalk>) -> Option<(u32, Cow<'a, [Arc<Element>]>)> {
     let idx = layer.keyframe_index_at(frame)?;
     let kf = layer.keyframes.get(idx)?;
     // A motion tween: its target follows the property curves (and its motion path, ADR 0030);
@@ -263,12 +276,12 @@ fn evaluate_tweened<'a>(layer: &'a Layer, frame: u32, guide: Option<&PathWalk>) 
         }
         return Some((kf.start, Cow::Owned(els)));
     }
-    let Some(tween) = kf.tween else { return Some((kf.start, Cow::Borrowed(&kf.elements))) };
+    let Some(tween) = &kf.tween else { return Some((kf.start, Cow::Borrowed(&kf.elements))) };
     let Some(next) = layer.keyframes.get(idx + 1) else { return Some((kf.start, Cow::Borrowed(&kf.elements))) };
     if next.start != kf.end() || frame == kf.start {
         return Some((kf.start, Cow::Borrowed(&kf.elements)));
     }
-    let t = tween.easing.apply((frame - kf.start) as f32 / kf.duration.max(1) as f32);
+    let t = Progress::of(tween, (frame - kf.start) as f32 / kf.duration.max(1) as f32);
     let morph = tween.kind == TweenKind::Shape;
     let path = guide.map(|g| (g, tween.orient));
     let pairs = if morph && !kf.hints.is_empty() { crate::hints::hint_pairs(kf, next) } else { Vec::new() };
@@ -284,11 +297,42 @@ fn evaluate_tweened<'a>(layer: &'a Layer, frame: u32, guide: Option<&PathWalk>) 
     Some((kf.start, Cow::Owned(els)))
 }
 
+/// How far a classic tween has gone, eased, for each property group (ADR 0081): `main` for
+/// what has no group (outlines, fills, strokes, a group's members), the rest each by its
+/// group's ease (the tween's own when the group has none).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Progress {
+    pub main: f32,
+    pub position: f32,
+    pub rotation: f32,
+    pub scale: f32,
+    pub color: f32,
+    pub filters: f32,
+}
+
+impl Progress {
+    /// Everything at `t`.
+    pub fn uniform(t: f32) -> Progress {
+        Progress { main: t, position: t, rotation: t, scale: t, color: t, filters: t }
+    }
+
+    /// `tween` at linear progress `t`.
+    pub fn of(tween: &crate::Tween, t: f32) -> Progress {
+        let main = tween.easing.apply(t);
+        if tween.groups.is_empty() {
+            return Progress::uniform(main);
+        }
+        let g = |g: crate::EaseGroup| if tween.has_own(g) { tween.ease(g).apply(t) } else { main };
+        Progress { main, position: g(crate::EaseGroup::Position), rotation: g(crate::EaseGroup::Rotation), scale: g(crate::EaseGroup::Scale), color: g(crate::EaseGroup::Color), filters: g(crate::EaseGroup::Filters) }
+    }
+}
+
 /// Interpolates two elements; `None` when they cannot tween. With `morph` (a shape tween),
 /// shapes of different structure blend through [`anicraft_geom::morph`], steered by `hints`
 /// (shape hints in each element's own space, ADR 0023); otherwise a shape changes only when
 /// both keyframes share its structure.
-fn interpolate(a: &Element, b: &Element, t: f32, morph: bool, hints: &[(anicraft_geom::Vec2, anicraft_geom::Vec2)], guide: Option<(&PathWalk, bool)>) -> Option<Element> {
+fn interpolate(a: &Element, b: &Element, pr: Progress, morph: bool, hints: &[(anicraft_geom::Vec2, anicraft_geom::Vec2)], guide: Option<(&PathWalk, bool)>) -> Option<Element> {
+    let t = pr.main;
     let kind = match (&a.kind, &b.kind) {
         (ElementKind::Shape(sa), ElementKind::Shape(sb)) => {
             // Warped on both keyframes (ADR 0079): the pins tween and bend the outline as drawn.
@@ -323,7 +367,15 @@ fn interpolate(a: &Element, b: &Element, t: f32, morph: bool, hints: &[(anicraft
             };
             ElementKind::Shape(Shape { path, fill, stroke, fill_rule: sa.fill_rule, merge: sa.merge, warp })
         }
-        (ElementKind::Symbol { symbol: s1, .. }, ElementKind::Symbol { symbol: s2, .. }) if s1 == s2 => a.kind.clone(),
+        // An instance tweens its filters when both keyframes have the same kinds in the same
+        // order (Animate's rule); otherwise they hold.
+        (ElementKind::Symbol { symbol: s1, filters: fa, .. }, ElementKind::Symbol { symbol: s2, filters: fb, .. }) if s1 == s2 => {
+            let mut k = a.kind.clone();
+            if let (ElementKind::Symbol { filters, .. }, Some(lerped)) = (&mut k, crate::filter::lerp_filters(fa, fb, pr.filters)) {
+                *filters = lerped;
+            }
+            k
+        }
         // Text tweens its placement and colour effect; the words stay the first keyframe's.
         (ElementKind::Text(_), ElementKind::Text(_)) => a.kind.clone(),
         (ElementKind::Camera, ElementKind::Camera) => ElementKind::Camera,
@@ -333,7 +385,7 @@ fn interpolate(a: &Element, b: &Element, t: f32, morph: bool, hints: &[(anicraft
             let mut members = ma.clone();
             for (la, lb) in members.layers.iter_mut().zip(&mb.layers) {
                 let (Some(ka), Some(kb)) = (la.keyframe_at(0), lb.keyframe_at(0)) else { continue };
-                let els: Vec<Arc<Element>> = ka.elements.iter().enumerate().map(|(i, x)| kb.elements.get(i).and_then(|y| interpolate(x, y, t, morph, &[], None)).map_or_else(|| x.clone(), Arc::new)).collect();
+                let els: Vec<Arc<Element>> = ka.elements.iter().enumerate().map(|(i, x)| kb.elements.get(i).and_then(|y| interpolate(x, y, Progress::uniform(t), morph, &[], None)).map_or_else(|| x.clone(), Arc::new)).collect();
                 if let Some(k) = Arc::make_mut(la).keyframe_mut(0) {
                     k.elements = els;
                 }
@@ -342,11 +394,17 @@ fn interpolate(a: &Element, b: &Element, t: f32, morph: bool, hints: &[(anicraft
         }
         _ => return None,
     };
-    let mut transform = a.transform.decompose().lerp(&b.transform.decompose(), t).compose();
-    if let Some((g, orient)) = guide {
-        transform = follow(g, orient, &a.transform, &b.transform, t, transform);
+    let (da, db) = (a.transform.decompose(), b.transform.decompose());
+    let mut d = da.lerp(&db, pr.position);
+    if pr.rotation != pr.position || pr.scale != pr.position {
+        let (r, s) = (da.lerp(&db, pr.rotation), da.lerp(&db, pr.scale));
+        (d.rotation, d.skew, d.sx, d.sy) = (r.rotation, r.skew, s.sx, s.sy);
     }
-    Some(Element { id: a.id, name: a.name.clone(), transform, color: a.color.lerp(&b.color, t), kind })
+    let mut transform = d.compose();
+    if let Some((g, orient)) = guide {
+        transform = follow(g, orient, &a.transform, &b.transform, pr.position, transform);
+    }
+    Some(Element { id: a.id, name: a.name.clone(), transform, color: a.color.lerp(&b.color, pr.color), kind })
 }
 
 /// What a timeline is evaluated inside of.
@@ -465,7 +523,13 @@ fn eval_timeline(doc: &Document, tl: &Timeline, frame: u32, cx: &Ctx, out: &mut 
     let clip_of = |id: LayerId| clips.iter().find(|(l, _)| *l == id).map(|(_, c)| *c);
     // Folders draw nothing, and a hidden folder hides everything in it.
     let has_folders = tl.layers.iter().any(|l| l.kind == LayerKind::Folder);
-    for (index, layer) in tl.layers.iter().enumerate().rev() {
+    // Deepest first, ties in timeline order (ADR 0082); depth belongs to a scene's own layers.
+    // (Only sorted when some layer has a depth: nested timelines allocate nothing.)
+    let sorted = (cx.depth == 0 && tl.layers.iter().any(|l| l.has_depth())).then(|| tl.draw_order(frame));
+    let n = tl.layers.len();
+    for k in 0..n {
+        let index = sorted.as_ref().map_or(n - 1 - k, |o| o.get(k).copied().unwrap_or(n));
+        let Some(layer) = tl.layers.get(index) else { continue };
         // Guide artwork is listed (marked, for editing) but never drawn; inside mask artwork
         // it plays no part at all.
         let is_guide = layer.kind == LayerKind::Guide;
@@ -482,10 +546,17 @@ fn eval_timeline(doc: &Document, tl: &Timeline, frame: u32, cx: &Ctx, out: &mut 
         let guide = cx.guide || is_guide;
         // A layer guided by a guide layer: its tweens follow the guide's first path.
         let walk = layer.parent.and_then(|p| tl.layer(p)).filter(|g| g.kind == LayerKind::Guide).and_then(|g| guide_walk(g, frame));
-        let Some((kf_start, elements)) = evaluate_guided(layer, frame, walk.as_ref()) else { continue };
+        let Some((kf_start, elements)) = evaluate_shown(layer, frame, walk.as_ref(), doc.stage.fps) else { continue };
         let layer_outline = cx.outline.or(if layer.outline && cx.stage { Some(layer.color) } else { None });
-        // Through a camera, each layer is placed by the camera and its own depth.
-        let layer_xf = cx.camera.map_or(cx.xf, |c| c.view(&doc.stage, layer.depth));
+        // Through a camera, each layer is placed by the camera and its own depth (an attached
+        // layer stays put); a layer the camera has passed isn't drawn.
+        let layer_xf = match cx.camera {
+            Some(c) => match c.layer_view(&doc.stage, layer, frame) {
+                Some(v) => v,
+                None => continue,
+            },
+            None => cx.xf,
+        };
         let lc = LayerCtx { layer, frame, kf_start, clip, masks, guide, outline: layer_outline, xf: layer_xf };
         for el in elements.iter() {
             eval_element(doc, cx, &lc, el, out, play);
@@ -644,9 +715,9 @@ fn eval_element(doc: &Document, cx: &Ctx, lc: &LayerCtx<'_>, el: &Element, out: 
             // An alpha offset (Advanced) changes each item's alpha on its own: it stays
             // in the items' transform, and the group (for a blend or filters) is opaque.
             let fade = fx.alpha_factor().unwrap_or(1.0);
-            let (color, group) = if masks.is_none() && (fade < 1.0 - 1e-4 || !blend.is_normal() || !filters.is_empty()) {
+            let (color, group) = if masks.is_none() && (fade < 1.0 - 1e-4 || !blend.is_normal() || crate::filter::any_active(filters)) {
                 let gid = out.groups.len() as u32;
-                out.groups.push(Group { parent: cx.group, alpha: fade, blend: *blend, filters: filters.iter().map(crate::Filter::sanitized).collect(), clip });
+                out.groups.push(Group { parent: cx.group, alpha: fade, blend: *blend, filters: crate::filter::active(filters).into(), clip });
                 let inner = if fx.alpha_factor().is_some() { fx.without_alpha() } else { fx };
                 (cx.color.concat(&inner), Some(gid))
             } else {
