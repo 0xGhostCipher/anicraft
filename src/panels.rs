@@ -5,7 +5,7 @@ use crate::icons::{self, Icon};
 use crate::theme::{Section, T, TARGET, TOOL_BUTTON, TOOL_ICON, Type, color, section, text, to_color32, with_type};
 use anicraft_engine::doc::{ColorEffect, ColorStyle, ElementKind, LibraryItem, LineType, MAX_PATH_OFFSET, Paint, Rgba, SymbolKind, TextKind, evaluate_layer_elements};
 use crate::a11y::{self, Named};
-use egui::{Color32, Pos2, Rect, Sense, Stroke, StrokeKind, WidgetType, pos2, vec2};
+use egui::{Color32, Rect, Sense, Stroke, StrokeKind, WidgetType, pos2, vec2};
 use serde_json::{Value, json};
 
 // ----- tools --------------------------------------------------------------------------------
@@ -40,59 +40,51 @@ fn tool_icon(tool: Tool) -> Icon {
     }
 }
 
-pub fn tools(app: &mut App, ui: &mut egui::Ui) {
-    let area = ui.max_rect();
-    // Scrolls (wheel, or Tab to a tool) when a large interface scale leaves too little height.
-    // The margin is inside the scroll area, so focus rings drawn around a tool are not clipped.
-    egui::ScrollArea::vertical().id_salt("tools").scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden).show(ui, |ui| {
-        egui::Frame::NONE.inner_margin(egui::Margin::symmetric(6, 0)).show(ui, |ui| tool_column(app, ui, area));
-    });
+/// How the tools are laid out where they are (ADR 0087).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ToolFlow {
+    /// One column: the bar on the left or right of the editor.
+    Column,
+    /// One row: the bar above or below the stage.
+    Row,
+    /// As many columns as fit: a panel in a dock or a floating window.
+    Grid,
 }
 
-fn tool_column(app: &mut App, ui: &mut egui::Ui, area: Rect) {
-    ui.vertical_centered(|ui| {
-        for tool in Tool::ALL {
-            let (rect, resp) = ui.allocate_exact_size(vec2(TOOL_BUTTON, TOOL_BUTTON), Sense::click());
-            let active = app.tool == tool;
-            // The active tool sits on a lighter gray block with a white icon; the rest are a
-            // step dimmer, so the one in hand stands out without colour.
-            let bg = if active {
-                T.active
-            } else if resp.hovered() {
-                T.header
-            } else {
-                Color32::TRANSPARENT
-            };
-            ui.painter().rect_filled(rect, T.rc(), bg);
-            let tint = if active { T.on_active } else if resp.hovered() { T.icon_hot } else { T.icon };
-            icons::paint(ui.painter(), Rect::from_center_size(rect.center(), vec2(TOOL_ICON, TOOL_ICON)), tool_icon(tool), tint);
-            // "Pen tool (P)": what the tooltip says first, and what a screen reader says.
-            let name = a11y::with_key(&tr!("{tool} tool", tool = crate::i18n::t(tool.label())), app.keymap.primary(crate::keymap::tool_id(tool)));
-            a11y::control(ui, &resp, WidgetType::Button, &name, Some(active));
-            if active {
-                a11y::anchor(ui, a11y::Region::Tools, area, &resp);
-            }
-            let resp = resp.on_hover_text(format!("{name}\n{}", crate::i18n::t(tool.hint())));
-            if resp.clicked() {
-                app.tool = tool;
-            }
-            // Animate: double-clicking the Eraser erases everything on the stage (it asks first).
-            if tool == Tool::Eraser && resp.double_clicked() {
-                crate::erasertool::erase_everything(app);
-            }
-            if matches!(tool, Tool::Width | Tool::Eraser | Tool::Line | Tool::Eyedropper) {
-                // Tool groups: select, draw by hand, shapes, view.
-                ui.add_space(3.0);
-                let y = ui.cursor().top();
-                ui.painter().line_segment([pos2(rect.left(), y), pos2(rect.right(), y)], Stroke::new(1.0, T.border));
-                ui.add_space(4.0);
-            }
+pub fn tools(app: &mut App, ui: &mut egui::Ui, flow: ToolFlow) {
+    let area = ui.max_rect();
+    // Scrolls (wheel, or Tab to a tool) when a large interface scale leaves too little room.
+    // The margin is inside the scroll area, so focus rings drawn around a tool are not clipped.
+    let hidden = egui::scroll_area::ScrollBarVisibility::AlwaysHidden;
+    match flow {
+        ToolFlow::Column => {
+            egui::ScrollArea::vertical().id_salt("tools").scroll_bar_visibility(hidden).show(ui, |ui| {
+                egui::Frame::NONE.inner_margin(egui::Margin::symmetric(6, 0)).show(ui, |ui| ui.vertical_centered(|ui| tool_items(app, ui, area, flow)));
+            });
         }
-        // Snap to Objects (Animate's magnet, ADR 0042): on, dragged points and selections snap
-        // to points, lines and fill edges.
+        ToolFlow::Row => {
+            egui::ScrollArea::horizontal().id_salt("tools_row").scroll_bar_visibility(hidden).show(ui, |ui| {
+                egui::Frame::NONE.inner_margin(egui::Margin::symmetric(0, 6)).show(ui, |ui| ui.horizontal(|ui| tool_items(app, ui, area, flow)));
+            });
+        }
+        ToolFlow::Grid => {
+            egui::ScrollArea::vertical().id_salt("tools_grid").auto_shrink([false, false]).show(ui, |ui| {
+                ui.horizontal_wrapped(|ui| {
+                    ui.spacing_mut().item_spacing = vec2(2.0, 2.0);
+                    tool_items(app, ui, area, flow);
+                });
+            });
+        }
+    }
+}
+
+fn tool_items(app: &mut App, ui: &mut egui::Ui, area: Rect, flow: ToolFlow) {
+    for tool in Tool::ALL {
         let (rect, resp) = ui.allocate_exact_size(vec2(TOOL_BUTTON, TOOL_BUTTON), Sense::click());
-        let on = app.s.style.snap_objects;
-        let bg = if on {
+        let active = app.tool == tool;
+        // The active tool sits on a lighter gray block with a white icon; the rest are a
+        // step dimmer, so the one in hand stands out without colour.
+        let bg = if active {
             T.active
         } else if resp.hovered() {
             T.header
@@ -100,17 +92,66 @@ fn tool_column(app: &mut App, ui: &mut egui::Ui, area: Rect) {
             Color32::TRANSPARENT
         };
         ui.painter().rect_filled(rect, T.rc(), bg);
-        let tint = if on { T.on_active } else if resp.hovered() { T.icon_hot } else { T.icon };
-        icons::paint(ui.painter(), Rect::from_center_size(rect.center(), vec2(TOOL_ICON, TOOL_ICON)), Icon::Magnet, tint);
-        let name = a11y::with_key(tr!("Snap to Objects"), app.keymap.primary("draw.snap_to_objects"));
-        a11y::control(ui, &resp, WidgetType::Checkbox, &name, Some(on));
-        let resp = resp.on_hover_text(if on { tr!("{name}: on\nDragged points and selections snap to points, lines and fill edges within 10 pixels.", name = name) } else { tr!("{name}: off\nDragged points and selections snap to points, lines and fill edges within 10 pixels.", name = name) });
-        if resp.clicked() {
-            app.run("draw.snap_to_objects", json!({}));
+        let tint = if active { T.on_active } else if resp.hovered() { T.icon_hot } else { T.icon };
+        icons::paint(ui.painter(), Rect::from_center_size(rect.center(), vec2(TOOL_ICON, TOOL_ICON)), tool_icon(tool), tint);
+        // "Pen tool (P)": what the tooltip says first, and what a screen reader says.
+        let name = a11y::with_key(&tr!("{tool} tool", tool = crate::i18n::t(tool.label())), app.keymap.primary(crate::keymap::tool_id(tool)));
+        a11y::control(ui, &resp, WidgetType::Button, &name, Some(active));
+        if active {
+            a11y::anchor(ui, a11y::Region::Tools, area, &resp);
         }
-        ui.add_space(10.0);
-        tool_swatches(app, ui);
-    });
+        let resp = resp.on_hover_text(format!("{name}
+{}", crate::i18n::t(tool.hint())));
+        if resp.clicked() {
+            app.tool = tool;
+        }
+        // Animate: double-clicking the Eraser erases everything on the stage (it asks first).
+        if tool == Tool::Eraser && resp.double_clicked() {
+            crate::erasertool::erase_everything(app);
+        }
+        if matches!(tool, Tool::Width | Tool::Eraser | Tool::Line | Tool::Eyedropper) {
+            // Tool groups: select, draw by hand, shapes, view.
+            match flow {
+                ToolFlow::Column => {
+                    ui.add_space(3.0);
+                    let y = ui.cursor().top();
+                    ui.painter().line_segment([pos2(rect.left(), y), pos2(rect.right(), y)], Stroke::new(1.0, T.border));
+                    ui.add_space(4.0);
+                }
+                ToolFlow::Row => {
+                    ui.add_space(3.0);
+                    let x = ui.cursor().left();
+                    ui.painter().line_segment([pos2(x, rect.top()), pos2(x, rect.bottom())], Stroke::new(1.0, T.border));
+                    ui.add_space(4.0);
+                }
+                ToolFlow::Grid => ui.add_space(6.0),
+            }
+        }
+    }
+    // Snap to Objects (Animate's magnet, ADR 0042): on, dragged points and selections snap
+    // to points, lines and fill edges.
+    let (rect, resp) = ui.allocate_exact_size(vec2(TOOL_BUTTON, TOOL_BUTTON), Sense::click());
+    let on = app.s.style.snap_objects;
+    let bg = if on {
+        T.active
+    } else if resp.hovered() {
+        T.header
+    } else {
+        Color32::TRANSPARENT
+    };
+    ui.painter().rect_filled(rect, T.rc(), bg);
+    let tint = if on { T.on_active } else if resp.hovered() { T.icon_hot } else { T.icon };
+    icons::paint(ui.painter(), Rect::from_center_size(rect.center(), vec2(TOOL_ICON, TOOL_ICON)), Icon::Magnet, tint);
+    let name = a11y::with_key(tr!("Snap to Objects"), app.keymap.primary("draw.snap_to_objects"));
+    a11y::control(ui, &resp, WidgetType::Checkbox, &name, Some(on));
+    let resp = resp.on_hover_text(if on { tr!("{name}: on
+Dragged points and selections snap to points, lines and fill edges within 10 pixels.", name = name) } else { tr!("{name}: off
+Dragged points and selections snap to points, lines and fill edges within 10 pixels.", name = name) });
+    if resp.clicked() {
+        app.run("draw.snap_to_objects", json!({}));
+    }
+    ui.add_space(if flow == ToolFlow::Grid { 6.0 } else { 10.0 });
+    tool_swatches(app, ui);
 }
 
 /// The stroke and fill swatches under the tools, as in Animate: the stroke's frame at the top
@@ -362,6 +403,8 @@ fn renderer_tag(app: &App) -> Option<String> {
     Some(match (app.stage_cache.gpu.state(), &app.stage_cache.drawn_by) {
         (State::Starting, _) => tr!("GPU starting").into(),
         (State::Failed(_), _) => tr!("CPU (GPU unavailable)").into(),
+        (State::Stopped { retry_at: Some(_), .. }, _) => tr!("CPU (GPU stopped; trying again soon)").into(),
+        (State::Stopped { retry_at: None, .. }, _) => tr!("CPU (GPU stopped)").into(),
         (State::Running { .. }, Some((true, _))) => "GPU".into(), // i18n-exempt: renderer name
         (State::Running { .. }, Some((false, Some(why)))) => tr!("CPU for {reason}", reason = crate::i18n::t_dyn(why)),
         _ => "CPU".into(), // i18n-exempt: renderer name
@@ -458,7 +501,7 @@ pub(crate) fn colour_panel(app: &mut App, ui: &mut egui::Ui) {
         ui.label(text(Type::Data, hex(fill)).color(T.text_dim));
     });
     let mut undo = tr_noop!("Colour");
-    ui.horizontal(|ui| {
+    ui.horizontal_wrapped(|ui| {
         if ui.button(tr!("Swap")).on_hover_text(tr!("Swap the stroke and fill colours")).clicked() {
             (stroke, fill) = (fill, stroke);
             (stroke_changed, fill_changed, undo) = (true, true, tr_noop!("Swap Colours"));
@@ -512,7 +555,8 @@ pub(crate) fn align_panel(app: &mut App, ui: &mut egui::Ui) {
             app.run(id, if app.align_to_stage { json!({"to_stage": true}) } else { json!({}) });
         }
     };
-    ui.horizontal(|ui| {
+    // Rows wrap in a narrow dock (ADR 0087): the vertical alignments go under the horizontal.
+    ui.horizontal_wrapped(|ui| {
         ui.spacing_mut().item_spacing.x = 2.0;
         for (icon, id) in [(Icon::AlignLeft, "align.left"), (Icon::AlignHCenter, "align.hcenter"), (Icon::AlignRight, "align.right")] {
             button(app, ui, icon, id);
@@ -522,7 +566,7 @@ pub(crate) fn align_panel(app: &mut App, ui: &mut egui::Ui) {
             button(app, ui, icon, id);
         }
     });
-    ui.horizontal(|ui| {
+    ui.horizontal_wrapped(|ui| {
         ui.spacing_mut().item_spacing.x = 2.0;
         button(app, ui, Icon::DistributeH, "align.distribute_h");
         button(app, ui, Icon::DistributeV, "align.distribute_v");
@@ -629,6 +673,22 @@ pub(crate) fn properties(app: &mut App, ui: &mut egui::Ui) {
     }
 }
 
+/// The Blending row of a movie clip or button instance.
+fn blend_row(app: &mut App, ui: &mut egui::Ui, current: anicraft_engine::doc::BlendMode, differs: bool) {
+    row_prose(ui, tr!("Blending"), |ui| {
+        egui::ComboBox::from_id_salt("prop_blend").selected_text(crate::i18n::t(current.label())).show_ui(ui, |ui| {
+            for mode in anicraft_engine::doc::BlendMode::ALL {
+                if ui.selectable_label(mode == current, crate::i18n::t(mode.label())).clicked() && (mode != current || differs) {
+                    app.run("element.set_blend", json!({"mode": mode.key()}));
+                }
+            }
+        })
+        .response
+        .set_name(tr!("Blending"));
+        mixed(ui, differs);
+    });
+}
+
 /// A symbol type's name, as the Properties panel shows it.
 pub(crate) fn symbol_kind_label(kind: SymbolKind) -> &'static str {
     match kind {
@@ -670,24 +730,44 @@ fn mixed(ui: &mut egui::Ui, differs: bool) {
     }
 }
 
+/// Whose colour effect the rows edit: the selected elements' (every style), or the camera's
+/// (ADR 0082: no opacity, so no Alpha style and no alpha channel in Advanced).
+#[derive(Clone, Copy, PartialEq)]
+enum EffectOf {
+    Selection,
+    Camera,
+}
+
+impl EffectOf {
+    fn command(self) -> &'static str {
+        match self {
+            EffectOf::Selection => "element.set_color_effect",
+            EffectOf::Camera => "camera.set",
+        }
+    }
+}
+
 /// The colour effect (ADR 0056): Animate's Style menu, then the chosen style's controls. Each
-/// change sets that value on every selected element (ADR 0053), as one undo step per drag.
-fn colour_effect_rows(app: &mut App, ui: &mut egui::Ui, fx: &ColorEffect, m: crate::mixed::ColorMixed) {
+/// change sets that value on every selected element (ADR 0053), or on the camera, as one undo
+/// step per drag.
+fn colour_effect_rows(app: &mut App, ui: &mut egui::Ui, fx: &ColorEffect, m: crate::mixed::ColorMixed, of: EffectOf) {
     let current = fx.style();
+    let cmd = of.command();
+    let camera = of == EffectOf::Camera;
     row_prose(ui, tr!("Colour effect"), |ui| {
-        egui::ComboBox::from_id_salt("prop_color_style").selected_text(crate::i18n::t(current.label())).show_ui(ui, |ui| {
-            for st in ColorStyle::ALL {
+        egui::ComboBox::from_id_salt(if camera { "prop_camera_color_style" } else { "prop_color_style" }).selected_text(crate::i18n::t(current.label())).show_ui(ui, |ui| {
+            for st in ColorStyle::ALL.into_iter().filter(|st| !camera || *st != ColorStyle::Alpha) {
                 if ui.selectable_label(st == current, crate::i18n::t(st.label())).clicked() && (st != current || m.style) {
-                    app.run("element.set_color_effect", json!({"style": st.key()}));
+                    app.run(cmd, json!({"style": st.key()}));
                 }
             }
         })
         .response
-        .set_name(tr!("Colour effect style"));
+        .set_name(if camera { tr!("Camera colour effect style") } else { tr!("Colour effect style") });
         mixed(ui, m.style);
     });
     let pct = a11y::SliderLook { suffix: " %", max_decimals: Some(0), ..Default::default() };
-    let set = |app: &mut App, p: Value| live(app, tr_noop!("Colour Effect"), "element.set_color_effect", p);
+    let set = |app: &mut App, p: Value| live(app, if camera { tr_noop!("Camera Colour Effect") } else { tr_noop!("Colour Effect") }, cmd, p);
     match *fx {
         ColorEffect::None => {}
         ColorEffect::Alpha(a) => {
@@ -728,7 +808,8 @@ fn colour_effect_rows(app: &mut App, ui: &mut egui::Ui, fx: &ColorEffect, m: cra
         ColorEffect::Advanced(t) => {
             // Each channel: its multiplier in percent, then the offset added (−255..255).
             let channels = [(tr!("Red"), tr!("Red multiplier"), tr!("Red offset"), "red"), (tr!("Green"), tr!("Green multiplier"), tr!("Green offset"), "green"), (tr!("Blue"), tr!("Blue multiplier"), tr!("Blue offset"), "blue"), (tr!("Alpha"), tr!("Alpha multiplier"), tr!("Alpha offset"), "alpha")];
-            for (i, (label, mul_name, off_name, key)) in channels.into_iter().enumerate() {
+            // The camera has no opacity: its Advanced effect has no alpha channel.
+            for (i, (label, mul_name, off_name, key)) in channels.into_iter().enumerate().take(if camera { 3 } else { 4 }) {
                 let mut mv = t.mul.get(i).copied().unwrap_or(1.0) * 100.0;
                 let mut ov = t.add.get(i).copied().unwrap_or(0.0) * 255.0;
                 row(ui, label, |ui| {
@@ -750,6 +831,21 @@ fn selection_props(app: &mut App, ui: &mut egui::Ui, e: &anicraft_engine::doc::E
     let many = all.len() > 1;
     // Which rows differ across the selection (ADR 0053): they say "mixed", and a change sets all.
     let m = crate::mixed::of(&app.s.doc, all);
+    // Members of an armature (ADR 0084): their bones place them, so only the look is edited
+    // here, in place on every pose.
+    let tl = app.s.timeline();
+    let layers = app.s.selected_layers();
+    if !layers.is_empty() && layers.iter().all(|l| tl.layer(*l).is_some_and(|l| l.kind == anicraft_engine::doc::LayerKind::Armature)) {
+        colour_effect_rows(app, ui, &e.color, m.color, EffectOf::Selection);
+        if let ElementKind::Symbol { symbol, filters, blend, .. } = &e.kind
+            && app.s.doc.symbol(*symbol).is_some_and(|x| x.kind != SymbolKind::Graphic)
+        {
+            filter_rows(app, ui, filters, m.filters);
+            blend_row(app, ui, *blend, m.blend);
+        }
+        ui.label(text(Type::Caption, tr!("Posed by its bone: drag it with the Selection tool. Colour effect, blending and filters apply on every pose of the armature.")));
+        return;
+    }
     if let ElementKind::Symbol { symbol, events, .. } = &e.kind
         && app.s.doc.symbol(*symbol).is_some_and(|x| x.kind != SymbolKind::Graphic)
     {
@@ -795,9 +891,9 @@ fn selection_props(app: &mut App, ui: &mut egui::Ui, e: &anicraft_engine::doc::E
             mixed(ui, m.rotation);
         });
         if !matches!(e.kind, ElementKind::Camera) {
-            colour_effect_rows(app, ui, &e.color, m.color);
+            colour_effect_rows(app, ui, &e.color, m.color, EffectOf::Selection);
         }
-        // Blending and filters, on movie clips and buttons as in Animate.
+        // Blending and filters, on movie clips and buttons.
         if let ElementKind::Symbol { symbol, filters, .. } = &e.kind
             && app.s.doc.symbol(*symbol).is_some_and(|x| x.kind != SymbolKind::Graphic)
         {
@@ -806,19 +902,7 @@ fn selection_props(app: &mut App, ui: &mut egui::Ui, e: &anicraft_engine::doc::E
         if let ElementKind::Symbol { symbol, blend, .. } = &e.kind
             && app.s.doc.symbol(*symbol).is_some_and(|x| x.kind != SymbolKind::Graphic)
         {
-            let current = *blend;
-            row_prose(ui, tr!("Blending"), |ui| {
-                egui::ComboBox::from_id_salt("prop_blend").selected_text(crate::i18n::t(current.label())).show_ui(ui, |ui| {
-                    for mode in anicraft_engine::doc::BlendMode::ALL {
-                        if ui.selectable_label(mode == current, crate::i18n::t(mode.label())).clicked() && (mode != current || m.blend) {
-                            app.run("element.set_blend", json!({"mode": mode.key()}));
-                        }
-                    }
-                })
-                .response
-                .set_name(tr!("Blending"));
-                mixed(ui, m.blend);
-            });
+            blend_row(app, ui, *blend, m.blend);
         }
         if let ElementKind::Symbol { symbol, loop_mode, first_frame, .. } = &e.kind
             && let Some(sym) = app.s.doc.symbol(*symbol).map(|s| (s.kind, s.timeline.frame_count()))
@@ -828,7 +912,7 @@ fn selection_props(app: &mut App, ui: &mut egui::Ui, e: &anicraft_engine::doc::E
             ui.add_space(4.0);
             // How the instance plays: the symbol's type, and a graphic's looping.
             row_prose(ui, tr!("Type"), |ui| {
-                egui::ComboBox::from_id_salt("prop_symkind").width(150.0).selected_text(symbol_kind_label(kind)).show_ui(ui, |ui| {
+                egui::ComboBox::from_id_salt("prop_symkind").width(crate::theme::fit(ui, 150.0)).selected_text(symbol_kind_label(kind)).show_ui(ui, |ui| {
                     for (k, id, tip) in [
                         (SymbolKind::Graphic, "graphic", tr!("Keeps step with the timeline it is on (looping options below)")),
                         (SymbolKind::MovieClip, "movie_clip", tr!("Plays its own timeline on a loop, from when it appears")),
@@ -891,7 +975,7 @@ fn selection_props(app: &mut App, ui: &mut egui::Ui, e: &anicraft_engine::doc::E
                 let names = [(LoopMode::Loop, "loop", tr!("Loop")), (LoopMode::PlayOnce, "play_once", tr!("Play once")), (LoopMode::SingleFrame, "single_frame", tr!("Single frame"))];
                 let current = names.iter().find(|(mode, _, _)| mode == loop_mode).map_or(tr!("Loop"), |(_, _, l)| l);
                 row_prose(ui, tr!("Looping"), |ui| {
-                    egui::ComboBox::from_id_salt("prop_loop").width(150.0).selected_text(current).show_ui(ui, |ui| {
+                    egui::ComboBox::from_id_salt("prop_loop").width(crate::theme::fit(ui, 150.0)).selected_text(current).show_ui(ui, |ui| {
                         for (mode, id, l) in names {
                             if ui.selectable_label(mode == *loop_mode, l).clicked() && (mode != *loop_mode || m.looping) {
                                 app.run("element.set_loop", json!({"loop": id}));
@@ -1105,7 +1189,7 @@ fn text_field_rows(app: &mut App, ui: &mut egui::Ui, e: &anicraft_engine::doc::E
     let Some(f) = &t.field else { return };
     let mut name = e.name.clone();
     row_prose(ui, tr!("Instance"), |ui| {
-        let r = ui.add(egui::TextEdit::singleline(&mut name).desired_width(150.0).hint_text(tr!("instance name"))).named(tr!("Instance name"));
+        let r = ui.add(egui::TextEdit::singleline(&mut name).desired_width(crate::theme::fit(ui, 150.0)).hint_text(tr!("instance name"))).named(tr!("Instance name"));
         if r.on_hover_text(tr!("The name scripts use for the field, as in score_txt.text = \"10\" (letters, digits and _)")).changed() {
             live(app, tr_noop!("Instance name"), "instance.set_name", json!({"element": e.id.0, "name": name}));
         }
@@ -1171,7 +1255,7 @@ fn text_field_rows(app: &mut App, ui: &mut egui::Ui, e: &anicraft_engine::doc::E
 fn instance_rows(app: &mut App, ui: &mut egui::Ui, e: &anicraft_engine::doc::Element, events: &[anicraft_engine::doc::EventHandler]) {
     let mut name = e.name.clone();
     row_prose(ui, tr!("Instance"), |ui| {
-        let r = ui.add(egui::TextEdit::singleline(&mut name).desired_width(150.0).hint_text(tr!("instance name"))).named(tr!("Instance name"));
+        let r = ui.add(egui::TextEdit::singleline(&mut name).desired_width(crate::theme::fit(ui, 150.0)).hint_text(tr!("instance name"))).named(tr!("Instance name"));
         if r.on_hover_text(tr!("The name actions use to address it (letters, digits and _)")).changed() {
             live(app, tr_noop!("Instance name"), "instance.set_name", json!({"element": e.id.0, "name": name}));
         }
@@ -1187,40 +1271,251 @@ fn instance_rows(app: &mut App, ui: &mut egui::Ui, e: &anicraft_engine::doc::Ele
     ui.add_space(4.0);
 }
 
-/// The Filters rows of a movie clip or button instance: an Add menu, then each filter's values
-/// with a remove button. Every change replaces the list (`element.set_filters`), one undo step
-/// per gesture.
-fn filter_rows(app: &mut App, ui: &mut egui::Ui, current: &[anicraft_engine::doc::Filter], differs: bool) {
-    use anicraft_engine::doc::Filter;
+/// Naming a filter preset in Properties (ADR 0091): saving the list under a new name, or
+/// renaming one.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct FilterNaming {
+    /// The name typed so far, and the preset being renamed (`None`: saving a new one).
+    pub name: Option<(String, Option<String>)>,
+}
+
+/// Copies the session's filter presets into the preferences when a command changed them, and
+/// saves them (not in screenshot or test runs, which never write the user's preferences).
+pub fn sync_filter_presets(app: &mut App) {
+    if app.s.filter_presets == app.prefs.filter_presets {
+        return;
+    }
+    app.prefs.filter_presets = app.s.filter_presets.clone();
+    if app.shot.is_none()
+        && let Err(e) = app.prefs.save()
+    {
+        app.status_err(tr!("Could not save preferences: {e}", e = e));
+    }
+}
+
+/// What the filter list was asked to do this frame (done after drawing it), each one command.
+enum FilterAct {
+    Move(usize, usize),
+    Enable(Option<usize>, bool),
+    Remove(Option<usize>),
+    Copy(Option<usize>),
+    Paste,
+    Apply(String),
+    Delete(String),
+}
+
+/// A filter's grip: drag it up or down the list to reorder, or, focused, Alt+Up and Alt+Down
+/// move it.
+fn filter_grip(ui: &mut egui::Ui, fname: &str, i: usize, n: usize, act: &mut Option<FilterAct>) -> egui::Response {
+    let (rect, resp) = ui.allocate_exact_size(vec2(14.0, crate::theme::TARGET), Sense::click_and_drag());
+    let hot = resp.hovered() || resp.dragged() || resp.has_focus();
+    let c = if hot { T.icon_hot } else { T.text_faint };
+    for (dx, dy) in [(-2.5, -5.0), (2.5, -5.0), (-2.5, 0.0), (2.5, 0.0), (-2.5, 5.0), (2.5, 5.0)] {
+        ui.painter().circle_filled(rect.center() + vec2(dx, dy), 1.4, c);
+    }
+    if resp.has_focus() {
+        ui.painter().rect_stroke(rect.expand(1.0), 2.0, Stroke::new(1.0, T.text), StrokeKind::Outside);
+        let (up, down, alt) = ui.input(|inp| (inp.key_pressed(egui::Key::ArrowUp), inp.key_pressed(egui::Key::ArrowDown), inp.modifiers.alt));
+        if alt {
+            ui.memory_mut(|m| m.set_focus_lock_filter(resp.id, egui::EventFilter { vertical_arrows: true, ..Default::default() }));
+            if up && i > 0 {
+                *act = Some(FilterAct::Move(i, i - 1));
+            } else if down && i + 1 < n {
+                *act = Some(FilterAct::Move(i, i + 1));
+            }
+        }
+    }
+    let (up, down) = (crate::platform::shortcut_label("Alt+Up"), crate::platform::shortcut_label("Alt+Down"));
+    a11y::control(ui, &resp, WidgetType::Button, &tr!("Move {filter}: drag, or {up} and {down}", filter = fname, up = up.as_str(), down = down.as_str()), None);
+    resp.on_hover_text(tr!("Drag to change the order (filters apply from the top down)"))
+}
+
+/// The Filters rows of a movie clip or button instance, as Animate's Filters section: Add,
+/// Presets and an options menu (copy, paste, all on or off, remove all), then each filter with
+/// its grip (drag, or Alt+arrows, to reorder), its on/off switch, its name and Remove, and its
+/// values. A filter switched off keeps its values. Value changes replace the list
+/// (`element.set_filters`, one undo step per gesture); the rest are `filter.*` commands.
+fn filter_rows(app: &mut App, ui: &mut egui::Ui, current: &[anicraft_engine::doc::FilterEntry], differs: bool) {
+    use anicraft_engine::doc::{Filter, FilterEntry};
     // As the renderer sees them (a file may hold values or ramps a command would refuse).
-    let mut list: Vec<Filter> = current.iter().map(Filter::sanitized).collect();
+    let mut list: Vec<FilterEntry> = current.iter().map(FilterEntry::sanitized).collect();
+    let n = list.len();
     let mut changed: Option<&'static str> = None;
+    let mut act: Option<FilterAct> = None;
+    let presets: Vec<(String, String)> = app.s.filter_presets.presets().iter().map(|p| (p.name.clone(), p.filters.iter().map(|f| crate::i18n::t(f.filter.label())).collect::<Vec<_>>().join(", "))).collect();
+    let copied = app.s.filter_clipboard.as_ref().map_or(0, Vec::len);
+    let mut naming = app.filter_naming.name.clone();
     row_prose(ui, tr!("Filters"), |ui| {
         egui::ComboBox::from_id_salt("add_filter").selected_text(if list.is_empty() { tr!("None") } else { tr!("Add filter") }).show_ui(ui, |ui| {
             for (kind, label) in Filter::KINDS {
                 if ui.selectable_label(false, crate::i18n::t(label)).clicked()
                     && let Some(f) = Filter::new(kind)
                 {
-                    list.push(f);
+                    list.push(f.into());
                     changed = Some(tr_noop!("Add filter"));
                 }
             }
         })
         .response
         .set_name(tr!("Add filter"));
+        let pr = crate::timeline::icon_button(ui, tr!("Filter presets: apply, save, rename, delete, import, export"), None, Icon::Folder);
+        egui::Popup::menu(&pr).id(egui::Id::new("anicraft.filters.presets")).show(|ui| {
+            if presets.is_empty() {
+                ui.label(text(Type::Caption, tr!("No presets yet. Set up filters, then Save as Preset.")));
+            }
+            for (name, what) in &presets {
+                if ui.button(name.as_str()).on_hover_text(tr!("Apply: {filters} (replaces the filters)", filters = what.as_str())).clicked() {
+                    act = Some(FilterAct::Apply(name.clone()));
+                }
+            }
+            ui.separator();
+            if ui.add_enabled(n > 0, egui::Button::new(tr!("Save as Preset…"))).on_hover_text(tr!("Keep these filters under a name, for any document")).clicked() {
+                naming = Some((String::new(), None));
+            }
+            ui.add_enabled_ui(!presets.is_empty(), |ui| {
+                ui.menu_button(tr!("Rename Preset"), |ui| {
+                    for (name, _) in &presets {
+                        if ui.button(name.as_str()).clicked() {
+                            naming = Some((name.clone(), Some(name.clone())));
+                        }
+                    }
+                });
+                ui.menu_button(tr!("Delete Preset"), |ui| {
+                    for (name, _) in &presets {
+                        if ui.button(name.as_str()).clicked() {
+                            act = Some(FilterAct::Delete(name.clone()));
+                        }
+                    }
+                });
+            });
+            ui.separator();
+            if ui.button(tr!("Import Presets…")).on_hover_text(tr!("Add the presets in a filter preset file (.json)")).clicked() {
+                app.invoke("filter.preset_import");
+            }
+            if ui.add_enabled(!presets.is_empty(), egui::Button::new(tr!("Export Presets…"))).on_hover_text(tr!("Write your filter presets to a file, to use on another computer")).clicked() {
+                app.invoke("filter.preset_export");
+            }
+        });
+        let more = crate::timeline::icon_button(ui, tr!("Filter options: copy, paste, enable, disable, remove"), None, Icon::Ellipsis);
+        egui::Popup::menu(&more).id(egui::Id::new("anicraft.filters.menu")).show(|ui| {
+            if ui.add_enabled(n > 0, egui::Button::new(tr!("Copy All Filters"))).clicked() {
+                act = Some(FilterAct::Copy(None));
+            }
+            let paste = if copied == 0 { tr!("Paste Filters").to_string() } else { trn!("Paste {n} Filter", "Paste {n} Filters", copied as u64, n = copied) };
+            if ui.add_enabled(copied > 0, egui::Button::new(paste)).on_hover_text(tr!("Add the copied filters after these")).clicked() {
+                act = Some(FilterAct::Paste);
+            }
+            ui.separator();
+            if ui.add_enabled(list.iter().any(|f| !f.enabled), egui::Button::new(tr!("Enable All"))).clicked() {
+                act = Some(FilterAct::Enable(None, true));
+            }
+            if ui.add_enabled(list.iter().any(|f| f.enabled), egui::Button::new(tr!("Disable All"))).clicked() {
+                act = Some(FilterAct::Enable(None, false));
+            }
+            if ui.add_enabled(n > 0, egui::Button::new(tr!("Remove All"))).clicked() {
+                act = Some(FilterAct::Remove(None));
+            }
+        });
         mixed(ui, differs);
     });
+    // Naming a preset, inline: Enter saves, Escape cancels.
+    if let Some((buf, renaming)) = naming.as_mut() {
+        let mut done: Option<bool> = None;
+        let rename = renaming.is_some();
+        row_prose(ui, if rename { tr!("Rename") } else { tr!("Preset") }, |ui| {
+            let r = ui.add(egui::TextEdit::singleline(buf).desired_width(120.0).hint_text(tr!("Name"))).named(tr!("Filter preset name"));
+            if !r.has_focus() && !r.lost_focus() && buf.is_empty() {
+                r.request_focus();
+            }
+            let (enter, esc) = ui.input(|i| (i.key_pressed(egui::Key::Enter), i.key_pressed(egui::Key::Escape)));
+            let ok = !buf.trim().is_empty();
+            if ui.add_enabled(ok, egui::Button::new(if rename { tr!("Rename") } else { tr!("Save") })).clicked() || (enter && r.lost_focus() && ok) {
+                done = Some(true);
+            } else if ui.button(tr!("Cancel")).clicked() || esc {
+                done = Some(false);
+            }
+        });
+        match done {
+            Some(true) => {
+                let to = buf.trim().to_string();
+                let ok = match renaming.clone() {
+                    Some(from) => app.run("filter.preset_rename", json!({"name": from, "to": to})).is_some(),
+                    None => {
+                        // Asks first when it would replace a preset of that name.
+                        app.request("filter.preset_save", json!({"name": to}));
+                        true
+                    }
+                };
+                if ok {
+                    naming = None;
+                }
+            }
+            Some(false) => naming = None,
+            None => {}
+        }
+    }
+    app.filter_naming.name = naming;
     let quality_names = [tr!("Low"), tr!("Medium"), tr!("High")];
-    let mut remove = None;
-    for (i, f) in list.iter_mut().enumerate() {
+    // Dragging a filter by its grip: which one, and where each header row starts (last frame's,
+    // for the drop: rows don't move while one is dragged).
+    let drag_id = egui::Id::new("anicraft.filters.drag");
+    let mut dragging: Option<usize> = ui.data(|d| d.get_temp(drag_id));
+    let last_tops: Vec<f32> = ui.data(|d| d.get_temp(drag_id.with("tops"))).unwrap_or_default();
+    let drop_at = |y: f32| last_tops.iter().take(n).rposition(|t| y >= *t).unwrap_or(0);
+    let mut tops: Vec<f32> = Vec::with_capacity(n + 1);
+    let (list_left, list_w) = (ui.cursor().left(), ui.available_width());
+    for (i, entry) in list.iter_mut().enumerate() {
         // Screen readers hear which filter a value belongs to: "Drop Shadow blur X".
-        let fname = crate::i18n::t(f.label());
+        let fname = crate::i18n::t(entry.filter.label());
+        let on = entry.enabled;
         ui.push_id(("filter", i), |ui| {
-            row_prose(ui, fname, |ui| {
-                if ui.small_button(tr!("Remove")).named(&tr!("Remove {filter}", filter = fname)).on_hover_text(tr!("Remove this filter")).clicked() {
-                    remove = Some(i);
+            tops.push(ui.cursor().top());
+            let header = ui.horizontal(|ui| {
+                let grip = filter_grip(ui, fname, i, n, &mut act);
+                let tip = if on { tr!("Turn {filter} off (it keeps its settings)", filter = fname) } else { tr!("Turn {filter} on", filter = fname) };
+                if crate::timeline::icon_button(ui, &tip, Some(on), if on { Icon::Eye } else { Icon::EyeOff }).clicked() {
+                    act = Some(FilterAct::Enable(Some(i), !on));
+                }
+                let name = if on { text(Type::Label, fname) } else { text(Type::Label, tr!("{filter} (off)", filter = fname)).color(T.text_faint) };
+                ui.label(name);
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if crate::timeline::icon_button(ui, &tr!("Remove {filter}", filter = fname), None, Icon::Trash).clicked() {
+                        act = Some(FilterAct::Remove(Some(i)));
+                    }
+                });
+                grip
+            });
+            let grip = header.inner;
+            if grip.drag_started() {
+                dragging = Some(i);
+            }
+            if grip.drag_stopped() && dragging == Some(i) {
+                dragging = None;
+                if let Some(p) = ui.ctx().pointer_interact_pos()
+                    && drop_at(p.y) != i
+                {
+                    act = Some(FilterAct::Move(i, drop_at(p.y)));
+                }
+            }
+            header.response.context_menu(|ui| {
+                if ui.add_enabled(i > 0, egui::Button::new(tr!("Move Up"))).clicked() {
+                    act = Some(FilterAct::Move(i, i - 1));
+                }
+                if ui.add_enabled(i + 1 < n, egui::Button::new(tr!("Move Down"))).clicked() {
+                    act = Some(FilterAct::Move(i, i + 1));
+                }
+                ui.separator();
+                if ui.button(if on { tr!("Turn Off") } else { tr!("Turn On") }).clicked() {
+                    act = Some(FilterAct::Enable(Some(i), !on));
+                }
+                if ui.button(tr!("Copy Filter")).clicked() {
+                    act = Some(FilterAct::Copy(Some(i)));
+                }
+                if ui.button(tr!("Remove Filter")).clicked() {
+                    act = Some(FilterAct::Remove(Some(i)));
                 }
             });
+            let f = &mut entry.filter;
             let blur_rows = |ui: &mut egui::Ui, bx: &mut f32, by: &mut f32, quality: &mut u8, changed: &mut Option<&'static str>| {
                 row(ui, tr!("Blur"), |ui| {
                     let a = ui.add(egui::DragValue::new(bx).prefix("X ").suffix(" px").speed(0.25).range(0.0..=255.0).max_decimals(1)).named(&tr!("{filter} blur X", filter = fname));
@@ -1302,9 +1597,54 @@ fn filter_rows(app: &mut App, ui: &mut egui::Ui, current: &[anicraft_engine::doc
             }
         });
     }
-    if let Some(i) = remove {
-        list.remove(i);
-        changed = Some(tr_noop!("Remove filter"));
+    // Where the rows are, for the next frame's drop, and the drop mark while one is dragged:
+    // a bar where it would land.
+    tops.push(ui.cursor().top());
+    ui.data_mut(|d| d.insert_temp(drag_id.with("tops"), tops.clone()));
+    if let (Some(from), Some(p)) = (dragging, ui.ctx().pointer_interact_pos())
+        && ui.ctx().dragged_id().is_some()
+    {
+        let to = drop_at(p.y);
+        if to != from
+            && let Some(y) = tops.get(if to > from { to + 1 } else { to }).copied()
+        {
+            ui.painter().line_segment([pos2(list_left, y), pos2(list_left + list_w, y)], Stroke::new(2.0, T.accent));
+        }
+    } else if ui.ctx().dragged_id().is_none() {
+        dragging = None;
+    }
+    ui.data_mut(|d| match dragging {
+        Some(v) => {
+            d.insert_temp(drag_id, v);
+        }
+        None => d.remove::<usize>(drag_id),
+    });
+    if let Some(a) = act {
+        match a {
+            FilterAct::Move(from, to) => {
+                app.run("filter.move", json!({"from": from, "to": to}));
+            }
+            FilterAct::Enable(index, on) => {
+                app.run("filter.enable", json!({"index": index, "enabled": on}));
+            }
+            FilterAct::Remove(index) => {
+                app.run("filter.remove", json!({"index": index}));
+            }
+            FilterAct::Copy(index) => {
+                if let Some(v) = app.run("filter.copy", json!({"index": index})) {
+                    let k = v["copied"].as_u64().unwrap_or(0);
+                    app.status_ok(trn!("Copied {n} filter.", "Copied {n} filters.", k, n = k));
+                }
+            }
+            FilterAct::Paste => {
+                app.run("filter.paste", json!({}));
+            }
+            FilterAct::Apply(name) => {
+                app.run("filter.preset_apply", json!({"name": name}));
+            }
+            FilterAct::Delete(name) => app.request("filter.preset_delete", json!({"name": name})),
+        }
+        return;
     }
     if let Some(label) = changed
         && let Ok(v) = serde_json::to_value(&list)
@@ -1595,7 +1935,8 @@ pub fn text_style_rows(app: &mut App, ui: &mut egui::Ui, st: &mut anicraft_engin
     out
 }
 
-/// The camera at the playhead: where it looks, its zoom, turn and tint, and the preview switch.
+/// The camera at the playhead: where it looks, its zoom, turn and colour effect, and the
+/// preview switch.
 /// Edits key the playhead like any edit of a tweened object.
 fn camera_props(app: &mut App, ui: &mut egui::Ui) {
     let Some(cam) = crate::camera_tool::camera(app) else { return };
@@ -1621,26 +1962,19 @@ fn camera_props(app: &mut App, ui: &mut egui::Ui) {
             live(app, tr_noop!("Rotate Camera"), "camera.set", json!({"rotation": rot}));
         }
     });
-    let mut tint = rgb(cam.tint);
-    let mut amount = cam.tint_amount * 100.0;
-    row(ui, tr!("Tint"), |ui| {
-        let a = crate::colour::button(ui, &mut tint).named(tr!("Camera tint colour"));
-        let b = ui.add(egui::DragValue::new(&mut amount).suffix(" %").speed(0.5).range(0.0..=100.0).max_decimals(0)).named(tr!("Camera tint amount"));
-        if a.changed() || b.changed() {
-            live(app, tr_noop!("Camera Tint"), "camera.set", json!({"tint": hex(tint), "tint_amount": amount}));
-        }
-    });
+    // Brightness, Tint or Advanced over the whole view, as on an instance (ADR 0082).
+    colour_effect_rows(app, ui, &cam.color, crate::mixed::ColorMixed::default(), EffectOf::Camera);
     ui.horizontal_wrapped(|ui| {
         let mut on = app.camera_preview;
         if crate::theme::checkbox(ui, &mut on, tr!("Preview through camera")).on_hover_text(tr!("Show the stage as the movie shows it (View › Preview Through Camera)")).changed() {
             app.toggle_camera_preview();
         }
-        if ui.button(tr!("Reset")).named(tr!("Reset camera")).on_hover_text(tr!("Back to the stage as it is: centred, 100 %, no turn, no tint")).clicked() {
+        if ui.button(tr!("Reset")).named(tr!("Reset camera")).on_hover_text(tr!("Back to the stage as it is: centred, 100 %, no turn, no colour effect")).clicked() {
             app.run("camera.set", json!({"reset": true}));
         }
     });
     let hidden = app.s.timeline().camera_layer().is_some_and(|l| !l.visible);
-    ui.label(text(Type::Caption, if hidden { tr!("The camera layer is hidden: the movie shows the stage as it is.") } else { tr!("The movie shows what the frame on the stage shows. Layer depth (in Frame, per layer) moves far layers less.") }));
+    ui.label(text(Type::Caption, if hidden { tr!("The camera layer is hidden: the movie shows the stage as it is.") } else { tr!("The movie shows what the frame on the stage shows. Deeper layers (Window › Layer Depth) move and zoom less.") }));
 }
 
 /// The selected bone: its joint angle at the playhead (editing it keys the pose), the joint's
@@ -1723,12 +2057,73 @@ fn bone_props(app: &mut App, ui: &mut egui::Ui, id: anicraft_engine::doc::BoneId
             }
         });
     }
+    // Joint translation (ADR 0084): the joint may slide along X and Y, within limits.
+    let slide = bone.allow_slide(pose.slide(id));
+    for (axis, limits, now) in [("x", bone.slide_x, slide.x), ("y", bone.slide_y, slide.y)] {
+        let (label, name, tip) = if axis == "x" {
+            (tr!("X translation"), tr!("Joint X translation"), tr!("Lets the joint slide along the x axis of what the bone starts on, so the bone can stretch away from it. Posing slides it only where turning can't reach"))
+        } else {
+            (tr!("Y translation"), tr!("Joint Y translation"), tr!("Lets the joint slide along the y axis of what the bone starts on, so the bone can stretch away from it. Posing slides it only where turning can't reach"))
+        };
+        let mut on = limits.is_some();
+        let free = anicraft_engine::doc::Limits { min: -anicraft_engine::doc::armature::MAX_SLIDE, max: anicraft_engine::doc::armature::MAX_SLIDE };
+        let mut constrain = limits.is_some_and(|l| l != free);
+        row_prose(ui, label, |ui| {
+            if crate::theme::checkbox(ui, &mut on, tr!("Enable")).named(name).on_hover_text(tip).changed() {
+                app.run("bone.set_translation", json!({"bone": id.0, "axis": axis, "enabled": on}));
+            }
+            if on && crate::theme::checkbox(ui, &mut constrain, tr!("Constrain")).on_hover_text(tr!("Limit how far the joint slides, in every pose")).changed() {
+                app.run("bone.set_translation", json!({"bone": id.0, "axis": axis, "constrain": constrain}));
+            }
+        });
+        if let Some(l) = limits {
+            let mut v = now;
+            row(ui, if axis == "x" { tr!("Slide X") } else { tr!("Slide Y") }, |ui| {
+                let r = ui.add(egui::DragValue::new(&mut v).suffix(" px").speed(0.5).range(l.min..=l.max).max_decimals(1)).named(if axis == "x" { tr!("Joint slide X") } else { tr!("Joint slide Y") });
+                if r.on_hover_text(tr!("How far the joint has slid at the playhead, from where it was drawn")).changed() {
+                    live(app, tr_noop!("Pose Bone"), "bone.pose", json!({"bone": id.0, if axis == "x" { "slide_x" } else { "slide_y" }: v}));
+                }
+            });
+            if l != free {
+                row(ui, if axis == "x" { tr!("Limits X") } else { tr!("Limits Y") }, |ui| {
+                    let (mut min, mut max) = (l.min, l.max);
+                    let a = ui.add(egui::DragValue::new(&mut min).prefix("min ").suffix(" px").speed(0.5).range(-anicraft_engine::doc::armature::MAX_SLIDE..=max).max_decimals(0)).named(if axis == "x" { tr!("Joint X translation minimum") } else { tr!("Joint Y translation minimum") });
+                    let b = ui.add(egui::DragValue::new(&mut max).prefix("max ").suffix(" px").speed(0.5).range(min..=anicraft_engine::doc::armature::MAX_SLIDE).max_decimals(0)).named(if axis == "x" { tr!("Joint X translation maximum") } else { tr!("Joint Y translation maximum") });
+                    if a.changed() || b.changed() {
+                        live(app, tr_noop!("Joint Translation"), "bone.set_translation", json!({"bone": id.0, "axis": axis, "min": min, "max": max}));
+                    }
+                });
+            }
+        }
+    }
+    // Spring (ADR 0084): secondary motion as the bones it hangs from move.
+    let sp = bone.spring.unwrap_or(anicraft_engine::doc::armature::Spring { strength: 0.0, damping: 0.0 });
+    let (mut strength, mut damping) = (sp.strength * 100.0, sp.damping * 100.0);
+    row(ui, tr!("Spring"), |ui| {
+        let r = ui.add(egui::DragValue::new(&mut strength).speed(0.5).range(0.0..=100.0).max_decimals(0)).named(tr!("Spring strength"));
+        if r.on_hover_text(tr!("How stiff the bone's spring is, 0 to 100: 0 is no spring; a stiffer spring swings faster and lags less")).changed() {
+            live(app, tr_noop!("Bone Spring"), "bone.set_spring", json!({"bone": id.0, "strength": strength}));
+        }
+    });
+    row(ui, tr!("Damping"), |ui| {
+        let r = ui.add(egui::DragValue::new(&mut damping).speed(0.5).range(0.0..=100.0).max_decimals(0)).named(tr!("Spring damping"));
+        if r.on_hover_text(tr!("How quickly the spring's swing dies down, 0 to 100: 0 swings on, 100 absorbs it all")).changed() {
+            live(app, tr_noop!("Bone Spring"), "bone.set_spring", json!({"bone": id.0, "damping": damping}));
+        }
+    });
+    let mut springs = layer.armature.as_ref().is_some_and(|a| !a.springs_off);
+    row_prose(ui, tr!("Springs"), |ui| {
+        if crate::theme::checkbox(ui, &mut springs, tr!("Enable")).named(tr!("Enable springs")).on_hover_text(tr!("Turn off to see and pose the armature's keyed poses without the springs' swing; every export plays them on")).changed() {
+            app.run("bone.enable_springs", json!({"layer": layer.id.0, "enabled": springs}));
+        }
+    });
     // A bone inside a shape (ADR 0071): how many of the shape's points it moves.
     let skin = layer.armature.as_ref().and_then(|a| a.skin.as_ref()).map(|k| (k.points.iter().filter(|p| p.weight(id) > 0.0).count(), k.points.len()));
     if let Some((mine, total)) = skin {
         row(ui, tr!("Points"), |ui| {
             ui.label(text(Type::Data, format!("{mine} / {total}"))).on_hover_text(tr!("How many of the shape's points this bone moves. Adjust them with the Bind tool"));
         });
+        bind_props(app, ui, id, &layer, total);
     }
     ui.horizontal_wrapped(|ui| {
         if skin.is_some() {
@@ -1745,6 +2140,65 @@ fn bone_props(app: &mut App, ui: &mut egui::Ui, id: anicraft_engine::doc::BoneId
         }
     });
     ui.label(text(Type::Caption, if skin.is_some() { tr!("Drag bones with the Selection tool to bend the shape; a pose at another frame keys it, and poses tween.") } else { tr!("Drag bones or instances with the Selection tool to pose; a pose at another frame keys it, and poses tween.") }));
+}
+
+/// A shape bone's weights (ADR 0090): with the Bind tool, Paint Weights and its brush; always, the
+/// focused point's share of the bone as a number (keyboard users edit weights here) and the bones
+/// the point follows.
+fn bind_props(app: &mut App, ui: &mut egui::Ui, id: anicraft_engine::doc::BoneId, layer: &anicraft_engine::doc::Layer, total: usize) {
+    use crate::bind_tool::{RADIUS_MAX, RADIUS_MIN, brush_label};
+    use anicraft_engine::doc::weights::Brush;
+    if app.tool == Tool::Bind {
+        let keys = [app.keymap.primary("view.brush_smaller"), app.keymap.primary("view.brush_larger")].into_iter().flatten().map(crate::platform::shortcut_label).collect::<Vec<_>>().join(" / ");
+        let o = &mut app.bind;
+        row_prose(ui, tr!("Weights"), |ui| {
+            crate::theme::checkbox(ui, &mut o.paint, tr!("Paint Weights")).on_hover_text(tr!("Drag over the shape to brush this bone's influence onto its points, shown as a heat map: blue none, red all. Off: click or box points to bind them"));
+        });
+        if o.paint {
+            row(ui, tr!("Brush"), |ui| {
+                for b in [Brush::Add, Brush::Subtract, Brush::Smooth] {
+                    let (label, hint) = brush_label(b);
+                    ui.selectable_value(&mut o.brush, b, crate::i18n::t(label)).on_hover_text(crate::i18n::t(hint));
+                }
+            });
+            row(ui, tr!("Size"), |ui| {
+                let r = ui.add(egui::DragValue::new(&mut o.radius).suffix(" px").speed(0.25).range(RADIUS_MIN..=RADIUS_MAX).max_decimals(1)).named(tr!("Weight brush size"));
+                if !keys.is_empty() {
+                    r.on_hover_text(tr!("The brush's radius on the stage ({keys})", keys = keys));
+                }
+            });
+            row(ui, tr!("Strength"), |ui| {
+                ui.add(egui::DragValue::new(&mut o.strength).speed(0.5).range(1.0..=100.0).max_decimals(0)).named(tr!("Weight brush strength")).on_hover_text(tr!("How much one dab changes the weights at the brush's centre, 1 to 100; it fades to nothing at the rim"));
+            });
+        }
+    }
+    if total == 0 {
+        return;
+    }
+    let point = app.bind.point.unwrap_or(0).min(total - 1);
+    let mut shown = point + 1;
+    row(ui, tr!("Point"), |ui| {
+        let r = ui.add(egui::DragValue::new(&mut shown).speed(0.1).range(1..=total)).named(tr!("Focused point")).on_hover_text(tr!("The point whose weights show below (ringed on the stage). Click one with the Bind tool, or type its number"));
+        if r.changed() {
+            app.bind.point = Some(shown.saturating_sub(1).min(total - 1));
+        }
+    });
+    let arm = layer.armature.as_ref();
+    let binding = arm.and_then(|a| a.skin.as_ref()).and_then(|k| k.points.get(point)).cloned().unwrap_or_default();
+    let mut w = binding.weight(id) * 100.0;
+    row(ui, tr!("Weight"), |ui| {
+        let r = ui.add(egui::DragValue::new(&mut w).suffix(" %").speed(0.5).range(0.0..=100.0).max_decimals(1)).named(tr!("Bone weight at the point"));
+        if r.on_hover_text(tr!("How much this bone moves the point, 0 to 100 %; the point's other bones share the rest")).changed() {
+            app.bind.point = Some(point);
+            live(app, tr_noop!("Set Point Weight"), "bone.set_weight", json!({"bone": id.0, "points": [point], "weight": w}));
+        }
+    });
+    let name = |b: anicraft_engine::doc::BoneId| arm.and_then(|a| a.bone(b)).map(|x| x.name.clone()).filter(|n| !n.is_empty()).unwrap_or_else(|| format!("#{}", b.0));
+    // Names and numbers are data; the note for an unbound point is prose.
+    let follows = if binding.bones.is_empty() { text(Type::Body, tr!("No bone: the point stays where it was drawn")) } else { text(Type::Data, binding.bones.iter().map(|i| format!("{} {:.0} %", name(i.0), i.1 * 100.0)).collect::<Vec<_>>().join(" · ")) };
+    row(ui, tr!("Follows"), |ui| {
+        ui.label(follows).on_hover_text(tr!("The bones that move the point, and their shares"));
+    });
 }
 
 fn document_props(app: &mut App, ui: &mut egui::Ui) {
@@ -1790,16 +2244,10 @@ fn frame_props(app: &mut App, ui: &mut egui::Ui, layer: &anicraft_engine::doc::L
         ui.label(text(Type::Caption, tr!("Folders hold layers, not frames. Hiding or locking the folder hides or locks everything in it; move layers in under it with Up and Down.")));
         return;
     }
-    // Layer depth matters once the scene has a camera: deeper layers move less as it pans.
-    if layer.kind != anicraft_engine::doc::LayerKind::Camera && app.s.timeline().camera_layer().is_some() {
-        let mut depth = layer.depth;
-        let (lo, hi) = (anicraft_engine::doc::camera::MIN_DEPTH, anicraft_engine::doc::camera::MAX_DEPTH);
-        row(ui, tr!("Depth"), |ui| {
-            let r = ui.add(egui::DragValue::new(&mut depth).suffix(" px").speed(2.0).range(lo..=hi).max_decimals(0)).named(tr!("Layer depth"));
-            if r.on_hover_text(tr!("How far behind the stage this layer is: when the camera pans, a deeper layer moves less (parallax). Negative is in front.")).changed() {
-                live(app, tr_noop!("Layer Depth"), "layer.set_depth", json!({"depth": depth}));
-            }
-        });
+    // Layer depth matters once the scene has a camera (ADR 0082): deeper layers move and zoom
+    // less, and draw behind nearer ones.
+    if crate::layer_depth::has_depth(layer.kind) && app.s.timeline().camera_layer().is_some() && app.s.editing.is_empty() {
+        crate::layer_depth::depth_row(app, ui, layer, frame);
     }
     {
         match layer.keyframe_at(frame) {
@@ -1814,7 +2262,7 @@ fn frame_props(app: &mut App, ui: &mut egui::Ui, layer: &anicraft_engine::doc::L
                 }
                 let mut label = k.label.clone();
                 row_prose(ui, tr!("Label"), |ui| {
-                    if ui.add(egui::TextEdit::singleline(&mut label).desired_width(150.0)).named(tr!("Frame label")).changed() {
+                    if ui.add(egui::TextEdit::singleline(&mut label).desired_width(crate::theme::fit(ui, 150.0))).named(tr!("Frame label")).changed() {
                         live(app, tr_noop!("Frame label"), "timeline.set_label", json!({"label": label}));
                     }
                 });
@@ -1912,22 +2360,37 @@ fn frame_props(app: &mut App, ui: &mut egui::Ui, layer: &anicraft_engine::doc::L
                     });
                     return;
                 }
-                match k.tween {
+                match k.tween.clone() {
                     Some(t) => {
-                        row_prose(ui, tr!("Tween"), |ui| {
-                            egui::ComboBox::from_id_salt("prop_ease").width(150.0).selected_text(crate::i18n::t_dyn(&t.easing.label()).into_owned()).show_ui(ui, |ui| {
-                                for (name, e) in anicraft_engine::doc::Easing::PRESETS {
-                                    if ui.selectable_label(t.easing == e, crate::i18n::t(name)).clicked() {
-                                        app.run("timeline.set_easing", json!({"easing": crate::timeline::easing_param(e)}));
-                                    }
+                        row_prose(ui, tr!("Ease"), |ui| {
+                            match crate::ease_editor::picker(app, ui, "prop_ease", &t.easing, 150.0, tr!("Easing")) {
+                                Some(crate::ease_editor::Picked::Ease(e)) => {
+                                    app.run("timeline.set_easing", json!({"easing": e}));
                                 }
-                            })
-                            .response
-                            .set_name(tr!("Easing"));
+                                Some(crate::ease_editor::Picked::Edit) => crate::ease_editor::open_here(app),
+                                None => {}
+                            }
+                            if ui.button("✎").on_hover_text(tr!("Edit Ease…")).named(tr!("Edit Ease…")).clicked() {
+                                crate::ease_editor::open_here(app);
+                            }
                         });
+                        // Classic Ease: its strength, as Animate's Ease field.
+                        if let anicraft_engine::doc::Easing::Classic(s) = t.easing {
+                            let mut v = s;
+                            row(ui, tr!("Strength"), |ui| {
+                                if ui.add(egui::Slider::new(&mut v, -100.0..=100.0).step_by(1.0)).named(tr!("Classic ease strength")).changed() {
+                                    live(app, tr_noop!("Ease"), "timeline.set_easing", json!({"easing": {"classic": v}}));
+                                }
+                            });
+                        }
+                        // Property groups eased their own way (ADR 0081), named.
+                        if !t.groups.is_empty() {
+                            let groups: Vec<String> = t.groups.iter().map(|(g, e)| format!("{} {}", crate::i18n::t(g.label()), crate::ease_editor::label(&app.s.doc, e))).collect();
+                            ui.label(text(Type::Caption, tr!("Eased separately: {groups}", groups = groups.join(", "))));
+                        }
                         let shape = t.kind == anicraft_engine::doc::TweenKind::Shape;
                         row_prose(ui, tr!("Kind"), |ui| {
-                            egui::ComboBox::from_id_salt("prop_kind").width(150.0).selected_text(if shape { tr!("Shape") } else { tr!("Classic") }).show_ui(ui, |ui| {
+                            egui::ComboBox::from_id_salt("prop_kind").width(crate::theme::fit(ui, 150.0)).selected_text(if shape { tr!("Shape") } else { tr!("Classic") }).show_ui(ui, |ui| {
                                 if ui.selectable_label(!shape, tr!("Classic")).clicked() && shape {
                                     app.run("timeline.create_tween", json!({}));
                                 }
@@ -1946,7 +2409,7 @@ fn frame_props(app: &mut App, ui: &mut egui::Ui, layer: &anicraft_engine::doc::L
                                 app.run("timeline.set_orient", json!({"orient": orient}));
                             }
                         }
-                        ease_curve(ui, t.easing);
+                        crate::ease_editor::preview(app, ui, &t.easing);
                     }
                     None => {
                         ui.horizontal_wrapped(|ui| {
@@ -1995,7 +2458,7 @@ fn sound_rows(app: &mut App, ui: &mut egui::Ui, current: Option<anicraft_engine:
     }
     let name = current.as_ref().and_then(|f| app.s.doc.sound(f.sound)).map_or_else(|| tr!("None").to_string(), |x| x.name.clone());
     row_prose(ui, tr!("Sound"), |ui| {
-        egui::ComboBox::from_id_salt("prop_sound").width(150.0).selected_text(name).show_ui(ui, |ui| {
+        egui::ComboBox::from_id_salt("prop_sound").width(crate::theme::fit(ui, 150.0)).selected_text(name).show_ui(ui, |ui| {
             if ui.selectable_label(current.is_none(), tr!("None")).clicked() && current.is_some() {
                 app.run("sound.remove", json!({}));
             }
@@ -2010,7 +2473,7 @@ fn sound_rows(app: &mut App, ui: &mut egui::Ui, current: Option<anicraft_engine:
     });
     let Some(f) = current else { return };
     row_prose(ui, tr!("Sync"), |ui| {
-        egui::ComboBox::from_id_salt("prop_sync").width(150.0).selected_text(crate::i18n::t(f.sync.label())).show_ui(ui, |ui| {
+        egui::ComboBox::from_id_salt("prop_sync").width(crate::theme::fit(ui, 150.0)).selected_text(crate::i18n::t(f.sync.label())).show_ui(ui, |ui| {
             for m in SoundSync::ALL {
                 if ui.selectable_label(f.sync == m, crate::i18n::t(m.label())).on_hover_text(crate::i18n::t(m.hint())).clicked() {
                     app.run("sound.set", json!({"sync": m.key()}));
@@ -2024,7 +2487,7 @@ fn sound_rows(app: &mut App, ui: &mut egui::Ui, current: Option<anicraft_engine:
         return;
     }
     row_prose(ui, tr!("Repeat"), |ui| {
-        egui::ComboBox::from_id_salt("prop_repeat").width(90.0).selected_text(if f.looping { tr!("Loop") } else { tr!("Repeat") }).show_ui(ui, |ui| {
+        egui::ComboBox::from_id_salt("prop_repeat").width(crate::theme::fit(ui, 90.0)).selected_text(if f.looping { tr!("Loop") } else { tr!("Repeat") }).show_ui(ui, |ui| {
             if ui.selectable_label(!f.looping, tr!("Repeat")).clicked() && f.looping {
                 app.run("sound.set", json!({"loop": false}));
             }
@@ -2044,7 +2507,7 @@ fn sound_rows(app: &mut App, ui: &mut egui::Ui, current: Option<anicraft_engine:
     });
     // The effect, as Animate's Effect menu, with the envelope editor beside it (ADR 0039).
     row_prose(ui, tr!("Effect"), |ui| {
-        egui::ComboBox::from_id_salt("prop_effect").width(150.0).selected_text(crate::i18n::t(f.effect.label())).show_ui(ui, |ui| {
+        egui::ComboBox::from_id_salt("prop_effect").width(crate::theme::fit(ui, 150.0)).selected_text(crate::i18n::t(f.effect.label())).show_ui(ui, |ui| {
             for e in SoundEffect::PRESETS {
                 if ui.selectable_label(f.effect == e, crate::i18n::t(e.label())).on_hover_text(crate::i18n::t(e.hint())).clicked() && f.effect != e {
                     app.run("sound.set", json!({"effect": e.key()}));
@@ -2083,7 +2546,7 @@ fn tool_props(app: &mut App, ui: &mut egui::Ui) {
         return;
     }
     if app.tool == Tool::Text {
-        // What new text gets (the last style used, as in Animate).
+        // What new text gets (the last style used).
         let mut st = app.s.text_style.clone();
         if text_style_rows(app, ui, &mut st, None).is_some() {
             app.s.text_style = st;
@@ -2177,7 +2640,7 @@ fn tool_props(app: &mut App, ui: &mut egui::Ui) {
         }),
         Tool::Star => polystar_props(app, ui),
         Tool::PaintBucket => row_prose(ui, tr!("Gap size"), |ui| {
-            egui::ComboBox::from_id_salt("bucket_gap").width(170.0).selected_text(crate::i18n::t(app.bucket_gap.label())).show_ui(ui, |ui| {
+            egui::ComboBox::from_id_salt("bucket_gap").width(crate::theme::fit(ui, 170.0)).selected_text(crate::i18n::t(app.bucket_gap.label())).show_ui(ui, |ui| {
                 for g in crate::app::GapSize::ALL {
                     ui.selectable_value(&mut app.bucket_gap, g, crate::i18n::t(g.label()));
                 }
@@ -2240,7 +2703,7 @@ fn eraser_props(app: &mut App, ui: &mut egui::Ui) {
             }
         });
         row_prose(ui, tr!("Mode"), |ui| {
-            egui::ComboBox::from_id_salt("erase_mode").width(170.0).selected_text(crate::i18n::t(o.mode.label())).show_ui(ui, |ui| {
+            egui::ComboBox::from_id_salt("erase_mode").width(crate::theme::fit(ui, 170.0)).selected_text(crate::i18n::t(o.mode.label())).show_ui(ui, |ui| {
                 for m in EraseMode::ALL {
                     ui.selectable_value(&mut o.mode, m, crate::i18n::t(m.label())).on_hover_text(crate::i18n::t(m.hint()));
                 }
@@ -2294,7 +2757,7 @@ fn brush_props(app: &mut App, ui: &mut egui::Ui) {
         ui.add(egui::DragValue::new(&mut b.smoothing).speed(0.5).range(0.0..=100.0).max_decimals(0)).named(tr!("Brush smoothing")).on_hover_text(tr!("How much the stroke is smoothed: 0 follows the hand closely"));
     });
     row_prose(ui, tr!("Mode"), |ui| {
-        egui::ComboBox::from_id_salt("brush_mode").width(170.0).selected_text(crate::i18n::t(b.mode.label())).show_ui(ui, |ui| {
+        egui::ComboBox::from_id_salt("brush_mode").width(crate::theme::fit(ui, 170.0)).selected_text(crate::i18n::t(b.mode.label())).show_ui(ui, |ui| {
             for m in PaintMode::ALL {
                 ui.selectable_value(&mut b.mode, m, crate::i18n::t(m.label())).on_hover_text(crate::i18n::t(m.hint()));
             }
@@ -2348,7 +2811,7 @@ fn profile_picker(ui: &mut egui::Ui, which: ProfileRow, current: Option<&anicraf
     row_prose(ui, tr!("Width"), |ui| {
         profile_preview(ui, current, vec2(44.0, 12.0), T.text_dim, None);
         let menu = ui.id().with(which);
-        egui::ComboBox::from_id_salt(menu).width(150.0).selected_text(label).show_ui(ui, |ui| {
+        egui::ComboBox::from_id_salt(menu).width(crate::theme::fit(ui, 150.0)).selected_text(label).show_ui(ui, |ui| {
             for pr in ProfilePreset::ALL {
                 let on = preset == Some(pr);
                 let r = ui.horizontal(|ui| {
@@ -2411,7 +2874,7 @@ fn line_style_rows(ui: &mut egui::Ui, which: ProfileRow, st: &anicraft_engine::d
     let kind = st.dash_kind();
     row_prose(ui, tr!("Style"), |ui| {
         line_preview(ui, kind, vec2(44.0, 12.0), T.text_dim);
-        egui::ComboBox::from_id_salt((which, "line_style")).width(110.0).selected_text(crate::i18n::t(kind.label())).show_ui(ui, |ui| {
+        egui::ComboBox::from_id_salt((which, "line_style")).width(crate::theme::fit(ui, 110.0)).selected_text(crate::i18n::t(kind.label())).show_ui(ui, |ui| {
             for k in DashKind::ALL {
                 let on = k == kind;
                 let r = ui.horizontal(|ui| {
@@ -2461,7 +2924,7 @@ fn line_style_rows(ui: &mut egui::Ui, which: ProfileRow, st: &anicraft_engine::d
         None => {}
     }
     row_prose(ui, tr!("Cap"), |ui| {
-        egui::ComboBox::from_id_salt((which, "line_cap")).width(110.0).selected_text(crate::i18n::t(st.cap.label())).show_ui(ui, |ui| {
+        egui::ComboBox::from_id_salt((which, "line_cap")).width(crate::theme::fit(ui, 110.0)).selected_text(crate::i18n::t(st.cap.label())).show_ui(ui, |ui| {
             for c in Cap::ALL {
                 if ui.selectable_label(c == st.cap, crate::i18n::t(c.label())).clicked() && c != st.cap {
                     edit = Some(LineEdit { label: tr_noop!("Stroke cap"), params: json!({"cap": c.key()}), drag: false });
@@ -2476,7 +2939,7 @@ fn line_style_rows(ui: &mut egui::Ui, which: ProfileRow, st: &anicraft_engine::d
         }
     });
     row_prose(ui, tr!("Join"), |ui| {
-        egui::ComboBox::from_id_salt((which, "line_join")).width(110.0).selected_text(crate::i18n::t(st.join.label())).show_ui(ui, |ui| {
+        egui::ComboBox::from_id_salt((which, "line_join")).width(crate::theme::fit(ui, 110.0)).selected_text(crate::i18n::t(st.join.label())).show_ui(ui, |ui| {
             for j in Join::ALL {
                 if ui.selectable_label(j == st.join, crate::i18n::t(j.label())).clicked() && j != st.join {
                     edit = Some(LineEdit { label: tr_noop!("Stroke join"), params: json!({"join": j.key()}), drag: false });
@@ -2497,22 +2960,6 @@ fn line_style_rows(ui: &mut egui::Ui, which: ProfileRow, st: &anicraft_engine::d
         });
     }
     edit
-}
-
-/// Plots the easing curve (output against time).
-fn ease_curve(ui: &mut egui::Ui, e: anicraft_engine::doc::Easing) {
-    let (r, _) = ui.allocate_exact_size(vec2(ui.available_width().min(240.0), 70.0), Sense::hover());
-    let p = ui.painter();
-    p.rect_filled(r, T.rc(), T.field);
-    let inner = r.shrink(8.0);
-    let pts: Vec<Pos2> = (0..=48)
-        .map(|i| {
-            let t = i as f32 / 48.0;
-            pos2(inner.left() + t * inner.width(), inner.bottom() - e.apply(t) * inner.height())
-        })
-        .collect();
-    p.line_segment([inner.left_bottom(), inner.right_top()], Stroke::new(1.0, T.border));
-    p.add(egui::Shape::line(pts, Stroke::new(2.0, T.tween)));
 }
 
 pub(crate) fn library(app: &mut App, ui: &mut egui::Ui) {

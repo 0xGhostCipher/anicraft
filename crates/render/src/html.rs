@@ -30,7 +30,7 @@ use crate::stroke::stroke_outline;
 use anicraft_doc::actions::as3::Decls;
 use anicraft_doc::actions::{Action, FrameRef, Seg, Target};
 use anicraft_doc::player::TimelineRef;
-use anicraft_doc::{ColorTransform, Document, Element, ElementKind, FIELD_GUTTER, FrameScript, Join, Layer, LayerKind, MAX_FIELD_CHARS, MaskMode, Paint, Rgba, SoundFormat, SoundSync, SymbolId, SymbolKind, TextAlign, Timeline, base64_encode, evaluate_guided, guide_walk, instance_start};
+use anicraft_doc::{ColorTransform, Document, Element, ElementKind, FIELD_GUTTER, FrameScript, Join, Layer, LayerKind, MAX_FIELD_CHARS, MaskMode, Paint, Rgba, SoundFormat, SoundSync, SymbolId, SymbolKind, TextAlign, Timeline, base64_encode, evaluate_shown, guide_walk, instance_start};
 use anicraft_geom::{Affine, FillRule, Path, PathCmd};
 use serde_json::{Map, Value, json};
 use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
@@ -676,9 +676,11 @@ impl<'a> Bake<'a> {
                 }
                 // Filters run in the page as the renderer runs them (ADR 0072): `fx` the list,
                 // `fm` how far they reach together (stage pixels).
-                if !filters.is_empty() {
-                    o.insert("fx".into(), Value::Array(filters.iter().map(filter_json).collect()));
-                    o.insert("fm".into(), exact(filters.iter().map(anicraft_doc::Filter::margin).sum::<f32>()));
+                // Filters switched off are left out, as the renderer leaves them (ADR 0091).
+                let on = anicraft_doc::active_filters(filters);
+                if !on.is_empty() {
+                    o.insert("fx".into(), Value::Array(on.iter().map(filter_json).collect()));
+                    o.insert("fm".into(), exact(on.iter().map(anicraft_doc::Filter::margin).sum::<f32>()));
                 }
                 if !events.is_empty() {
                     o.insert("ev".into(), Value::Array(events.iter().map(|h| json!([h.event.key(), actions(&h.actions)])).collect()));
@@ -724,11 +726,18 @@ impl<'a> Bake<'a> {
         for f in 0..n {
             let camera = if scene { tl.camera_at(f, &stage) } else { None };
             let mut layers = Vec::new();
-            for &index in playing.iter().rev() {
+            // Drawn deepest first, ties in timeline order, as the evaluator does (ADR 0082).
+            let order = if scene { tl.draw_order(f) } else { (0..tl.layers.len()).rev().collect() };
+            for index in order.into_iter().filter(|i| playing.contains(i)) {
                 let Some(layer) = tl.layers.get(index).filter(|l| l.kind != LayerKind::Camera) else { continue };
                 let mut entry = Map::new();
-                if let Some(v) = camera.and_then(|c| matrix(&c.view(&stage, layer.depth))) {
-                    entry.insert("v".into(), v);
+                // Each layer's view: the camera and its depth then (none when attached); a
+                // layer the camera has passed isn't drawn.
+                if let Some(c) = camera {
+                    let Some(view) = c.layer_view(&stage, layer, f) else { continue };
+                    if let Some(v) = matrix(&view) {
+                        entry.insert("v".into(), v);
+                    }
                 }
                 // The layer's volume, for the sounds inside the symbols on it.
                 if layer.sound_gain() != 1.0 {
@@ -751,7 +760,7 @@ impl<'a> Bake<'a> {
                 }
                 let walk = layer.parent.and_then(|p| tl.layer(p)).filter(|g| g.kind == LayerKind::Guide).and_then(|g| guide_walk(g, f));
                 let mut items = Vec::new();
-                if let Some((start, els)) = evaluate_guided(layer, f, walk.as_ref()) {
+                if let Some((start, els)) = evaluate_shown(layer, f, walk.as_ref(), self.doc.stage.fps) {
                     for el in els.iter() {
                         self.element(el, layer, f, start, &mut items);
                     }

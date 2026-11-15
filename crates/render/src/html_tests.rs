@@ -408,8 +408,7 @@ fn the_camera_and_layer_depth_come_across_and_buttons_answer_through_them() {
     far.center = Vec2::new(260.0, 150.0);
     far.zoom = 1.5;
     far.rotation = 0.2;
-    far.tint = Rgba::hex(0x3366ff);
-    far.tint_amount = 0.3;
+    far.color = anicraft_doc::ColorEffect::Tint { color: Rgba::hex(0x3366ff), amount: 0.3 };
     let rest = anicraft_doc::Camera::rest(&stage).to_element(ElementId(7001));
     let near = far.to_element(ElementId(7001));
     let mut cam = Layer::new(LayerId(70), "Camera");
@@ -424,7 +423,7 @@ fn the_camera_and_layer_depth_come_across_and_buttons_answer_through_them() {
     assert!(m.json["contents"].as_array().unwrap().iter().any(|c| c["cc"].is_array()), "the camera's tint is baked");
     assert!(first["f"].as_array().unwrap().len() > 15, "the camera moves every frame");
     // Where the knob is on screen once the camera has arrived.
-    let knob = far.view(&stage, 0.0).apply(Vec2::new(100.0, 100.0));
+    let knob = far.stage_view(&stage).apply(Vec2::new(100.0, 100.0));
     let mut script: Vec<(Vec<Event>, Vec<Event>)> = vec![(vec![], vec![]); 22];
     script.push((vec![Event::Move(knob), Event::Down(knob)], vec![Event::Up(knob)]));
     script.extend(vec![(vec![], vec![]); 6]);
@@ -538,7 +537,7 @@ fn what_does_not_carry_across_is_reported() {
     let l = Arc::make_mut(&mut tl.layers[2]);
     let k = l.keyframe_mut(0).unwrap();
     if let ElementKind::Symbol { filters, blend, .. } = &mut Arc::make_mut(&mut k.elements[0]).kind {
-        filters.push(anicraft_doc::Filter::Blur { blur_x: 4.0, blur_y: 4.0, quality: 1 });
+        filters.push(anicraft_doc::Filter::Blur { blur_x: 4.0, blur_y: 4.0, quality: 1 }.into());
         *blend = BlendMode::Subtract;
     }
     Arc::make_mut(&mut tl.layers[0]).keyframe_mut(1).unwrap().script = Some(FrameScript::Plugin(PluginScript { id: "org.example.menu".into(), entry: "main".into() }));
@@ -568,14 +567,7 @@ fn what_does_not_carry_across_is_reported() {
 #[test]
 fn bitmaps_and_sounds_are_embedded_once() {
     let mut doc = Document::default();
-    let png = {
-        let mut out = Vec::new();
-        let mut enc = png::Encoder::new(&mut out, 1, 1);
-        enc.set_color(png::ColorType::Rgba);
-        enc.set_depth(png::BitDepth::Eight);
-        enc.write_header().unwrap().write_image_data(&[255, 0, 0, 255]).unwrap();
-        out
-    };
+    let png = crate::encode_png(1, 1, &[255, 0, 0, 255]).unwrap();
     let bitmap = anicraft_doc::Bitmap::from_png(anicraft_doc::BitmapId(50), "dot", png).unwrap();
     doc.bitmaps.push(Arc::new(bitmap));
     let wav = anicraft_doc::audio::wav::encode(8000, 1, &[0.0; 80], anicraft_doc::audio::wav::Bits::Int16);
@@ -1103,7 +1095,7 @@ fn filtered_doc(filters: &[anicraft_doc::Filter]) -> Document {
     d.library.push(symbol(300, SymbolKind::MovieClip, vec![layer(301, vec![kf(0, 1, vec![el(302, a), el(303, b)], vec![], "")])]));
     let mut i = (*inst(310, 300, "art", Affine::translate(18.4, 15.2), vec![])).clone();
     if let ElementKind::Symbol { filters: f, .. } = &mut i.kind {
-        *f = filters.to_vec();
+        *f = filters.iter().cloned().map(Into::into).collect();
     }
     Arc::make_mut(&mut d.timeline_mut(0).layers[0]).keyframe_mut(0).unwrap().elements = vec![Arc::new(i)];
     d
@@ -1414,4 +1406,39 @@ fn gradient_options_are_drawn_the_nearest_way_canvas_can() {
     let r = paints.iter().find(|p| p.get("r").is_some()).expect("the radial gradient");
     assert_eq!(r["f"], json!([60, 50]));
     assert_eq!(r["r"][2], json!(20));
+}
+
+#[test]
+fn custom_and_per_property_eases_play_in_the_page_as_they_evaluate() {
+    // ADR 0081: a classic tween eased by a custom curve of several segments that overshoots, its
+    // rotation and scale by presets of their own, and a looping movie clip inside tweened with
+    // Elastic; the page plays the same frames, step by step, as the Rust player draws them.
+    use anicraft_doc::{CustomEase, EaseGroup, Easing};
+    let curve = CustomEase::from_flat(&[(0.0, 0.0), (0.2, 1.5), (0.3, 1.5), (0.4, 1.5), (0.5, 1.5), (0.6, 0.6), (0.7, 0.6), (0.8, 0.6), (0.9, 1.0), (1.0, 1.0)].map(|(x, y)| Vec2::new(x, y))).unwrap();
+    let mut tw = Tween::new(Easing::Custom(Arc::new(curve)), anicraft_doc::TweenKind::Classic);
+    tw.set_ease(EaseGroup::Rotation, Some(Easing::BounceOut));
+    tw.set_ease(EaseGroup::Scale, Some(Easing::BackInOut));
+    let mut a = (*rect(1, 0.0, 0.0, 40.0, 40.0, 0x2a9d8f)).clone();
+    a.transform = Affine::translate(20.0, 100.0);
+    let mut b = a.clone();
+    b.transform = Affine::translate(500.0, 160.0).mul(&Affine::rotate(2.5)).mul(&Affine::scale(2.0, 0.5));
+    let mut k0 = Keyframe::new(0, 20);
+    k0.elements = vec![Arc::new(a)];
+    k0.tween = Some(tw);
+    let mut k1 = Keyframe::new(20, 4);
+    k1.elements = vec![Arc::new(b)];
+    let mut inner_a = (*rect(2, 0.0, 0.0, 10.0, 10.0, 0xe76f51)).clone();
+    inner_a.transform = Affine::IDENTITY;
+    let mut inner_b = inner_a.clone();
+    inner_b.transform = Affine::translate(60.0, 0.0);
+    let mut i0 = Keyframe::new(0, 8);
+    i0.elements = vec![Arc::new(inner_a)];
+    i0.tween = Some(Tween::new(Easing::ElasticOut, anicraft_doc::TweenKind::Classic));
+    let mut i1 = Keyframe::new(8, 1);
+    i1.elements = vec![Arc::new(inner_b)];
+    let mut d = Document::default();
+    d.library.push(symbol(50, SymbolKind::MovieClip, vec![layer(51, vec![Arc::new(i0), Arc::new(i1)])]));
+    d.timeline_mut(0).layers = vec![layer(1, vec![Arc::new(k0), Arc::new(k1)]), layer(2, vec![kf(0, 24, vec![inst(3, 50, "", Affine::translate(100.0, 250.0), Vec::new())], vec![], "")])];
+    d.sanitize();
+    compare(&d, &vec![(vec![], vec![]); 30]);
 }
