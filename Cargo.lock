@@ -342,6 +342,8 @@ version = "0.3.0"
 dependencies = [
  "anicraft-doc",
  "anicraft-geom",
+ "anicraft-text",
+ "anicraft-xml",
  "craft-xfl",
  "craft-xml 0.1.0 (git+https://github.com/storytold/craft-libs?rev=b67b9f90c50091a3090f93fa054c34e409edba11)",
  "thiserror 2.0.21",

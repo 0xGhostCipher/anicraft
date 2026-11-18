@@ -10,6 +10,8 @@ repository.workspace = true
 [dependencies]
 anicraft-doc.workspace = true
 anicraft-geom.workspace = true
+# Lays imported text out with the fonts on this computer, as the XFL importer does (ADR 0012).
+anicraft-text.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]
@@ -17,6 +19,8 @@ thiserror.workspace = true
 craft-xfl.workspace = true
 # The twins' XML trees, for the timeline differential (keyframes, instances).
 craft-xml.workspace = true
+# The text corpus test reads the twins' XML text fields through the shared XFL schema view.
+anicraft-xml.workspace = true
 
 [lints]
 workspace = true

@@ -13,8 +13,9 @@
 //! stream at 256 MiB, chains (FAT, mini-FAT, DIFAT, directory tree) are cycle-guarded, nothing
 //! is written to disk, and hostile or damaged input is refused with a one-sentence error —
 //! never a panic. [`archive`] reads an item stream's object graph (layers, keyframes, symbol
-//! instances, tweens), [`shape`] the shape records' styles and straight and curved edges, and
-//! [`doc`] maps them into the AniCraft model the way the XFL importer maps Animate's (ADR 0096).
+//! instances, tweens), [`shape`] the shape records' styles and straight and curved edges,
+//! [`text`] the `CPicText` records' static and dynamic text fields, and [`doc`] maps them into
+//! the AniCraft model the way the XFL importer maps Animate's (ADR 0096).
 
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
@@ -24,9 +25,12 @@ pub mod doc;
 pub mod records;
 pub mod report;
 pub mod shape;
+pub mod text;
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod text_tests;
 
 pub use doc::import;
 pub use report::{ImportError, Report};
