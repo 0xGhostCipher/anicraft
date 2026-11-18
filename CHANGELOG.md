@@ -193,6 +193,22 @@
   * AniCraft still holds no video codec: your own ffmpeg does the decoding (the one Export
     Video uses). Without ffmpeg, the window says how to install it.
   * Headless: `file.import_video`, `file.video_info`, `layer.set_video`.
+
+* **Flash 8–CS4 `.fla` files open** (ADR 0096, #163): the binary `.fla` of the Flash 8 to
+  CS4 era, which AniCraft used to refuse, now opens like an Animate file, untitled, so Save asks
+  for a new `.anicraft` name.
+  * **What comes across**: scenes, layers and folders, keyframes with their timing, shapes with
+    curves, gradients and strokes, groups, symbol instances (matrix, loop, first frame, colour
+    effect), classic and shape tweens with their eases and shape hints, static and dynamic text,
+    bitmaps, sounds on frames, button names, frame scripts (kept, never run), library folders
+    and the stage size and frame rate.
+  * **Checked against the same documents saved by Animate**: on nine sample rigs and templates
+    every timeline, layer, keyframe and instance matches, and rendered frames are identical.
+  * **Not yet**, and named in the import report: filters, movie clip component settings, bitmap
+    fills and dashed or dotted strokes (drawn solid). Damaged or hostile files are refused with a
+    one-sentence reason, never a crash.
+  * `anicraft-cli fla-dump <file> [--stream name]` lists a legacy file's streams and records.
+
 * **Themes of your own** (#340, ADR 0117, M8): a theme is a small JSON file that names colours
   for the interface's roles, kept in `themes` in the settings folder (`data/themes` in a
   portable copy).
