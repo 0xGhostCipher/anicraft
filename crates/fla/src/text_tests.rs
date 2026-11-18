@@ -8,21 +8,21 @@ use anicraft_text::Fonts;
 
 /// One run's attributes, as the encoder writes them.
 #[derive(Clone)]
-struct Style {
-    size: u16,
-    face: &'static str,
-    rgba: [u8; 4],
-    bold: bool,
-    italic: bool,
-    kern: bool,
-    position: u8,
-    align: u8,
-    line: i16,
-    indent: i16,
-    letter: i16,
-    target: &'static str,
-    render: u8,
-    thickness: f32,
+pub(crate) struct Style {
+    pub(crate) size: u16,
+    pub(crate) face: &'static str,
+    pub(crate) rgba: [u8; 4],
+    pub(crate) bold: bool,
+    pub(crate) italic: bool,
+    pub(crate) kern: bool,
+    pub(crate) position: u8,
+    pub(crate) align: u8,
+    pub(crate) line: i16,
+    pub(crate) indent: i16,
+    pub(crate) letter: i16,
+    pub(crate) target: &'static str,
+    pub(crate) render: u8,
+    pub(crate) thickness: f32,
 }
 
 impl Default for Style {
@@ -75,14 +75,14 @@ fn block(s: &Style) -> Vec<u8> {
 }
 
 /// A record's head fields.
-struct Head {
-    flags: u8,
-    matrix: [i32; 6],
-    bounds: [i32; 4],
-    auto: bool,
-    field: u16,
-    selectable: bool,
-    name: String,
+pub(crate) struct Head {
+    pub(crate) flags: u8,
+    pub(crate) matrix: [i32; 6],
+    pub(crate) bounds: [i32; 4],
+    pub(crate) auto: bool,
+    pub(crate) field: u16,
+    pub(crate) selectable: bool,
+    pub(crate) name: String,
 }
 
 impl Default for Head {
@@ -92,7 +92,7 @@ impl Default for Head {
 }
 
 /// A whole record: head, runs (units and style, stored as given), trailer.
-fn record(h: &Head, runs: &[(Vec<u16>, Style)]) -> Vec<u8> {
+pub(crate) fn record(h: &Head, runs: &[(Vec<u16>, Style)]) -> Vec<u8> {
     let mut out = vec![0x04, h.flags, 0, 0];
     out.extend(0x8000_0000u32.to_le_bytes());
     out.extend(0x8000_0000u32.to_le_bytes());
@@ -122,7 +122,7 @@ fn record(h: &Head, runs: &[(Vec<u16>, Style)]) -> Vec<u8> {
     out
 }
 
-fn units(s: &str) -> Vec<u16> {
+pub(crate) fn units(s: &str) -> Vec<u16> {
     s.encode_utf16().collect()
 }
 

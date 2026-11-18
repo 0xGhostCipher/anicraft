@@ -720,6 +720,15 @@ struct FrameSpec {
     /// Custom ease anchors for the `all` group: (in, anchor, out) points.
     ease_all: Vec<[f64; 6]>,
     script: &'static str,
+    /// The sound's media id (0: none), its envelope (mark44, left, right), loops, sync, in
+    /// and out points.
+    sound: u16,
+    envelope: Vec<(u32, u16, u16)>,
+    loops: u16,
+    sync: u8,
+    in_out: (u32, u32),
+    /// Shape hints: (start, end) in twips.
+    hints: Vec<((i32, i32), (i32, i32))>,
 }
 
 /// A symbol instance as written.
@@ -848,12 +857,18 @@ impl Ar {
         self.u16(spec.duration);
         self.out.extend_from_slice(&[spec.tween, 0x06]);
         self.out.extend_from_slice(&spec.ease.to_le_bytes());
-        self.u16(0); // no sound
-        self.u16(0); // no envelope
-        self.u16(1); // loops
-        self.out.push(0); // sync
-        self.i32(0);
-        self.i32(0x3FFF_FFFF);
+        self.u16(spec.sound);
+        self.u16(spec.envelope.len() as u16);
+        for &(mark, left, right) in &spec.envelope {
+            self.i32(mark as i32);
+            self.u16(left);
+            self.u16(right);
+        }
+        self.u16(spec.loops.max(1));
+        self.out.push(spec.sync);
+        let (in_point, out_point) = if spec.sound == 0 { (0, 0x3FFF_FFFF) } else { spec.in_out };
+        self.i32(in_point as i32);
+        self.i32(out_point as i32);
         self.u16(0xFFFF);
         self.string(spec.label);
         self.out.extend_from_slice(&[4, 0, 0, 0, 1, 0, 0, 0, 0x33, 0x0D, 0, 0, 0, 0, 0, 0]);
@@ -862,7 +877,19 @@ impl Ar {
         self.i32(spec.comment as i32);
         self.u16(0); // no shape-tween cache
         self.out.extend_from_slice(&[0; 4]);
-        self.u16(0); // no hints
+        if spec.hints.is_empty() {
+            self.u16(0); // no hints
+        } else {
+            // A `CObList` (schema 0) of `CMorphHintItem`s.
+            self.tag("CObList");
+            self.u16(spec.hints.len() as u16);
+            for (n, &((sx, sy), (ex, ey))) in spec.hints.iter().enumerate() {
+                self.tag("CMorphHintItem");
+                for v in [sx, sy, ex, ey, n as i32] {
+                    self.i32(v);
+                }
+            }
+        }
         self.string("");
         for v in [1, 0, 0, 1, (!spec.ease_all.is_empty()) as i32] {
             self.i32(v);
@@ -1079,8 +1106,11 @@ fn a_synthetic_timeline_decodes_its_layers_keyframes_tweens_and_instances() {
     assert_eq!(spans, [(0, 2), (2, 3)]);
     // The report: what was left out, by kind.
     assert_eq!(report.skipped.get("frame comments"), Some(&1), "{:?}", report.skipped);
-    assert_eq!(report.skipped.get("frame scripts (decode pending)"), Some(&1), "{:?}", report.skipped);
-    assert_eq!(report.skipped.get("movie clip and button settings (scripts, component data; left out)"), Some(&1), "{:?}", report.skipped);
+    // The guide's frame script is kept as written (no publish setting: ActionScript 3.0).
+    let Some(anicraft_doc::FrameScript::Source(script)) = &tl.layers[0].keyframes[0].script else { panic!("a frame script: {:?}", tl.layers[0].keyframes[0].script) };
+    assert_eq!((script.text.as_str(), script.language), ("stop();", anicraft_doc::Language::ActionScript3));
+    assert!(report.kept.contains_key("frame scripts in ActionScript 3.0") || report.runs.contains_key("frame scripts in ActionScript 3.0"), "{:?}", report.kept);
+    assert_eq!(report.skipped.get("movie clip component settings (left out)"), Some(&1), "{:?}", report.skipped);
     assert_eq!(report.kept.get("symbol instances"), Some(&2));
 }
 
@@ -1111,7 +1141,7 @@ fn an_object_of_a_kind_not_decoded_is_skipped_and_its_siblings_still_place() {
     assert_eq!((k.start, k.duration), (0, 5));
     assert_eq!(k.elements.len(), 1);
     assert!(matches!(k.elements[0].kind, ElementKind::Symbol { .. }));
-    assert_eq!(report.skipped.get("texts (decode pending)"), Some(&2), "{:?}", report.skipped);
+    assert_eq!(report.skipped.get("texts whose records didn't decode"), Some(&2), "{:?}", report.skipped);
 }
 
 #[test]
@@ -1145,4 +1175,312 @@ fn the_object_graph_refuses_what_it_cannot_number() {
     let mut w = Ar::new();
     w.layer("x", 0, None, |_| {});
     assert!(parse(&w.out).is_err());
+}
+
+// Texts, media, buttons, scripts, hints and folders on a synthetic document, every byte
+// written here from the grammar in `crate::archive` and `crate::library` (no corpus bytes).
+
+/// An MFC Unicode string (`FF FE FF` and a u8 length).
+fn cstr(s: &str) -> Vec<u8> {
+    let mut w = Ar::new();
+    w.out.clear();
+    w.string(s);
+    w.out
+}
+
+/// A zlib stream of stored (uncompressed) deflate blocks: the header, blocks of at most
+/// 65535 bytes, and the Adler-32 of the data.
+fn zlib_stored(data: &[u8]) -> Vec<u8> {
+    let mut out = vec![0x78, 0x01];
+    let chunks: Vec<&[u8]> = if data.is_empty() { vec![&[][..]] } else { data.chunks(65535).collect() };
+    for (i, c) in chunks.iter().enumerate() {
+        out.push(u8::from(i + 1 == chunks.len()));
+        out.extend((c.len() as u16).to_le_bytes());
+        out.extend((!(c.len() as u16)).to_le_bytes());
+        out.extend_from_slice(c);
+    }
+    let (mut a, mut b) = (1u32, 0u32);
+    for &x in data {
+        a = (a + u32::from(x)) % 65521;
+        b = (b + a) % 65521;
+    }
+    out.extend(((b << 16) | a).to_be_bytes());
+    out
+}
+
+/// Animate's lossless bitmap payload: header, then the zlib stream in chunks of at most 2048
+/// bytes, then a zero length. `argb` is premultiplied A, R, G, B rows.
+fn bitmap_payload(w: u16, h: u16, argb: &[u8]) -> Vec<u8> {
+    let mut out = vec![0x03, 0x05];
+    out.extend((w * 4).to_le_bytes());
+    out.extend(w.to_le_bytes());
+    out.extend(h.to_le_bytes());
+    for v in [0i32, i32::from(w) * 20, 0, i32::from(h) * 20] {
+        out.extend(v.to_le_bytes());
+    }
+    out.extend([1, 1]);
+    for c in zlib_stored(argb).chunks(2048) {
+        out.extend((c.len() as u16).to_le_bytes());
+        out.extend_from_slice(c);
+    }
+    out.extend([0, 0]);
+    out
+}
+
+/// An item's identity block: u32 6, u32 1, its parent folder's id, u32 1, its own id.
+fn identity(parent: (u32, u32), id: (u32, u32)) -> Vec<u8> {
+    let mut out = Vec::new();
+    for v in [6, 1, parent.0, parent.1, 1, id.0, id.1] {
+        out.extend(v.to_le_bytes());
+    }
+    out
+}
+
+/// Every item's common settings after its identity block.
+fn common_settings() -> Vec<u8> {
+    let mut out = Vec::new();
+    out.extend(0u32.to_le_bytes());
+    out.extend(7u32.to_le_bytes());
+    out.push(0);
+    for _ in 0..3 {
+        out.extend(cstr(""));
+    }
+    out.push(0);
+    out.extend(2u32.to_le_bytes());
+    for _ in 0..2 {
+        out.extend(cstr(""));
+    }
+    out.extend([0; 8]);
+    out.extend(1u32.to_le_bytes());
+    out.extend(0u32.to_le_bytes());
+    out.extend(u32::MAX.to_le_bytes());
+    out.push(0);
+    out.extend(cstr(""));
+    out.push(0);
+    out.extend(1u32.to_le_bytes());
+    out
+}
+
+const ART: (u32, u32) = (0x5A00_0001, 0x11);
+const SOUNDS: (u32, u32) = (0x5A00_0001, 0x12);
+
+/// `Contents` with the scene, the symbol (in "Art"), two folders ("Art" and "Art/Sounds"), a
+/// bitmap (id 7, in "Art"), a sound (id 8, in "Art/Sounds") and the ActionScript 2 setting.
+fn media_contents() -> Vec<u8> {
+    let mut c = synthetic_contents();
+    // `synthetic_contents` ends its symbol entry with 8 zero bytes: write the entry's own
+    // settings there instead (a string, u32 1, the identity block).
+    c.truncate(c.len() - 8);
+    c.extend(cstr(""));
+    c.extend(1u32.to_le_bytes());
+    c.extend(identity(ART, (0x5A00_0002, 0x31)));
+    c.extend(common_settings());
+    // The bitmap.
+    c.extend([0xFF, 0xFF, 0x01, 0x00, 0x0A, 0x00]);
+    c.extend(b"CMediaBits");
+    c.push(0x06);
+    c.push(7);
+    c.extend("Media 1".encode_utf16().flat_map(u16::to_le_bytes));
+    c.extend(cstr("badge.png"));
+    c.extend(7u16.to_le_bytes());
+    c.extend(cstr("..\\art\\badge.png"));
+    c.extend(1_300_000_000u32.to_le_bytes());
+    c.extend(identity(ART, (0x5A00_0003, 0x41)));
+    c.extend(common_settings());
+    c.extend([0x03, 0x01, 0x32, 0x01, 0, 0, 0, 0]);
+    // The sound: 44.1 kHz 16-bit mono, 4 frames.
+    c.extend([0xFF, 0xFF, 0x01, 0x00, 0x0B, 0x00]);
+    c.extend(b"CMediaSound");
+    c.push(0x06);
+    c.push(5);
+    c.extend("M 2 1".encode_utf16().flat_map(u16::to_le_bytes));
+    c.extend(cstr("beep"));
+    c.extend(8u16.to_le_bytes());
+    c.extend(cstr("..\\beep.wav"));
+    c.extend(1_300_000_001u32.to_le_bytes());
+    c.extend(identity(SOUNDS, (0x5A00_0004, 0x51)));
+    c.extend(common_settings());
+    c.extend([0x0A, 0x0E, 0x00]);
+    c.extend(4u32.to_le_bytes());
+    c.extend(u32::MAX.to_le_bytes());
+    c.extend([0; 12]);
+    // The folders: a count, then each.
+    c.extend(1u32.to_le_bytes());
+    c.extend(2u32.to_le_bytes());
+    for (name, parent, id) in [("Art", (0, 0), ART), ("Sounds", ART, SOUNDS)] {
+        c.extend(4u32.to_le_bytes());
+        c.extend(cstr(name));
+        c.extend(identity(parent, id));
+        c.extend(common_settings());
+    }
+    // The publish settings.
+    c.extend(cstr("Vector::ActionScriptVersion"));
+    c.extend(cstr("2"));
+    c
+}
+
+/// A page with a dynamic text, a bitmap instance and a named button with a handler on one
+/// keyframe; a sound frame; and a shape tween with two hints.
+fn media_page() -> Vec<u8> {
+    use crate::text_tests::{record, units, Head, Style};
+    let mut w = Ar::new();
+    w.page(|w| {
+        w.layer("tween", 0, None, |w| {
+            let spec = FrameSpec { duration: 4, tween: 2, hints: vec![((200, 400), (-100, 60)), ((0, 0), (20, 40))], ..FrameSpec::default() };
+            w.frame(&[], &spec, |_| {});
+            w.frame(&[], &FrameSpec { duration: 1, ..FrameSpec::default() }, |_| {});
+        });
+        w.layer("sound", 0, None, |w| {
+            let spec = FrameSpec { duration: 5, sound: 8, envelope: vec![(44_100, 32768, 16384)], loops: 3, sync: 3, in_out: (0, 0x3FFF_FFFF), script: "gotoAndPlay(1);\r\n", ..FrameSpec::default() };
+            w.frame(&[], &spec, |_| {});
+        });
+        w.layer("objects", 0, None, |w| {
+            w.frame(&[], &FrameSpec { duration: 5, ..FrameSpec::default() }, |w| {
+                // A dynamic text field (kept with or without fonts).
+                w.tag("CPicText");
+                let head = Head { field: 0x0003, matrix: [65536, 0, 0, 65536, 400, 600], bounds: [0, 2000, 0, 400], ..Head::default() };
+                w.out.extend(record(&head, &[(units("Score"), Style::default())]));
+                // A bitmap, scaled 2× and moved (10, 20) px.
+                w.object("CPicBitmap", 0, None, 0, 0x02, |_| {});
+                for v in [131072, 0, 0, 131072, 200, 400] {
+                    w.i32(v);
+                }
+                w.u16(7);
+                w.out.push(0);
+                // A button: its handler, track as menu off, its name, then u32 0.
+                w.instance(&InstSpec { class: "CPicButton", ..InstSpec::default() });
+                w.out.push(0x0B);
+                w.out.extend_from_slice(&[4, 0, 0, 0, 1, 0, 0, 0, 0x10, 0x20, 0, 0, 0, 0, 0, 0]);
+                w.string("on (release) {\r\n\tgetURL(\"https://example.org\", \"_self\");\r\n}");
+                w.out.push(0);
+                w.string("CC");
+                w.i32(0);
+            });
+        });
+    });
+    w.out
+}
+
+fn media_document() -> Vec<u8> {
+    // A 2 × 1 bitmap: opaque red, then half-transparent white (premultiplied).
+    let bitmap = bitmap_payload(2, 1, &[255, 255, 0, 0, 128, 128, 128, 128]);
+    let pcm: Vec<u8> = [0i16, 1000, -1000, 32767].iter().flat_map(|v| v.to_le_bytes()).collect();
+    write(&[("Contents", media_contents()), ("P 1 1", media_page()), ("Symbol 9", one_frame_stream(&rectangle_body())), ("Media 1", bitmap), ("M 2 1", pcm)])
+}
+
+#[test]
+fn texts_bitmaps_buttons_sounds_scripts_and_hints_come_in_on_their_keyframes() {
+    use anicraft_doc::{ElementKind, FrameScript, Language, LibraryEntry, LibraryItem, Paint, SoundEffect, SoundSync};
+    let (doc, report) = super::doc::import(&media_document()).expect("the synthetic document opens");
+    let tl = scene(&doc);
+    let names: Vec<&str> = tl.layers.iter().map(|l| l.name.as_str()).collect();
+    assert_eq!(names, ["objects", "sound", "tween"]);
+    // The library: the bitmap's pixels (straight alpha), the sound as a WAV, both in folders.
+    assert_eq!(doc.bitmaps.len(), 1);
+    let b = &doc.bitmaps[0];
+    assert_eq!((b.name.as_str(), b.width, b.height), ("badge.png", 2, 1));
+    let px = b.pixels().expect("the bitmap decodes");
+    assert_eq!(&px.rgba[..8], &[255, 0, 0, 255, 255, 255, 255, 128]);
+    assert_eq!(doc.entry_path(LibraryEntry::Item(LibraryItem::Bitmap(b.id))), "Art/badge.png");
+    assert_eq!(doc.sounds.len(), 1);
+    let s = &doc.sounds[0];
+    assert_eq!((s.name.as_str(), s.rate, s.channels, s.frames), ("beep", 44_100, 1, 4));
+    assert_eq!(doc.entry_path(LibraryEntry::Item(LibraryItem::Sound(s.id))), "Art/Sounds/beep");
+    let sym = &doc.library[0];
+    assert_eq!(doc.entry_path(LibraryEntry::Item(LibraryItem::Symbol(sym.id))), "Art/UFO mask");
+    // The objects: the dynamic text, the bitmap's rectangle, the named button.
+    let k = &tl.layers[0].keyframes[0];
+    assert_eq!(k.elements.len(), 3, "{:?}", k.elements.iter().map(|e| &e.kind).collect::<Vec<_>>());
+    let ElementKind::Text(block) = &k.elements[0].kind else { panic!("a text: {:?}", k.elements[0].kind) };
+    assert_eq!(block.text, "Score");
+    assert!(block.field.is_some(), "a dynamic field");
+    // Its box sits at the record's left and top, through its matrix (20, 30) px.
+    assert_eq!(k.elements[0].transform.m, [1.0, 0.0, 0.0, 1.0, 20.0, 30.0]);
+    let ElementKind::Shape(rect) = &k.elements[1].kind else { panic!("the bitmap's rectangle") };
+    assert!(matches!(rect.fill, Some(Paint::Bitmap { bitmap, repeat: false, .. }) if bitmap == b.id));
+    assert_eq!(k.elements[1].transform.m, [2.0, 0.0, 0.0, 2.0, 10.0, 20.0]);
+    let bounds = rect.path.bounds();
+    assert_eq!((bounds.min.x, bounds.min.y, bounds.max.x, bounds.max.y), (0.0, 0.0, 2.0, 1.0));
+    assert!(matches!(k.elements[2].kind, ElementKind::Symbol { .. }));
+    assert_eq!(k.elements[2].name, "CC", "a button's name comes from its own settings");
+    assert_eq!(report.skipped.get("scripts on instances (left out; frame scripts are kept)"), Some(&1), "{:?}", report.skipped);
+    assert!(!report.skipped.keys().any(|k| k.starts_with("button settings")), "{:?}", report.skipped);
+    // The sound frame: its sound, sync, repeats and envelope; its script, kept as written.
+    let k = &tl.layers[1].keyframes[0];
+    let fs = k.sound.as_ref().expect("a frame sound");
+    assert_eq!((fs.sound, fs.sync, fs.repeat, fs.looping), (s.id, SoundSync::Stream, 3, false));
+    let SoundEffect::Custom(points) = &fs.effect else { panic!("an envelope: {:?}", fs.effect) };
+    assert_eq!(points.len(), 1);
+    assert!((points[0].at - 1.0).abs() < 1e-9 && points[0].left == 1.0 && points[0].right == 0.5, "{points:?}");
+    let Some(FrameScript::Source(script)) = &k.script else { panic!("a frame script: {:?}", k.script) };
+    assert_eq!((script.text.as_str(), script.language), ("gotoAndPlay(1);\r\n", Language::ActionScript1or2));
+    assert_eq!(report.kept.get("frame scripts in ActionScript 1.0 & 2.0"), Some(&1), "{:?}", report.kept);
+    assert!(!report.skipped.contains_key("sound in and out points (played whole)"));
+    // The shape tween's hints, start and end, in pixels, `a` first.
+    let hints = &tl.layers[2].keyframes[0].hints;
+    assert_eq!(hints.len(), 2);
+    assert_eq!((hints[0].start, hints[0].end), (anicraft_geom::Vec2::new(10.0, 20.0), anicraft_geom::Vec2::new(-5.0, 3.0)));
+    assert_eq!((hints[1].start, hints[1].end), (anicraft_geom::Vec2::new(0.0, 0.0), anicraft_geom::Vec2::new(1.0, 2.0)));
+    // Everything decoded: the report keeps them.
+    for kind in ["bitmaps", "sounds", "texts", "bitmap instances", "library folders"] {
+        assert!(report.kept.contains_key(kind), "{kind}: {:?}", report.kept);
+    }
+    let left_out: Vec<&String> = report.skipped.keys().filter(|k| k.as_str() != "scripts on instances (left out; frame scripts are kept)").collect();
+    assert!(left_out.is_empty(), "{left_out:?}");
+}
+
+#[test]
+fn media_that_does_not_decode_is_reported_by_name_and_its_uses_are_counted() {
+    // The bitmap's stream holds damaged pixels; the sound's is not its sample count long and
+    // no sound file either.
+    let mut bitmap = bitmap_payload(2, 1, &[255, 255, 0, 0, 128, 128, 128, 128]);
+    let n = bitmap.len();
+    bitmap[n - 4] ^= 0xFF;
+    let bytes = write(&[("Contents", media_contents()), ("P 1 1", media_page()), ("Symbol 9", one_frame_stream(&rectangle_body())), ("Media 1", bitmap), ("M 2 1", vec![1, 2, 3])]);
+    let (doc, report) = super::doc::import(&bytes).expect("opens");
+    assert!(doc.bitmaps.is_empty() && doc.sounds.is_empty());
+    let named = |k: &str| report.names.get(k).cloned().unwrap_or_default();
+    assert_eq!(named("bitmaps in Animate's own format AniCraft can't decode").len(), 1, "{:?}", report.names);
+    assert!(named("bitmaps in Animate's own format AniCraft can't decode")[0].starts_with("badge.png: "));
+    assert!(named("sounds in formats AniCraft can't decode")[0].starts_with("beep: "), "{:?}", report.names);
+    assert_eq!(report.skipped.get("instances of missing bitmaps"), Some(&1));
+    assert_eq!(report.skipped.get("frame sounds whose sound isn't in the file"), Some(&1));
+}
+
+#[test]
+fn a_document_with_media_cut_short_or_damaged_anywhere_never_panics() {
+    let page = media_page();
+    let contents = media_contents();
+    let bitmap = bitmap_payload(2, 1, &[255, 255, 0, 0, 128, 128, 128, 128]);
+    for cut in 0..page.len() {
+        let bytes = write(&[("Contents", media_contents()), ("P 1 1", page[..cut].to_vec()), ("Media 1", bitmap.clone())]);
+        assert!(super::doc::import(&bytes).is_ok(), "cut at {cut}");
+    }
+    for at in 1..page.len() {
+        let mut bad = page.clone();
+        bad[at] ^= 0xA5;
+        assert!(super::doc::import(&write(&[("Contents", media_contents()), ("P 1 1", bad), ("Media 1", bitmap.clone())])).is_ok(), "flip at {at}");
+    }
+    // `Contents` damaged anywhere: the document opens or is refused, never a panic.
+    for at in 0..contents.len() {
+        let mut bad = contents.clone();
+        bad[at] ^= 0x5A;
+        let _ = super::doc::import(&write(&[("Contents", bad), ("P 1 1", page.clone()), ("Media 1", bitmap.clone()), ("M 2 1", vec![0; 8])]));
+        let _ = super::library::media_items(&contents[..at], |_| true);
+        let _ = super::library::folders(&contents[..at]);
+    }
+}
+
+#[test]
+fn library_folders_nest_by_their_parents_and_a_loop_stays_at_the_root() {
+    use super::library::{folder_paths, folders, Folder};
+    let found = folders(&media_contents());
+    assert_eq!(found, vec![Folder { name: "Art".into(), parent: (0, 0), id: ART }, Folder { name: "Sounds".into(), parent: ART, id: SOUNDS }]);
+    let paths = folder_paths(&found);
+    assert_eq!(paths.get(&SOUNDS).map(String::as_str), Some("Art/Sounds"));
+    // Two folders each other's parent: neither loops forever.
+    let looped = [Folder { name: "a".into(), parent: (2, 2), id: (1, 1) }, Folder { name: "b".into(), parent: (1, 1), id: (2, 2) }];
+    let paths = folder_paths(&looped);
+    assert_eq!(paths.get(&(1, 1)).map(String::as_str), Some("b/a"));
+    assert_eq!(super::library::script_version(&media_contents()).as_deref(), Some("2"));
 }

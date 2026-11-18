@@ -22,12 +22,14 @@
 //! frame     children: the keyframe's objects · its raw artwork (a shape body, see
 //!           [`crate::shape`]) · u32 n · n × 32 (cubic drawing hints) · 18 · u16 duration ·
 //!           u8 tween (0 none, 1 classic, 2 shape) · u8 tween flags · i16 ease ·
-//!           u16 sound · u16 n · n × 8 (envelope) · u16 loops · u8 sync · u32 in · u32 out ·
-//!           u16 zoom · label · frame actions (16 bytes, the script) · 8 bytes · u32 label kind (1 comment) ·
-//!           shape-tween cache (an object) · 4 bytes · shape hints (an object) · string ·
-//!           5 × u32, the last 1 when custom eases follow: 6 curves (position, rotation, scale,
-//!           colour, filters, all), each u32 n and n anchors of 3 points (in handle, anchor,
-//!           out handle) as f64 x, y
+//!           u16 sound (a `Contents` media item id, 0 none) · u16 n · n × (u32 mark44, u16
+//!           left, u16 right) (envelope) · u16 loops · u8 sync · u32 in · u32 out (0x3FFFFFFF
+//!           unset) · u16 zoom · label · actions (16 bytes, then the frame script string) ·
+//!           8 bytes · u32 label kind (1 comment) · shape-tween cache (an object) · 4 bytes ·
+//!           shape hints (an object: a `CObList` of `CMorphHintItem`s, each i32 start x, y,
+//!           end x, y in twips and a u32 key) · string · 5 × u32, the last 1 when custom eases
+//!           follow: 6 curves (position, rotation, scale, colour, filters, all), each u32 n
+//!           and n anchors of 3 points (in handle, anchor, out handle) as f64 x, y
 //! shape     children: a group's members · a shape body · cubic hints; the base u16 is 1 for a
 //!           drawing object; without members, flag bit 0 marks a loose (raw) shape and no
 //!           bit a group of one
@@ -37,18 +39,26 @@
 //!           4 alpha) · u8 · i16 percent · RGBA tint · instance name · u16 library item id ·
 //!           3 bytes · persistent data (u8 flag; u32 1, u32 n, n × (u8 5, name, value)) · u8 ·
 //!           u8 filter count · u8 blend (SWF numbering) · u16; movie clips (`CPicSprite`) and
-//!           buttons (`CPicButton`) carry more after it
+//!           buttons (`CPicButton`) carry more after it:
+//! button    0B · actions (16 bytes, then the handler script string) · u8 (track as menu, a
+//!           hypothesis: 0 throughout the corpus) · instance name · u32 0
+//! sprite    08 · actions (16 bytes, then the clip-event script string) · instance name ·
+//!           component settings (not decoded, skipped)
+//! text      see [`crate::text`]
+//! bitmap    a, b, c, d (16.16), tx, ty (twips) · u16 media item id (`Contents`) · u8 (0)
 //! ```
 //!
 //! The instance's two base i32 are its transformation point already placed on the stage
 //! (`M · p`). Strings are UTF-16 behind `FF FE FF` and a u8 length (`FF`, then a u16, past 254).
 //!
-//! What isn't decoded — texts, bitmaps, a movie clip's or button's extra settings — is skipped
-//! by finding where the parent continues: its own end (`00 00`, then its base with its kind
+//! What isn't decoded — a movie clip's component settings, filter lists, objects of other
+//! classes, a text or bitmap record in a layout not seen — is skipped by finding where the
+//! parent continues: its own end (`00 00`, then its base with its kind
 //! byte) or the next sibling object, checked by parsing that sibling. Nothing here panics or
 //! reads past the end; a stream that doesn't make sense is refused as a whole.
 
 use crate::shape::{self, ShapeRecord};
+use crate::text::TextRecord;
 use anicraft_geom::Affine;
 
 /// Most objects one stream may hold.
@@ -70,6 +80,12 @@ pub const KIND_PAGE: u8 = 0x07;
 pub const KIND_LAYER: u8 = 0x0B;
 pub const KIND_SHAPE: u8 = 0x03;
 pub const KIND_INSTANCE: u8 = 0x13;
+pub const KIND_BITMAP: u8 = 0x02;
+/// A frame's sound out point when none is set (the sound plays to its end).
+pub const NO_OUT_POINT: u32 = 0x3FFF_FFFF;
+/// The first byte of a button instance's own settings, and of a movie clip's.
+const BUTTON_EXTRAS: u8 = 0x0B;
+const SPRITE_EXTRAS: u8 = 0x08;
 
 /// The stream doesn't follow the grammar here.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -94,6 +110,9 @@ pub struct LayerRec {
     pub frames: Vec<usize>,
 }
 
+/// A shape hint as stored: its start and its end point, in twips.
+pub type HintRec = ((i32, i32), (i32, i32));
+
 /// A keyframe record.
 #[derive(Clone, Debug, Default)]
 pub struct FrameRec {
@@ -105,8 +124,19 @@ pub struct FrameRec {
     pub ease: i16,
     /// The sound's library item id (0: none).
     pub sound: u16,
+    /// The sound's volume envelope: (time in samples at 44.1 kHz, left, right level 0..=32768).
+    pub envelope: Vec<(u32, u16, u16)>,
+    /// Times the sound plays (1 = once).
+    pub loops: u16,
+    /// The sound's sync byte (3 stream on every corpus sound frame; 0 event, 1 start, 2 stop
+    /// by Flash's menu order, a hypothesis).
+    pub sync: u8,
+    /// The sound's in and out points in samples at 44.1 kHz ([`NO_OUT_POINT`]: none).
+    pub in_point: u32,
+    pub out_point: u32,
     pub label: String,
-    /// 1: the label is a comment.
+    /// 1: the label is a comment (0, a name, and 2, an anchor, are hypotheses: the corpus
+    /// labels are all comments).
     pub label_kind: u32,
     /// Custom ease curves by group (position, rotation, scale, colour, filters, all): each a
     /// list of anchors (in handle x, y, anchor x, y, out handle x, y). Empty: no custom ease.
@@ -115,9 +145,10 @@ pub struct FrameRec {
     pub raw: Option<ShapeRecord>,
     /// Why the raw artwork didn't decode, when it didn't.
     pub raw_error: Option<shape::ShapeError>,
-    pub hints: bool,
-    /// The keyframe has a frame script (kept for a later pass).
-    pub script: bool,
+    /// The shape hints listed on the keyframe, in letter order: (start, end) in twips.
+    pub hints: Vec<HintRec>,
+    /// The frame script, as written (empty: none).
+    pub script: String,
     /// The keyframe's objects, bottom first, as nodes.
     pub elements: Vec<usize>,
 }
@@ -159,8 +190,20 @@ pub struct InstanceRec {
     pub item: u16,
     pub blend: u8,
     pub filters: u8,
-    /// The record's tail (a movie clip's or button's settings, filters) was skipped.
+    /// A button's handler or a movie clip's clip-event script, as written (empty: none).
+    pub script: String,
+    /// A button's track-as-menu byte (a hypothesis: 0 throughout the corpus).
+    pub track_as_menu: bool,
+    /// The record's tail (a movie clip's component settings, filters) was skipped.
     pub extras_skipped: bool,
+}
+
+/// A bitmap instance record.
+#[derive(Clone, Debug)]
+pub struct BitmapRec {
+    pub matrix: Affine,
+    /// The bitmap's media item id (`Contents`).
+    pub item: u16,
 }
 
 /// A shape object: a drawing object, a loose shape, or a group.
@@ -182,9 +225,14 @@ pub enum Node {
     Frame(Box<FrameRec>),
     Shape(ShapeObj),
     Instance(Box<InstanceRec>),
-    /// A shape tween's cache, or its hints: rebuilt by AniCraft.
+    Text(Box<TextRecord>),
+    Bitmap(BitmapRec),
+    /// A shape tween's cache: rebuilt by AniCraft.
     Morph,
-    Hints,
+    /// A list of objects (`CObList`, the shape-hint list).
+    List(Vec<usize>),
+    /// One shape hint: start and end in twips.
+    Hint((i32, i32), (i32, i32)),
     /// An object not decoded, by class name.
     Skipped(String),
 }
@@ -452,16 +500,22 @@ impl<'a> Parser<'a> {
             }
             "CObList" => {
                 let n = self.u16()?;
+                let mut items = Vec::with_capacity(usize::from(n).min(64));
                 for _ in 0..n {
-                    self.obj(None)?;
+                    if let Some(i) = self.obj(None)? {
+                        items.push(i);
+                    }
                 }
-                Ok(Node::Hints)
+                Ok(Node::List(items))
             }
             "CMorphHintItem" => {
-                self.skip(20)?;
-                Ok(Node::Hints)
+                let (sx, sy, ex, ey) = (self.i32()?, self.i32()?, self.i32()?, self.i32()?);
+                self.skip(4)?; // the key
+                Ok(Node::Hint((sx, sy), (ex, ey)))
             }
-            // Texts, bitmaps and anything newer: skipped to where their parent continues.
+            "CPicText" => self.text(parent),
+            "CPicBitmap" => self.bitmap(parent),
+            // Anything newer: skipped to where its parent continues.
             _ => {
                 self.resync(parent)?;
                 Ok(Node::Skipped(name))
@@ -707,16 +761,26 @@ impl<'a> Parser<'a> {
         let sound = self.u16()?;
         let n = self.u16()?;
         let n = self.count(n as u32)?;
-        self.skip(n.checked_mul(8).ok_or(Bad)?)?;
-        self.skip(2 + 1 + 4 + 4 + 2)?; // loops, sync, in, out, zoom
+        let mut envelope = Vec::with_capacity(n.min(64));
+        for _ in 0..n {
+            envelope.push((self.u32()?, self.u16()?, self.u16()?));
+        }
+        let loops = self.u16()?;
+        let sync = self.u8()?;
+        let in_point = self.u32()?;
+        let out_point = self.u32()?;
+        self.skip(2)?; // the sound's zoom in the editor
         let label = self.string()?;
         self.skip(16)?; // the frame actions' header
-        let script = !self.string()?.trim().is_empty();
+        let script = self.string()?;
         self.skip(8)?;
         let label_kind = self.u32()?;
         self.obj(None)?; // the shape tween's cache
         self.skip(4)?;
-        let hints = self.obj(None)?.is_some();
+        let hints = match self.obj(None)? {
+            Some(list) => self.hints_of(list),
+            None => Vec::new(),
+        };
         self.string()?;
         let mut flags = [0u32; 5];
         for v in flags.iter_mut() {
@@ -738,7 +802,63 @@ impl<'a> Parser<'a> {
                 eases.push(curve);
             }
         }
-        Ok(FrameRec { duration, tween, tween_flags, ease, sound, label, label_kind, eases, raw: None, raw_error: None, hints, script, elements: Vec::new() })
+        Ok(FrameRec { duration, tween, tween_flags, ease, sound, envelope, loops, sync, in_point, out_point, label, label_kind, eases, raw: None, raw_error: None, hints, script, elements: Vec::new() })
+    }
+
+    /// The hints in a decoded hint list, in order.
+    fn hints_of(&self, list: usize) -> Vec<HintRec> {
+        let Some(Node::List(items)) = self.nodes.get(list) else { return Vec::new() };
+        items.iter().filter_map(|&i| match self.nodes.get(i) {
+            Some(Node::Hint(a, b)) => Some((*a, *b)),
+            _ => None,
+        }).collect()
+    }
+
+    /// Whether the bytes at `i` are where an object's parent (of kind `parent`) continues: its
+    /// end, or a next sibling's head. Without a known parent, anything goes.
+    fn continues_at(&self, i: usize, parent: Option<u8>) -> bool {
+        match parent {
+            Some(k) => self.parent_end_at(i, k) || self.sibling_head_at(i),
+            None => true,
+        }
+    }
+
+    /// A text record (its head here), decoded by [`crate::text`]; one in a layout not seen,
+    /// or that doesn't end where its parent continues, is skipped.
+    fn text(&mut self, parent: Option<u8>) -> R<Node> {
+        if let Ok(t) = crate::text::decode(self.d, self.at)
+            && self.continues_at(t.end, parent)
+        {
+            self.budget = self.budget.saturating_sub(t.end.saturating_sub(self.at));
+            self.at = t.end;
+            return Ok(Node::Text(Box::new(t)));
+        }
+        self.resync(parent)?;
+        Ok(Node::Skipped("CPicText".into()))
+    }
+
+    /// A bitmap instance: the common head (kind 02, no children), its matrix, its media item
+    /// id and a byte (0 on every corpus instance); one in a layout not seen is skipped.
+    fn bitmap(&mut self, parent: Option<u8>) -> R<Node> {
+        let snap = self.snap();
+        let decoded = (|| -> R<BitmapRec> {
+            let base = self.base(KIND_BITMAP)?;
+            if !base.children.is_empty() {
+                return Err(Bad);
+            }
+            let matrix = self.matrix()?;
+            let item = self.u16()?;
+            self.skip(1)?; // 0 throughout the corpus
+            Ok(BitmapRec { matrix, item })
+        })();
+        match decoded {
+            Ok(b) if self.continues_at(self.at, parent) => Ok(Node::Bitmap(b)),
+            _ => {
+                self.restore(snap);
+                self.resync(parent)?;
+                Ok(Node::Skipped("CPicBitmap".into()))
+            }
+        }
     }
 
     fn instance(&mut self, class: InstanceClass, parent: Option<u8>) -> R<Node> {
@@ -777,17 +897,75 @@ impl<'a> Parser<'a> {
         }
         self.skip(1)?;
         let filters = self.u8()?;
-        let mut rec = InstanceRec { class, locked: base.flag & 0x04 != 0, matrix, point: (base.x, base.y), first_frame, loop_mode, color, name, item, blend: 1, filters, extras_skipped: false };
-        if filters == 0 {
-            rec.blend = self.u8()?;
-            self.skip(2)?;
-        }
-        if filters != 0 || class != InstanceClass::Graphic {
-            // Filters (layout not decoded) and a movie clip's or button's settings.
+        let mut rec = InstanceRec {
+            class,
+            locked: base.flag & 0x04 != 0,
+            matrix,
+            point: (base.x, base.y),
+            first_frame,
+            loop_mode,
+            color,
+            name,
+            item,
+            blend: 1,
+            filters,
+            script: String::new(),
+            track_as_menu: false,
+            extras_skipped: false,
+        };
+        if filters != 0 {
+            // A filter list (layout not decoded), the blend after it, and any settings.
             self.resync(parent)?;
             rec.extras_skipped = true;
+            return Ok(Node::Instance(Box::new(rec)));
+        }
+        rec.blend = self.u8()?;
+        self.skip(2)?;
+        if class != InstanceClass::Graphic {
+            let snap = self.snap();
+            if !self.extras(&mut rec, parent) {
+                // Settings in a layout not seen: skipped whole.
+                self.restore(snap);
+                rec.script.clear();
+                rec.track_as_menu = false;
+                self.resync(parent)?;
+                rec.extras_skipped = true;
+            }
         }
         Ok(Node::Instance(Box::new(rec)))
+    }
+
+    /// A button's or movie clip's own settings after the common instance fields: whether they
+    /// decoded (a movie clip's component settings after its name are skipped, and say so).
+    fn extras(&mut self, rec: &mut InstanceRec, parent: Option<u8>) -> bool {
+        let want = if rec.class == InstanceClass::Button { BUTTON_EXTRAS } else { SPRITE_EXTRAS };
+        let head = (|| -> R<()> {
+            if self.u8()? != want {
+                return Err(Bad);
+            }
+            self.skip(16)?; // the actions' header
+            rec.script = self.string()?;
+            if rec.class == InstanceClass::Button {
+                rec.track_as_menu = self.u8()? != 0;
+            }
+            let name = self.string()?;
+            if !name.trim().is_empty() {
+                rec.name = name;
+            }
+            Ok(())
+        })();
+        if head.is_err() {
+            return false;
+        }
+        if rec.class == InstanceClass::Button {
+            return self.u32().is_ok_and(|z| z == 0) && self.continues_at(self.at, parent);
+        }
+        // A movie clip's component settings: not decoded.
+        if self.resync(parent).is_err() {
+            return false;
+        }
+        rec.extras_skipped = true;
+        true
     }
 
     /// A shape tween's cache: version 2, two matrices, 8 bytes, its segments (objects), then

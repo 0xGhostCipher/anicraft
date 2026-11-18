@@ -7,25 +7,32 @@
 //! stream (`P <n> <stamp>`) and library stream (`S <n> <stamp>`, `Symbol <n>`) holds one
 //! timeline as an object graph ([`crate::archive`]): layers (stored bottom-first), their
 //! keyframes, each keyframe's raw artwork and objects (symbol instances, drawing objects,
-//! groups). The mapping mirrors the XFL importer's, so a legacy file and its Animate twin open
-//! with the same structure: folder layers hold no frames, raw shapes merge (ADR 0042), comments
-//! are reported, classic and shape tweens with their eases.
+//! groups, texts, bitmaps). `Contents` also lists the library's folders, bitmaps and sounds
+//! ([`crate::library`]); their data streams decode through `anicraft_flamedia`. The mapping
+//! mirrors the XFL importer's, so a legacy file and its Animate twin open with the same
+//! structure: folder layers hold no frames, raw shapes merge (ADR 0042), comments are reported,
+//! classic and shape tweens with their eases and hints, frame sounds with their sync, repeats
+//! and envelope, frame scripts kept as written (never run here), instance handlers reported.
 //!
-//! What isn't decoded yet — texts, bitmaps, sounds, a movie clip's or button's extra settings
-//! — is left out and counted in the report; a timeline that doesn't decode at all falls back
-//! to the structure-only reading (layer names, a symbol's first shape).
+//! What isn't decoded yet — a movie clip's component settings, filters, bitmap fills — is left
+//! out and counted in the report; a timeline that doesn't decode at all falls back to the
+//! structure-only reading (layer names, a symbol's first shape).
 
 use crate::archive::{self, Graph, InstanceClass, Node};
 use crate::cfb::Compound;
+use crate::library::{self, ItemId, MediaKind};
 use crate::shape;
 use crate::report::{ImportError, Report};
+use crate::text::Faces;
 use anicraft_doc::ColorTransform;
 use anicraft_doc::{
-    BlendMode, ColorEffect, CustomEase, Document, EaseGroup, Easing, Element, ElementId, ElementKind, Keyframe, Layer, LayerId, LayerKind, LoopMode, Rgba, Scene, Stage, Symbol,
-    SymbolId, SymbolKind, Timeline, Tween, TweenKind,
+    Bitmap, BitmapId, BlendMode, ColorEffect, CustomEase, Document, EaseGroup, Easing, Element, ElementId, ElementKind, EnvelopePoint, FrameScript, FrameSound, Keyframe,
+    Language, Layer, LayerId, LayerKind, LibraryEntry, LibraryItem as DocItem, LoopMode, Paint, Rgba, Scene, Shape, ShapeHint, Sound, SoundEffect, SoundId, SoundSync, SourceScript,
+    Stage, Symbol, SymbolId, SymbolKind, Timeline, Tween, TweenKind,
 };
-use anicraft_geom::Vec2;
-use std::collections::HashMap;
+use anicraft_geom::{FillRule, Path, Vec2};
+use anicraft_text::Fonts;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 /// The `Contents` stream's version byte on every corpus file of the Flash 8–CS4 era.
@@ -60,6 +67,8 @@ pub struct LibraryItem {
     pub id: u32,
     /// 0 graphic, 1 button, 2 movie clip.
     pub kind: u8,
+    /// The folder it sits in, when its entry says (`library::ROOT`: the library's root).
+    pub parent: Option<ItemId>,
 }
 
 /// What the mapping needs while it builds timelines.
@@ -68,6 +77,14 @@ struct Ctx<'a> {
     report: &'a mut Report,
     /// Library item id → symbol.
     symbols: &'a HashMap<u32, SymbolId>,
+    /// Media item id → bitmap, and → sound.
+    bitmaps: &'a HashMap<u16, BitmapId>,
+    sounds: &'a HashMap<u16, SoundId>,
+    /// The fonts texts are laid out with, and the faces looked up so far.
+    fonts: &'a Fonts,
+    faces: &'a mut Faces,
+    /// The language frame scripts are written in.
+    language: Language,
 }
 
 /// Imports a legacy `.fla` into the AniCraft model.
@@ -88,6 +105,23 @@ pub fn import(data: &[u8]) -> Result<(Document, Report), ImportError> {
     doc.scenes.clear();
     doc.library.clear();
     doc.stage = stage(&contents).unwrap_or_default();
+    // The library's folders first (empty ones come across too, as in the XFL importer).
+    let folder_list = library::folders(&contents);
+    let folders = library::folder_paths(&folder_list);
+    for f in &folder_list {
+        if let Some(path) = folders.get(&f.id) {
+            doc.ensure_folder_path(path);
+        }
+    }
+    if !doc.library_tree.folders.is_empty() {
+        report.keep("library folders");
+    }
+    let language = match library::script_version(&contents).as_deref() {
+        Some("1" | "2") => Language::ActionScript1or2,
+        // As the XFL importer: ActionScript 3.0 unless the file says otherwise.
+        _ => Language::ActionScript3,
+    };
+    let (bitmaps, sounds) = media(&file, &contents, &folders, &mut doc, &mut report);
     // Symbols first, so instances can refer to any of them.
     let mut symbols: HashMap<u32, SymbolId> = HashMap::new();
     let mut ids = Vec::with_capacity(items.len());
@@ -96,9 +130,14 @@ pub fn import(data: &[u8]) -> Result<(Document, Report), ImportError> {
         symbols.insert(item.id, id);
         ids.push(id);
     }
+    let fonts = Fonts::get();
+    let mut faces = Faces::new();
     for (item, &id) in items.iter().zip(&ids) {
         let timeline = match file.stream(&item.stream) {
-            Ok(bytes) => library_timeline(&bytes, &item.label, &mut doc, &mut report, &symbols),
+            Ok(bytes) => {
+                let mut ctx = Ctx { doc: &mut doc, report: &mut report, symbols: &symbols, bitmaps: &bitmaps, sounds: &sounds, fonts, faces: &mut faces, language };
+                library_timeline(&bytes, &item.label, &mut ctx)
+            }
             Err(_) => {
                 report.skip_named("library symbols whose stream is missing", item.label.clone());
                 Timeline { layers: vec![Arc::new(Layer::new(LayerId(doc.alloc_id()), "Layer 1"))] }
@@ -110,6 +149,7 @@ pub fn import(data: &[u8]) -> Result<(Document, Report), ImportError> {
             _ => SymbolKind::MovieClip,
         };
         doc.library.push(Arc::new(Symbol { id, name: item.label.clone(), kind, linkage: None, scale_grid: None, scale_grid_kept: None, timeline }));
+        place_in_folder(&mut doc, &folders, item.parent, DocItem::Symbol(id));
         report.keep("library symbols");
     }
     for page in &pages {
@@ -117,7 +157,7 @@ pub fn import(data: &[u8]) -> Result<(Document, Report), ImportError> {
         match file.stream(&page.stream) {
             Ok(bytes) => match archive::parse(&bytes) {
                 Ok(graph) => {
-                    let mut ctx = Ctx { doc: &mut doc, report: &mut report, symbols: &symbols };
+                    let mut ctx = Ctx { doc: &mut doc, report: &mut report, symbols: &symbols, bitmaps: &bitmaps, sounds: &sounds, fonts, faces: &mut faces, language };
                     timeline = build_timeline(&graph, &mut ctx);
                 }
                 Err(_) => {
@@ -144,16 +184,100 @@ pub fn import(data: &[u8]) -> Result<(Document, Report), ImportError> {
     Ok((doc, report))
 }
 
+/// Puts a library item in its folder (when its entry names one `Contents` lists).
+fn place_in_folder(doc: &mut Document, folders: &HashMap<ItemId, String>, parent: Option<ItemId>, item: DocItem) {
+    if let Some(path) = parent.and_then(|p| folders.get(&p))
+        && let Some(f) = doc.ensure_folder_path(path)
+    {
+        doc.place_entry(LibraryEntry::Item(item), Some(f));
+    }
+}
+
+/// The library's bitmaps and sounds (`Contents`' media items), their data decoded from their
+/// streams the way the XFL importer decodes the same payloads in `bin/` (`anicraft_flamedia`):
+/// a bitmap in Animate's own lossless layout, or a PNG or JPEG; a sound as raw 16-bit PCM of
+/// its item's format and sample count (it comes across as a WAV), or a WAV, Ogg Vorbis or MP3
+/// file. What doesn't decode is reported by name, with why.
+fn media(file: &Compound, contents: &[u8], folders: &HashMap<ItemId, String>, doc: &mut Document, report: &mut Report) -> (HashMap<u16, BitmapId>, HashMap<u16, SoundId>) {
+    let streams: HashSet<String> = file.entries().iter().filter(|e| e.kind == crate::cfb::Kind::Stream).map(|e| e.path.clone()).collect();
+    let (mut bitmaps, mut sounds) = (HashMap::new(), HashMap::new());
+    for item in library::media_items(contents, |s| streams.contains(s)) {
+        if bitmaps.contains_key(&item.id) || sounds.contains_key(&item.id) {
+            continue;
+        }
+        let shown = item.name.clone();
+        let Ok(bytes) = file.stream(&item.stream) else {
+            report.skip_named("media whose stream couldn't be read", shown);
+            continue;
+        };
+        let kind = item.kind.unwrap_or(if anicraft_flamedia::is_bitmap(&bytes) { MediaKind::Bitmap } else { MediaKind::Sound });
+        match kind {
+            MediaKind::Bitmap => {
+                let decoded = if anicraft_flamedia::is_bitmap(&bytes) {
+                    anicraft_flamedia::decode_bitmap(&bytes).map_err(|e| e.to_string()).and_then(|px| {
+                        Bitmap::from_rgba(BitmapId(0), item.name.clone(), px.width, px.height, px.rgba).ok_or_else(|| anicraft_flamedia::DatError::BadSize.to_string())
+                    })
+                } else {
+                    Bitmap::from_image(BitmapId(0), item.name.clone(), bytes).map_err(|_| "not a format AniCraft reads".to_string())
+                };
+                match decoded {
+                    Ok(mut b) => {
+                        b.id = BitmapId(doc.alloc_id());
+                        b.smoothing = true;
+                        bitmaps.insert(item.id, b.id);
+                        place_in_folder(doc, folders, Some(item.parent), DocItem::Bitmap(b.id));
+                        doc.bitmaps.push(Arc::new(b));
+                        report.keep("bitmaps");
+                    }
+                    Err(why) => report.skip_named("bitmaps in Animate's own format AniCraft can't decode", format!("{shown}: {why}")),
+                }
+            }
+            MediaKind::Sound => {
+                // Raw PCM when it is exactly the item's sample count of its format; otherwise a
+                // sound file kept as it came.
+                let mut raw_why = None;
+                let mut sound = None;
+                if let Some((format, count)) = item.sound {
+                    match anicraft_flamedia::SoundFormat::from_legacy(format).and_then(|f| anicraft_flamedia::decode_sound(&bytes, f, Some(u64::from(count)))) {
+                        Ok(pcm) => match pcm.to_wav().map(|wav| Sound::from_data(SoundId(0), item.name.clone(), wav)) {
+                            Some(Ok(s)) => sound = Some(s),
+                            Some(Err(e)) => raw_why = Some(e.to_string()),
+                            None => raw_why = Some(anicraft_flamedia::DatError::TooLong.to_string()),
+                        },
+                        Err(anicraft_flamedia::DatError::LengthMismatch { .. }) => {}
+                        Err(e) => raw_why = Some(e.to_string()),
+                    }
+                }
+                let sound = match sound {
+                    Some(s) => Ok(s),
+                    None => Sound::from_data(SoundId(0), item.name.clone(), bytes).map_err(|e| raw_why.map_or_else(|| e.to_string(), |r| format!("Animate's own sound data ({r})"))),
+                };
+                match sound {
+                    Ok(mut s) => {
+                        s.id = SoundId(doc.alloc_id());
+                        sounds.insert(item.id, s.id);
+                        place_in_folder(doc, folders, Some(item.parent), DocItem::Sound(s.id));
+                        doc.sounds.push(Arc::new(s));
+                        report.keep("sounds");
+                    }
+                    Err(why) => report.skip_named("sounds in formats AniCraft can't decode", format!("{shown}: {why}")),
+                }
+            }
+        }
+    }
+    (bitmaps, sounds)
+}
+
 /// A library item's timeline: its stream's object graph, or (when that doesn't decode) its
 /// first shape record on one keyframe.
-fn library_timeline(bytes: &[u8], label: &str, doc: &mut Document, report: &mut Report, symbols: &HashMap<u32, SymbolId>) -> Timeline {
+fn library_timeline(bytes: &[u8], label: &str, ctx: &mut Ctx) -> Timeline {
     if let Ok(graph) = archive::parse(bytes) {
-        let mut ctx = Ctx { doc, report, symbols };
-        let tl = build_timeline(&graph, &mut ctx);
+        let tl = build_timeline(&graph, ctx);
         if !tl.layers.is_empty() {
             return tl;
         }
     }
+    let (doc, report) = (&mut *ctx.doc, &mut *ctx.report);
     let shapes = shapes(bytes, report);
     let layer = Layer::new(LayerId(doc.alloc_id()), "artwork");
     if shapes.is_empty() {
@@ -200,6 +324,7 @@ fn build_timeline(graph: &Graph, ctx: &mut Ctx) -> Timeline {
             continue;
         }
         let mut keys = Vec::new();
+        let mut hints: HashMap<u32, Vec<archive::HintRec>> = HashMap::new();
         let mut start = 0u32;
         for &f in &rec.frames {
             let Some(Node::Frame(frame)) = graph.node(f) else {
@@ -213,6 +338,9 @@ fn build_timeline(graph: &Graph, ctx: &mut Ctx) -> Timeline {
             if duration == 0 {
                 continue;
             }
+            if !frame.hints.is_empty() {
+                hints.insert(at, frame.hints.clone());
+            }
             keys.push(Arc::new(keyframe(graph, frame, at, duration.clamp(1, MAX_FRAME), ctx)));
             ctx.report.keep("keyframes");
         }
@@ -220,6 +348,9 @@ fn build_timeline(graph: &Graph, ctx: &mut Ctx) -> Timeline {
             layer.keyframes = keys;
         }
         layer.normalize();
+        if !hints.is_empty() {
+            pair_hints(&mut layer, &hints, ctx.report);
+        }
         layers.push(Arc::new(layer));
     }
     let mut tl = Timeline { layers };
@@ -230,6 +361,8 @@ fn build_timeline(graph: &Graph, ctx: &mut Ctx) -> Timeline {
 fn keyframe(graph: &Graph, frame: &archive::FrameRec, start: u32, duration: u32, ctx: &mut Ctx) -> Keyframe {
     let mut k = Keyframe::new(start, duration);
     if !frame.label.is_empty() {
+        // Label kind 1 is a comment (every corpus label); 0, a name, and 2, an anchor, are a
+        // hypothesis (Flash's menu order) and both a label, as XFL's names and anchors are.
         if frame.label_kind == 1 {
             // A note to the animator that nothing can go to: no place for it yet.
             ctx.report.skip("frame comments");
@@ -246,18 +379,15 @@ fn keyframe(graph: &Graph, frame: &archive::FrameRec, start: u32, duration: u32,
                 t.set_ease(g, Some(e));
             }
             k.tween = Some(t);
-            if frame.hints {
-                ctx.report.skip("shape hints (left out)");
-            }
         }
         0 => {}
         _ => ctx.report.skip("tweens of an unknown kind (kept as keyframes)"),
     }
-    if frame.script {
-        ctx.report.skip("frame scripts (decode pending)");
+    if !frame.script.trim().is_empty() {
+        k.script = frame_script(&frame.script, ctx);
     }
     if frame.sound != 0 {
-        ctx.report.skip("frame sounds (decode pending)");
+        k.sound = frame_sound(frame, ctx);
     }
     let mut elements = Vec::new();
     // The keyframe's raw artwork sits below its objects, its shapes merging (ADR 0042).
@@ -274,6 +404,87 @@ fn keyframe(graph: &Graph, frame: &archive::FrameRec, start: u32, duration: u32,
     }
     k.elements = elements;
     k
+}
+
+/// A frame script, exactly as written, in the document's language: kept (ADR 0013 tier 1), as
+/// the XFL importer keeps `<Actionscript>`; nothing here runs it.
+fn frame_script(text: &str, ctx: &mut Ctx) -> Option<FrameScript> {
+    let script = SourceScript::new(ctx.language, text);
+    if script.check().is_err() {
+        ctx.report.skip("frame scripts over 1 MiB (left out)");
+        return None;
+    }
+    let what = format!("frame scripts in {}", ctx.language.label());
+    if script.runs() {
+        *ctx.report.runs.entry(what).or_default() += 1;
+    } else {
+        ctx.report.keep(&what);
+    }
+    Some(FrameScript::Source(Arc::new(script)))
+}
+
+/// The sound on a keyframe, as the XFL importer reads a frame's `soundName`: its sync (by
+/// Flash's menu order, 0 event, 1 start, 2 stop, 3 stream; only stream is in the corpus),
+/// repeats and envelope (time in samples at 44.1 kHz, levels `0..=32768`). In and out points
+/// are reported (played whole), as there.
+fn frame_sound(frame: &archive::FrameRec, ctx: &mut Ctx) -> Option<FrameSound> {
+    let Some(&id) = ctx.sounds.get(&frame.sound) else {
+        ctx.report.skip("frame sounds whose sound isn't in the file");
+        return None;
+    };
+    let mut fs = FrameSound::new(id);
+    fs.sync = match frame.sync {
+        0 => SoundSync::Event,
+        1 => SoundSync::Start,
+        2 => SoundSync::Stop,
+        3 => SoundSync::Stream,
+        _ => {
+            ctx.report.skip("sound syncs of an unknown kind (played as event)");
+            SoundSync::Event
+        }
+    };
+    fs.repeat = u32::from(frame.loops).clamp(1, anicraft_doc::sound::MAX_REPEAT);
+    let points: Vec<EnvelopePoint> = frame
+        .envelope
+        .iter()
+        .take(anicraft_doc::sound::MAX_ENVELOPE_POINTS)
+        .map(|&(mark, left, right)| EnvelopePoint::new(f64::from(mark) / 44_100.0, f32::from(left) / 32_768.0, f32::from(right) / 32_768.0))
+        .collect();
+    // The format has no effect byte: an envelope plays as its points (as the XFL importer
+    // reads an envelope without a preset name).
+    if !points.is_empty() {
+        fs.effect = SoundEffect::Custom(anicraft_doc::sound::clean_points(&points));
+    }
+    if frame.in_point != 0 || frame.out_point != archive::NO_OUT_POINT {
+        ctx.report.skip("sound in and out points (played whole)");
+    }
+    Some(fs)
+}
+
+/// Gives each shape tween on `layer` the hints its start keyframe lists (each with its start
+/// and its end point, twips), snapped onto the outlines when they sit within a couple of
+/// pixels of one, as the XFL importer pairs them.
+fn pair_hints(layer: &mut Layer, raw: &HashMap<u32, Vec<archive::HintRec>>, report: &mut Report) {
+    const SNAP: f32 = 2.0;
+    let snap = |els: &[Arc<Element>], p: Vec2| match anicraft_doc::nearest_outline(els, p) {
+        Some((_, q, d)) if d <= SNAP => q,
+        _ => p,
+    };
+    let px = |(x, y): (i32, i32)| Vec2::new(x as f32 / 20.0, y as f32 / 20.0);
+    for i in 0..layer.keyframes.len() {
+        let (Some(k), Some(next)) = (layer.keyframes.get(i), layer.keyframes.get(i + 1)) else { continue };
+        let Some(list) = raw.get(&k.start) else { continue };
+        if !layer.is_shape_tween(i) {
+            continue;
+        }
+        if list.len() > anicraft_doc::MAX_SHAPE_HINTS {
+            report.skip("shape hints past z");
+        }
+        let hints: Vec<ShapeHint> = list.iter().take(anicraft_doc::MAX_SHAPE_HINTS).map(|&(a, b)| ShapeHint { start: snap(&k.elements, px(a)), end: snap(&next.elements, px(b)) }).collect();
+        if let Some(k) = layer.keyframes.get_mut(i) {
+            Arc::make_mut(k).hints = hints;
+        }
+    }
 }
 
 /// A tween's ease (as the XFL importer reads it): the classic slider, or the custom curves —
@@ -328,6 +539,24 @@ fn element(graph: &Graph, n: usize, ctx: &mut Ctx, out: &mut Vec<Arc<Element>>, 
                 out.push(Arc::new(e));
             }
         }
+        Some(Node::Text(t)) => {
+            let id = ElementId(ctx.doc.alloc_id());
+            if let Some(e) = t.to_element(id, ctx.fonts, ctx.faces, ctx.report) {
+                out.push(Arc::new(e));
+                ctx.report.keep("texts");
+            }
+        }
+        Some(Node::Bitmap(b)) => {
+            // As the XFL importer's bitmap instance: the image's rectangle, filled with it.
+            let found = ctx.bitmaps.get(&b.item).and_then(|&id| ctx.doc.bitmap(id).map(|bm| (id, bm.width as f32, bm.height as f32)));
+            let Some((bitmap, w, h)) = found else {
+                ctx.report.skip("instances of missing bitmaps");
+                return;
+            };
+            let shape = Shape { path: Arc::new(Path::rect(0.0, 0.0, w, h)), fill: Some(Paint::Bitmap { bitmap, repeat: false, matrix: anicraft_geom::Affine::IDENTITY }), stroke: None, fill_rule: FillRule::NonZero, merge: false, warp: None };
+            out.push(Arc::new(Element { id: ElementId(ctx.doc.alloc_id()), name: String::new(), transform: b.matrix, color: ColorEffect::default(), kind: ElementKind::Shape(shape) }));
+            ctx.report.keep("bitmap instances");
+        }
         Some(Node::Shape(s)) => {
             let group = !s.drawing_object && (!s.members.is_empty() || s.flag & 1 == 0);
             if !group {
@@ -358,14 +587,14 @@ fn element(graph: &Graph, n: usize, ctx: &mut Ctx, out: &mut Vec<Arc<Element>>, 
         Some(Node::Skipped(class)) => {
             let what = match class.as_str() {
                 "CPicShape" => "shapes whose edge records didn't decode",
-                "CPicText" => "texts (decode pending)",
-                "CPicBitmap" => "bitmaps (decode pending)",
+                "CPicText" => "texts whose records didn't decode",
+                "CPicBitmap" => "bitmap instances whose records didn't decode",
                 "CPicVideo" => "videos (decode pending)",
                 _ => "objects of a kind not decoded (left out)",
             };
             ctx.report.skip(what);
         }
-        Some(Node::Morph | Node::Hints | Node::Pending) | None => {}
+        Some(Node::Morph | Node::List(_) | Node::Hint(..) | Node::Pending) | None => {}
         Some(_) => ctx.report.skip("objects of a kind not decoded (left out)"),
     }
 }
@@ -422,7 +651,15 @@ fn instance(inst: &archive::InstanceRec, ctx: &mut Ctx) -> Option<Element> {
     if inst.filters != 0 {
         ctx.report.skip("filters and blend modes on filtered instances (left out)");
     } else if inst.extras_skipped {
-        ctx.report.skip("movie clip and button settings (scripts, component data; left out)");
+        ctx.report.skip(match inst.class {
+            InstanceClass::MovieClip => "movie clip component settings (left out)",
+            _ => "button settings in a layout not decoded (left out)",
+        });
+    }
+    // Older documents put handlers (`on (release) { … }`) on instances; only frame scripts
+    // have a place yet (as in the XFL importer).
+    if !inst.script.trim().is_empty() {
+        ctx.report.skip("scripts on instances (left out; frame scripts are kept)");
     }
     let m = inst.matrix;
     // The stored point is the transformation point placed by the matrix: back into the
@@ -621,7 +858,8 @@ pub fn library_items(contents: &[u8]) -> Vec<LibraryItem> {
                         if let (Some(id), Some(kind)) = (id, kind)
                             && (name.starts_with("S ") || name.starts_with("Symbol "))
                         {
-                            out.push(LibraryItem { stream: name, label, id, kind });
+                            let parent = library::symbol_parent(contents, end + 5);
+                            out.push(LibraryItem { stream: name, label, id, kind, parent });
                         }
                         break;
                     }

@@ -14,14 +14,16 @@
 //! is written to disk, and hostile or damaged input is refused with a one-sentence error —
 //! never a panic. [`archive`] reads an item stream's object graph (layers, keyframes, symbol
 //! instances, tweens), [`shape`] the shape records' styles and straight and curved edges,
-//! [`text`] the `CPicText` records' static and dynamic text fields, and [`doc`] maps them into
-//! the AniCraft model the way the XFL importer maps Animate's (ADR 0096).
+//! [`text`] the `CPicText` records' static and dynamic text fields, [`library`] the folders,
+//! bitmaps and sounds `Contents` lists, and [`doc`] maps them into the AniCraft model the way the
+//! XFL importer maps Animate's (ADR 0096).
 
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 pub mod archive;
 pub mod cfb;
 pub mod doc;
+pub mod library;
 pub mod records;
 pub mod report;
 pub mod shape;
