@@ -12,7 +12,8 @@
 //! Container hardening follows ADR 0054's zip profile: the file is capped at 1 GiB and every
 //! stream at 256 MiB, chains (FAT, mini-FAT, DIFAT, directory tree) are cycle-guarded, nothing
 //! is written to disk, and hostile or damaged input is refused with a one-sentence error —
-//! never a panic. Decode of the record payloads into documents lives in later work (ADR 0096).
+//! never a panic. [`doc`] decodes the document's structure, and [`shape`] the `CPicShape`
+//! records' styles and straight and curved edges (ADR 0096).
 
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
@@ -20,6 +21,7 @@ pub mod cfb;
 pub mod doc;
 pub mod records;
 pub mod report;
+pub mod shape;
 
 #[cfg(test)]
 mod tests;

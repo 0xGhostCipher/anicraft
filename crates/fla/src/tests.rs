@@ -362,77 +362,319 @@ fn an_unsupported_version_is_refused_with_the_specific_sentence() {
     assert!(message.contains("unsupported Flash version"), "{message}");
 }
 
-/// A `CPicShape` record with the decoded field layout, holding the corpus's smallest
-/// shape (Symbol 123, "UFO mask"): a 218×224 px rectangle, white fill at 31 % opacity,
-/// its matrix translated to (26.9, −1.55). The bytes are the decoded record's, written
-/// from the differential analysis (ADR 0096), not copied from any file.
-fn synthetic_shape_record() -> Vec<u8> {
-    let mut d = Vec::new();
-    d.extend_from_slice(&[0x09, 0x00]);
+/// A point as the edge grammar stores it, relative to the pen (`crate::shape`): the three
+/// encodings of the flag byte's 2-bit point fields.
+#[derive(Clone, Copy)]
+enum Pt {
+    /// `01`: an i16 pair in 1/256 twip.
+    Fine(i16, i16),
+    /// `10`: an i32 pair in 1/256 twip.
+    Wide(i32, i32),
+    /// `11`: an i16 pair in 1/2 twip.
+    Half(i16, i16),
+}
+
+impl Pt {
+    fn code(self) -> u8 {
+        match self {
+            Pt::Fine(..) => 1,
+            Pt::Wide(..) => 2,
+            Pt::Half(..) => 3,
+        }
+    }
+    fn write(self, d: &mut Vec<u8>) {
+        match self {
+            Pt::Fine(x, y) | Pt::Half(x, y) => {
+                d.extend_from_slice(&x.to_le_bytes());
+                d.extend_from_slice(&y.to_le_bytes());
+            }
+            Pt::Wide(x, y) => {
+                d.extend_from_slice(&x.to_le_bytes());
+                d.extend_from_slice(&y.to_le_bytes());
+            }
+        }
+    }
+}
+
+/// A style change on an edge record: three u8 indices (`11`) or three u16 (`01`).
+#[derive(Clone, Copy)]
+enum Styles {
+    Narrow(u8, u8, u8),
+    Wide(u16, u16, u16),
+}
+
+/// Writes one edge record: the flag byte (move, control, anchor, style fields, low to
+/// high), then the style indices and the points in that order.
+fn edge(d: &mut Vec<u8>, styles: Option<Styles>, mv: Option<Pt>, ctrl: Option<Pt>, anchor: Option<Pt>) {
+    let code = |p: Option<Pt>| p.map_or(0, Pt::code);
+    let style_code = match styles {
+        None => 0,
+        Some(Styles::Wide(..)) => 1,
+        Some(Styles::Narrow(..)) => 3,
+    };
+    d.push(code(mv) | code(ctrl) << 2 | code(anchor) << 4 | style_code << 6);
+    match styles {
+        Some(Styles::Narrow(a, b, c)) => d.extend_from_slice(&[a, b, c]),
+        Some(Styles::Wide(a, b, c)) => {
+            for v in [a, b, c] {
+                d.extend_from_slice(&v.to_le_bytes());
+            }
+        }
+        None => {}
+    }
+    for p in [mv, ctrl, anchor].into_iter().flatten() {
+        p.write(d);
+    }
+}
+
+/// The start of a named `CPicShape` object as observed: the class's name, the 15-byte
+/// object header (`04` … `03`), the matrix (a, b, c, d in 16.16; tx, ty in twips), the
+/// `05` byte and the edge count.
+fn shape_head(matrix: [i32; 6], edge_count: u32) -> Vec<u8> {
+    let mut d = records::ITEM_PROLOGUE.to_vec();
+    d.extend_from_slice(&[0xFF, 0xFF, 0x01, 0x00, 0x09, 0x00]); // a new class, schema 1
     d.extend_from_slice(b"CPicShape");
-    d.extend_from_slice(&[0x04, 0x00, 0, 0, 0, 0]);
-    d.extend_from_slice(&[0x00, 0x00, 0x80, 0x00, 0x00, 0x00, 0x80, 0x01, 0x00, 0x03, 0xFF, 0xFF]);
-    d.extend_from_slice(&[0u8; 6]);
-    d.extend_from_slice(&[0xFF, 0xFF, 0x00, 0x00]);
-    d.extend_from_slice(&538i32.to_le_bytes()); // the matrix's x: 26.9 px in twips
-    d.extend_from_slice(&(-31i32).to_le_bytes()); // the matrix's y: −1.55 px in twips
-    d.push(0x05); // the fill signature
-    d.extend_from_slice(&4u32.to_le_bytes()); // the fill style number
-    d.extend_from_slice(&[0x01, 0x00]);
-    d.extend_from_slice(&[0xFF, 0xFF, 0xFF, 0x50]); // white at 80/255
-    d.extend_from_slice(&[0u8; 4]);
-    d.extend_from_slice(&[0xF3, 0x00, 0x00]);
-    d.push(0x01); // the edge list's start marker
-    d.extend_from_slice(&(-858i16).to_le_bytes()); // (−429, −81) px in half-pixels
-    d.extend_from_slice(&(-162i16).to_le_bytes());
-    d.extend_from_slice(&0i16.to_le_bytes()); // (0, +224) px
-    d.extend_from_slice(&448i16.to_le_bytes());
-    d.push(0x30); // a straight edge
-    d.extend_from_slice(&(-436i16).to_le_bytes()); // (−218, 0) px
-    d.extend_from_slice(&0i16.to_le_bytes());
-    d.push(0x30);
-    d.extend_from_slice(&0i16.to_le_bytes()); // (0, −224) px
-    d.extend_from_slice(&(-448i16).to_le_bytes());
-    d.push(0x30);
-    d.extend_from_slice(&436i16.to_le_bytes()); // (+218, 0) px, closing the loop
-    d.extend_from_slice(&0i16.to_le_bytes());
-    d.extend_from_slice(&[0x00, 0x80, 0x00, 0x00, 0x00, 0x80, 0x00, 0x00, 0x03]); // the tail
+    d.extend_from_slice(&[0x04, 0x00, 0, 0, 0, 0, 0x00, 0x80, 0, 0, 0x00, 0x80, 0x01, 0x00, 0x03]);
+    for v in matrix {
+        d.extend_from_slice(&v.to_le_bytes());
+    }
+    d.push(0x05);
+    d.extend_from_slice(&edge_count.to_le_bytes());
     d
+}
+
+/// The layer-record tail that follows a shape in a library stream.
+const TAIL: [u8; 9] = [0x00, 0x80, 0x00, 0x00, 0x00, 0x80, 0x00, 0x00, 0x03];
+
+/// A `CPicShape` record holding the corpus's smallest shape's geometry (Symbol 123, "UFO
+/// mask"): a 10.9 × 11.2 px rectangle, white fill at 31 % opacity, its matrix scaled by
+/// 65535/65536 and translated to (26.9, −1.55). The bytes are written from the decoded
+/// grammar (ADR 0096), not copied from any file.
+fn synthetic_shape_record() -> Vec<u8> {
+    let mut d = shape_head([0xFFFF, 0, 0, 0xFFFF, 538, -31], 4);
+    d.extend_from_slice(&1u16.to_le_bytes()); // one fill:
+    d.extend_from_slice(&[0xFF, 0xFF, 0xFF, 0x50, 0x00, 0x00]); // white at 80/255, solid
+    d.extend_from_slice(&0u16.to_le_bytes()); // no strokes
+    // The right-hand fill 1, a move to (−429, −81) twips, then four straight edges.
+    edge(&mut d, Some(Styles::Narrow(0, 0, 1)), Some(Pt::Half(-858, -162)), None, Some(Pt::Half(0, 448)));
+    edge(&mut d, None, None, None, Some(Pt::Half(-436, 0)));
+    edge(&mut d, None, None, None, Some(Pt::Half(0, -448)));
+    edge(&mut d, None, None, None, Some(Pt::Half(436, 0)));
+    d.push(0x00); // the edge list's end
+    d.extend_from_slice(&TAIL);
+    d
+}
+
+fn library_shapes(stream: Vec<u8>) -> (Vec<std::sync::Arc<anicraft_doc::Element>>, super::Report) {
+    use super::doc;
+    let payloads = vec![("Contents", synthetic_contents()), ("P 1 1", synthetic_page()), ("Symbol 9", stream)];
+    let (document, report) = doc::import(&write(&payloads)).expect("opens");
+    let elements = document.library.iter().find(|s| s.name == "UFO mask")
+        .map(|symbol| symbol.timeline.layers[0].keyframes[0].elements.clone())
+        .unwrap_or_default();
+    (elements, report)
+}
+
+fn shape_of(element: &anicraft_doc::Element) -> &anicraft_doc::Shape {
+    match &element.kind {
+        anicraft_doc::ElementKind::Shape(shape) => shape,
+        other => panic!("expected a shape, got {other:?}"),
+    }
+}
+
+fn close(a: f32, b: f32) -> bool {
+    (a - b).abs() < 1e-4
 }
 
 #[test]
 fn a_straight_edged_shape_decodes_with_its_geometry_and_fill() {
-    use super::doc;
-    let payloads = vec![
-        ("Contents", synthetic_contents()),
-        ("P 1 1", synthetic_page()),
-        ("Symbol 9", synthetic_shape_record()),
-    ];
-    let bytes = write(&payloads);
-    let (document, report) = doc::import(&bytes).expect("opens");
-    let symbol = document.library.iter().find(|s| s.name == "UFO mask")
-        .expect("a library symbol is registered");
-    let layer = &symbol.timeline.layers[0];
-    let elements = &layer.keyframes[0].elements;
+    let (elements, report) = library_shapes(synthetic_shape_record());
     assert_eq!(elements.len(), 1, "the rectangle decodes as one shape");
-    let shape = match &elements[0].kind {
-        anicraft_doc::ElementKind::Shape(shape) => shape,
-        other => panic!("expected a shape, got {other:?}"),
-    };
+    let shape = shape_of(&elements[0]);
     // The fill: white at 80/255.
     let Some(anicraft_doc::Paint::Solid(fill)) = shape.fill else { panic!("a solid fill") };
     assert!((fill.a - 80.0 / 255.0).abs() < 0.001, "fill alpha {fill:?}");
-    // The matrix translation: (26.9, −1.55) px.
-    assert!((elements[0].transform.m[4] - 26.9).abs() < 0.001);
-    assert!((elements[0].transform.m[5] + 1.55).abs() < 0.001);
-    // The path: the rectangle's four corners in half-pixel precision.
-    let points: Vec<_> = shape.path.cmds.iter().map(|c| match *c {
-        anicraft_geom::PathCmd::MoveTo(p) | anicraft_geom::PathCmd::LineTo(p) => (p.x, p.y),
+    // The matrix: 65535/65536 scale, translation (26.9, −1.55) px.
+    let m = elements[0].transform.m;
+    assert!(close(m[0], 65535.0 / 65536.0) && close(m[3], 65535.0 / 65536.0) && m[1] == 0.0 && m[2] == 0.0, "{m:?}");
+    assert!(close(m[4], 26.9) && close(m[5], -1.55), "{m:?}");
+    // The path: the rectangle's corners, (−429, −81) … (−647, 143) twips, as one closed loop.
+    let points: Vec<_> = shape.path.cmds.iter().filter_map(|c| match *c {
+        anicraft_geom::PathCmd::MoveTo(p) | anicraft_geom::PathCmd::LineTo(p) => Some((p.x, p.y)),
+        anicraft_geom::PathCmd::Close => None,
         _ => panic!("straight edges only"),
     }).collect();
-    assert_eq!(points, vec![(-429.0, -81.0), (-429.0, 143.0), (-647.0, 143.0), (-647.0, -81.0), (-429.0, -81.0)]);
-    assert!(report.skipped.is_empty(), "a fully straight shape skips nothing: {:?}", report.skipped);
+    let want = [(-21.45, -4.05), (-21.45, 7.15), (-32.35, 7.15), (-32.35, -4.05), (-21.45, -4.05)];
+    assert_eq!(points.len(), want.len(), "{points:?}");
+    for (got, want) in points.iter().zip(want) {
+        assert!(close(got.0, want.0) && close(got.1, want.1), "{points:?}");
+    }
+    assert_eq!(shape.path.cmds.last(), Some(&anicraft_geom::PathCmd::Close));
+    assert!(report.skipped.is_empty(), "a fully decoded shape skips nothing: {:?}", report.skipped);
 }
 
+/// A shape exercising the whole edge grammar: a radial gradient fill (with a focal point),
+/// a solid fill, a square-capped stroke; quadratic edges in all three point encodings; a
+/// style change alone; a move; u16 style indices with their flag bit; a region drawn with
+/// its fill on the left. Coordinates in twips: a rounded loop from (100, 100) through
+/// (140, 140), (100, 180) and (60, 140), then a triangle (300, 100), (400, 200), (300, 200).
+fn synthetic_curve_record() -> Vec<u8> {
+    let mut d = shape_head([65536, 0, 0, 65536, 0, 0], 7);
+    d.extend_from_slice(&2u16.to_le_bytes()); // two fills:
+    d.extend_from_slice(&[0, 0, 0, 0, 0x12, 0x00]); // 1: radial gradient
+    for v in [65536, 0, 0, 65536, 100, 0] {
+        d.extend_from_slice(&i32::to_le_bytes(v)); // its matrix: (5, 0) px
+    }
+    d.push(2); // two stops
+    d.extend_from_slice(&(-51i32).to_le_bytes()); // focal point −51/255 = −0.2
+    d.extend_from_slice(&[0; 4]);
+    d.extend_from_slice(&[0x00, 0xFF, 0x00, 0x00, 0xFF]); // red at 0
+    d.extend_from_slice(&[0xFF, 0x00, 0x00, 0xFF, 0xFF]); // blue at 1
+    d.extend_from_slice(&[0x00, 0x80, 0x00, 0xFF, 0x00, 0x37]); // 2: solid green (the second byte varies)
+    d.extend_from_slice(&1u16.to_le_bytes()); // one stroke:
+    d.extend_from_slice(&[0x00, 0x00, 0x00, 0xFF]); // black
+    d.extend_from_slice(&30u16.to_le_bytes()); // 1.5 px
+    d.extend_from_slice(&[0, 0, 0, 0, 0, 0, 0x02, 0x00, 0x00, 0x05]); // square caps, miter joins, limit 5
+    d.extend_from_slice(&[0x00, 0x00, 0x00, 0xFF, 0x00, 0xD9]); // its fill: the colour again
+    let fine = |tw: i16| tw * 256; // twips in 1/256 twip
+    let wide = |tw: i32| tw * 256;
+    let half = |tw: i16| tw * 2;
+    // Stroke 1 and fill 1 on the right: a move, then a curve with 01-encoded points.
+    edge(&mut d, Some(Styles::Narrow(1, 0, 1)), Some(Pt::Half(half(100), half(100))), Some(Pt::Fine(fine(40), 0)), Some(Pt::Fine(fine(40), fine(40))));
+    // A 11-encoded control point and a 10-encoded anchor.
+    edge(&mut d, None, None, Some(Pt::Half(0, half(40))), Some(Pt::Wide(wide(-40), wide(40))));
+    // The reverse.
+    edge(&mut d, None, None, Some(Pt::Wide(wide(-40), 0)), Some(Pt::Half(half(-40), half(-40))));
+    // A straight edge back to the start.
+    edge(&mut d, None, None, None, Some(Pt::Fine(fine(40), fine(-40))));
+    // A style change alone, then u16 indices (fill 2 on the left, flagged) with a move.
+    edge(&mut d, Some(Styles::Narrow(0, 0, 0)), None, None, None);
+    edge(&mut d, Some(Styles::Wide(0, 0x8002, 0)), Some(Pt::Half(half(200), 0)), None, Some(Pt::Half(half(100), half(100))));
+    edge(&mut d, None, None, None, Some(Pt::Half(half(-100), 0)));
+    edge(&mut d, None, None, None, Some(Pt::Half(0, half(-100))));
+    d.push(0x00);
+    d.extend_from_slice(&TAIL);
+    d
+}
 
+#[test]
+fn the_edge_grammar_decodes_curves_styles_and_every_point_encoding() {
+    let data = synthetic_curve_record();
+    let records = super::shape::find_all(&data);
+    assert_eq!(records.len(), 1, "one shape body");
+    let r = &records[0];
+    let v = |x: f32, y: f32| anicraft_geom::Vec2::new(x / 20.0, y / 20.0); // twips to px
+    let seg = |from, ctrl, to| super::shape::Seg { from, ctrl, to };
+    let segs: Vec<_> = r.edges.iter().map(|e| (e.stroke, e.fill_left, e.fill_right, e.seg)).collect();
+    assert_eq!(segs, vec![
+        (1, 0, 1, seg(v(100.0, 100.0), Some(v(140.0, 100.0)), v(140.0, 140.0))),
+        (1, 0, 1, seg(v(140.0, 140.0), Some(v(140.0, 180.0)), v(100.0, 180.0))),
+        (1, 0, 1, seg(v(100.0, 180.0), Some(v(60.0, 180.0)), v(60.0, 140.0))),
+        (1, 0, 1, seg(v(60.0, 140.0), None, v(100.0, 100.0))),
+        (0, 2, 0, seg(v(300.0, 100.0), None, v(400.0, 200.0))),
+        (0, 2, 0, seg(v(400.0, 200.0), None, v(300.0, 200.0))),
+        (0, 2, 0, seg(v(300.0, 200.0), None, v(300.0, 100.0))),
+    ]);
+    assert!(r.approximations.is_empty(), "{:?}", r.approximations);
+}
 
+#[test]
+fn a_curved_shape_imports_as_fill_regions_and_strokes() {
+    use anicraft_geom::{PathCmd, Vec2};
+    let (elements, report) = library_shapes(synthetic_curve_record());
+    assert!(report.skipped.is_empty(), "{:?}", report.skipped);
+    assert_eq!(elements.len(), 3, "two fill regions, then one stroke");
+    let p = |x: f32, y: f32| Vec2::new(x / 20.0, y / 20.0);
+    // Fill 1: the rounded loop, its curves as quadratics.
+    let first = shape_of(&elements[0]);
+    assert_eq!(first.path.cmds, vec![
+        PathCmd::MoveTo(p(100.0, 100.0)),
+        PathCmd::QuadTo(p(140.0, 100.0), p(140.0, 140.0)),
+        PathCmd::QuadTo(p(140.0, 180.0), p(100.0, 180.0)),
+        PathCmd::QuadTo(p(60.0, 180.0), p(60.0, 140.0)),
+        PathCmd::LineTo(p(100.0, 100.0)),
+        PathCmd::Close,
+    ]);
+    let Some(anicraft_doc::Paint::Radial { stops, focal, .. }) = &first.fill else { panic!("a radial gradient: {:?}", first.fill) };
+    assert!(close(*focal, -0.2), "focal {focal}");
+    assert_eq!(stops.len(), 2);
+    assert!(close(stops[0].offset, 0.0) && close(stops[1].offset, 1.0));
+    assert!(close(stops[0].color.r, 1.0) && close(stops[1].color.b, 1.0));
+    // Fill 2 lies on the edges' left: its loop runs the triangle backwards.
+    let second = shape_of(&elements[1]);
+    assert_eq!(second.path.cmds, vec![
+        PathCmd::MoveTo(p(400.0, 200.0)),
+        PathCmd::LineTo(p(300.0, 100.0)),
+        PathCmd::LineTo(p(300.0, 200.0)),
+        PathCmd::LineTo(p(400.0, 200.0)),
+        PathCmd::Close,
+    ]);
+    let Some(anicraft_doc::Paint::Solid(green)) = second.fill else { panic!("a solid fill") };
+    assert!(close(green.g, 128.0 / 255.0) && close(green.r, 0.0));
+    // The stroke: the loop's edges in drawing order, with the decoded style.
+    let third = shape_of(&elements[2]);
+    let stroke = third.stroke.as_ref().expect("a stroke");
+    assert!(close(stroke.width, 1.5));
+    assert_eq!((stroke.style.cap, stroke.style.join), (anicraft_doc::Cap::Square, anicraft_doc::Join::Miter));
+    assert!(close(stroke.style.miter_limit, 5.0));
+    assert!(third.fill.is_none());
+    assert_eq!(third.path.cmds.len(), 5, "a move and the four edges: {:?}", third.path.cmds);
+    assert!(matches!(third.path.cmds[1], PathCmd::QuadTo(..)));
+}
+
+/// `data` with `to` written over it at `at`.
+fn patch(mut data: Vec<u8>, at: usize, to: &[u8]) -> Vec<u8> {
+    data[at..at + to.len()].copy_from_slice(to);
+    data
+}
+
+#[test]
+fn edge_records_the_grammar_does_not_cover_leave_the_shape_out_and_are_counted() {
+    use super::shape::{decode, find_all, ShapeError};
+    let good = synthetic_curve_record();
+    let body = super::shape::body_after_tag(&good, records::ITEM_PROLOGUE.len() + 6 + 9).expect("the body");
+    assert!(decode(&good, body).is_ok());
+    // The first edge record's flag: after the fills and the stroke.
+    let flag_at = good.iter().enumerate().skip(body).find(|&(i, _)| good[i..].starts_with(&[0x00, 0x00, 0x00, 0xFF, 0x00, 0xD9])).map(|(i, _)| i + 6).expect("the stroke's fill");
+    assert_eq!(good[flag_at] >> 6, 3, "the first record changes styles");
+    // Style field `10`: a width the corpus never shows.
+    let bad = patch(good.clone(), flag_at, &[(good[flag_at] & 0x3F) | 0x80]);
+    assert_eq!(decode(&bad, body).err(), Some(ShapeError::StyleWidth));
+    // A control point without an anchor.
+    let bad = patch(good.clone(), flag_at, &[0x0C]);
+    assert!(decode(&bad, body).is_err());
+    // An edge count the list doesn't match.
+    let bad = patch(good.clone(), body + 1, &8u32.to_le_bytes());
+    assert_eq!(decode(&bad, body).err(), Some(ShapeError::Count));
+    let bad = patch(good.clone(), body + 1, &6u32.to_le_bytes());
+    assert_eq!(decode(&bad, body).err(), Some(ShapeError::Count));
+    // A bitmap fill (layout not decoded) leaves the shape out, counted by kind.
+    let fill2 = body + 7 + 6 + 24 + 9 + 10;
+    assert_eq!(&good[fill2 + 4..fill2 + 6], &[0x00, 0x37]);
+    let bad = patch(good.clone(), fill2 + 4, &[0x41]);
+    assert_eq!(decode(&bad, body).err(), Some(ShapeError::FillKind(0x41)));
+    assert!(find_all(&bad).is_empty());
+    let (elements, report) = library_shapes(bad);
+    assert!(elements.is_empty());
+    assert_eq!(report.skipped.get("shapes with bitmap fills (decode pending)"), Some(&1), "{:?}", report.skipped);
+    let (elements, report) = library_shapes(patch(good.clone(), flag_at, &[0x0C]));
+    assert!(elements.is_empty());
+    assert_eq!(report.skipped.get("shapes whose edge records didn't decode"), Some(&1), "{:?}", report.skipped);
+}
+
+#[test]
+fn a_shape_record_cut_short_anywhere_never_panics_and_never_half_draws() {
+    let good = synthetic_curve_record();
+    let full_end = super::shape::find_all(&good)[0].end;
+    for cut in 0..good.len() {
+        let (elements, report) = library_shapes(good[..cut].to_vec());
+        if cut < full_end {
+            assert!(elements.is_empty(), "cut at {cut}: a partial record drew {} shapes", elements.len());
+            if cut > records::ITEM_PROLOGUE.len() + 6 + 9 {
+                assert!(!report.skipped.is_empty(), "cut at {cut}: the left-out shape is counted");
+            }
+        } else {
+            assert_eq!(elements.len(), 3, "cut at {cut}");
+        }
+    }
+}

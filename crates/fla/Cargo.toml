@@ -12,5 +12,9 @@ anicraft-doc.workspace = true
 anicraft-geom.workspace = true
 thiserror.workspace = true
 
+[dev-dependencies]
+# The env-gated corpus tests read the Animate twins (zip packages, XFL edge strings).
+craft-xfl.workspace = true
+
 [lints]
 workspace = true

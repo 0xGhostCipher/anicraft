@@ -16,9 +16,9 @@
 
 use crate::cfb::Compound;
 use crate::records;
+use crate::shape;
 use crate::report::{ImportError, Report};
-use anicraft_doc::{Document, Element, ElementId, ElementKind, Keyframe, Layer, LayerId, Paint, Rgba, Scene, Shape, Stage, Symbol, SymbolKind, SymbolId, Timeline};
-use anicraft_geom::{Affine, FillRule, Path, PathCmd, Vec2};
+use anicraft_doc::{Document, Element, ElementId, ElementKind, Keyframe, Layer, LayerId, Scene, Stage, Symbol, SymbolKind, SymbolId, Timeline};
 use std::sync::Arc;
 
 /// The `Contents` stream's version byte on every corpus file of the Flash 8–CS4 era.
@@ -82,13 +82,12 @@ pub fn import(data: &[u8]) -> Result<(Document, Report), ImportError> {
         doc.scenes.push(Arc::new(Scene { name: "Scene 1".into(), timeline, guides: Vec::new() }));
         report.skip("scenes (no readable page record)");
     }
-    // The library: each item stream is a symbol whose timeline holds its decoded shapes
-    // (straight-edged ones for now; curves are counted until their markers are decoded).
+    // The library: each item stream is a symbol whose timeline holds its first shape
+    // record's artwork (the frame-level decode will place the rest).
     let mut decoded_shapes = 0usize;
     for (stream, label) in &library {
         let Ok(bytes) = file.stream(stream) else { continue };
         let shapes = shapes(&bytes, &mut report);
-        decoded_shapes += shapes.len();
         if shapes.is_empty() {
             continue;
         }
@@ -106,6 +105,7 @@ pub fn import(data: &[u8]) -> Result<(Document, Report), ImportError> {
             scale_grid_kept: None,
             timeline,
         }));
+        decoded_shapes += 1;
         report.keep("library symbols with decoded shapes");
     }
     doc.sanitize();
@@ -113,105 +113,53 @@ pub fn import(data: &[u8]) -> Result<(Document, Report), ImportError> {
     Ok((doc, report))
 }
 
-/// Decodes a library stream's `CPicShape` records into shape elements.
-///
-/// The record layout (differentially verified; see ADR 0096 and the corpus notes): the
-/// record's name field, then a signature run — a `05` byte, a small fill-style number,
-/// `01 00`, an RGBA fill, four zero bytes — that brackets the matrix translation (i32
-/// twips, right before the `05`) and the edge list (three skipped bytes, an `01` start
-/// marker, an absolute start point, then `30`-marked deltas, all i16 half-pixels). Edge
-/// records that aren't `30`-marked are curves, whose marker vocabulary is not yet
-/// decoded: a shape with any is left out whole and counted.
+/// Decodes a library stream's first `CPicShape` record (the object that names the class)
+/// into shape elements: one per fill style, then one per stroke style, carried by the
+/// record's matrix. The record grammar — straight and quadratic edges, styles, gradients —
+/// is in [`crate::shape`]. A record that doesn't decode is left out whole and counted; the
+/// stream's other shape records wait for the frame-level decode that places them.
 fn shapes(bytes: &[u8], report: &mut Report) -> Vec<Element> {
-    let mut out = Vec::new();
-    let mut from = 0usize;
-    while let Some(rel) = find(&bytes[from..], b"CPicShape") {
-        let at = from + rel + b"CPicShape".len();
-        from = at;
-        // The signature: `05`, a small style number, `01 00`, RGBA, four zeros.
-        let mut sig = None;
-        for i in at..(at + 160).min(bytes.len().saturating_sub(15)) {
-            if bytes[i] != 0x05 {
-                continue;
+    let Some(name) = find(bytes, b"CPicShape") else { return Vec::new() };
+    let after = name + b"CPicShape".len();
+    let decoded = match shape::body_after_tag(bytes, after) {
+        Some(body) => shape::decode(bytes, body),
+        // A shape object that holds its artwork in a nested object right behind its own
+        // first field (`04 00`, then the nested object's class tag; seen on a few grouped
+        // shapes): that object's body.
+        None => match (after..after + 16).find_map(|start| shape::body_after_tag(bytes, start).and_then(|body| shape::decode(bytes, body).ok())) {
+            Some(record) => Ok(record),
+            None => {
+                report.skip("shapes (edge header not recognised yet)");
+                return Vec::new();
             }
-            let Some(style) = u32_at(bytes, i + 1) else { continue };
-            if !(1..=64).contains(&style) || bytes.get(i + 5) != Some(&1) || bytes.get(i + 6) != Some(&0) {
-                continue;
-            }
-            if bytes.get(i + 11..i + 15) != Some(&[0, 0, 0, 0][..]) {
-                continue;
-            }
-            sig = Some(i);
-            break;
+        },
+    };
+    let record = match decoded {
+        Ok(record) => record,
+        Err(shape::ShapeError::FillKind(0x40..=0x43)) => {
+            report.skip("shapes with bitmap fills (decode pending)");
+            return Vec::new();
         }
-        let Some(sig) = sig else { continue };
-        let (Some(tx), Some(ty)) = (sig.checked_sub(8).and_then(|p| i32_at(bytes, p)), sig.checked_sub(4).and_then(|p| i32_at(bytes, p))) else {
-            report.skip("shapes (edge header not recognised yet)");
-            continue;
-        };
-        let (tx, ty) = (tx as f32 / 20.0, ty as f32 / 20.0);
-        let Some(rgba) = bytes.get(sig + 7..sig + 11) else {
-            report.skip("shapes (edge header not recognised yet)");
-            continue;
-        };
-        let fill = Rgba::new(rgba[0] as f32 / 255.0, rgba[1] as f32 / 255.0, rgba[2] as f32 / 255.0, rgba[3] as f32 / 255.0);
-        // The edges: three skipped bytes (a shape flag), then an `01` start marker.
-        let edges_at = sig + 18;
-        if bytes.get(edges_at) != Some(&0x01) {
-            report.skip("shapes (edge header not recognised yet)");
-            continue;
+        Err(shape::ShapeError::FillKind(_)) => {
+            report.skip("shapes with fills of an unknown kind");
+            return Vec::new();
         }
-        let read_px = |i: usize| -> Option<f32> { i16_at(bytes, i).map(|v| v as f32 / 2.0) };
-        let (Some(mut x), Some(mut y)) = (read_px(edges_at + 1), read_px(edges_at + 3)) else {
-            report.skip("shapes (edge header not recognised yet)");
-            continue;
-        };
-        let mut i = edges_at + 5;
-        let mut cmds = vec![PathCmd::MoveTo(Vec2::new(x, y))];
-        loop {
-            let (Some(dx), Some(dy)) = (read_px(i), read_px(i + 2)) else {
-                report.skip("shapes with curve edges (decode pending)");
-                return out;
-            };
-            x += dx;
-            y += dy;
-            cmds.push(PathCmd::LineTo(Vec2::new(x, y)));
-            i += 4;
-            match bytes.get(i) {
-                Some(0x30) => i += 1,
-                // The edge list ends when the marker stops; anything but the tail's
-                // leading zeros means a curve came first — leave the shape out whole.
-                Some(b) if b == &0x00 || b == &0x01 => break,
-                Some(_) => {
-                    report.skip("shapes with curve edges (decode pending)");
-                    return out;
-                }
-                None => {
-                    report.skip("shapes with curve edges (decode pending)");
-                    return out;
-                }
-            }
+        Err(_) => {
+            report.skip("shapes whose edge records didn't decode");
+            return Vec::new();
         }
-        if cmds.len() < 4 {
-            report.skip("shapes (too few edges to draw)");
-            continue;
-        }
-        out.push(Element {
-            id: ElementId(out.len() as u64 + 1),
-            name: String::new(),
-            transform: Affine::translate(tx, ty),
-            color: anicraft_doc::ColorEffect::default(),
-            kind: ElementKind::Shape(Shape {
-                path: Arc::new(Path { cmds }),
-                fill: Some(Paint::Solid(fill)),
-                stroke: None,
-                fill_rule: FillRule::EvenOdd,
-                merge: false,
-                warp: None,
-            }),
-        });
+    };
+    for what in &record.approximations {
+        report.skip(what);
     }
-    out
+    let transform = record.matrix;
+    record.shapes().into_iter().enumerate().map(|(i, s)| Element {
+        id: ElementId(i as u64 + 1),
+        name: String::new(),
+        transform,
+        color: anicraft_doc::ColorEffect::default(),
+        kind: ElementKind::Shape(s),
+    }).collect()
 }
 
 /// The document's scenes, from the `CDocumentPage` record(s): each holds the page's
@@ -263,8 +211,8 @@ fn pages(contents: &[u8]) -> Result<Vec<Page>, ImportError> {
 }
 
 /// The library: stream-name strings (`01 80 17` prefix) each followed by a label string
-/// (`ff fe ff`), e.g. `Symbol 125` → `UFO rays`.
-fn library(contents: &[u8], report: &mut Report) -> Vec<(String, String)> {
+/// (`ff fe ff`), e.g. `Symbol 125` → `UFO rays`, as (stream, label) pairs.
+pub fn library(contents: &[u8], report: &mut Report) -> Vec<(String, String)> {
     let mut out = Vec::new();
     let mut i = 0usize;
     while i + STREAM_NAME_PREFIX.len() + 2 <= contents.len() {
@@ -340,7 +288,7 @@ fn count_pending_records(file: &Compound, mut decoded_shapes: usize, report: &mu
         let Ok(bytes) = file.stream(&entry.path) else { continue };
         for tag in records::scan_tags(&bytes) {
             if tag.name == "CPicShape" && decoded_shapes > 0 {
-                decoded_shapes -= 1; // decoded into a library element above
+                decoded_shapes -= 1; // decoded into a library symbol above
                 continue;
             }
             let what = match tag.name.as_str() {
@@ -365,19 +313,4 @@ fn find(data: &[u8], needle: &[u8]) -> Option<usize> {
         return None;
     }
     (0..=data.len() - needle.len()).find(|&i| &data[i..i + needle.len()] == needle)
-}
-
-/// Bounded little-endian reads for the signature and edge scans; no panics on short data.
-fn u32_at(data: &[u8], at: usize) -> Option<u32> {
-    let s = data.get(at..at.checked_add(4)?)?;
-    Some(u32::from_le_bytes([s[0], s[1], s[2], s[3]]))
-}
-
-fn i32_at(data: &[u8], at: usize) -> Option<i32> {
-    u32_at(data, at).map(|v| v as i32)
-}
-
-fn i16_at(data: &[u8], at: usize) -> Option<i16> {
-    let s = data.get(at..at.checked_add(2)?)?;
-    Some(i16::from_le_bytes([s[0], s[1]]))
 }

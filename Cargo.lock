@@ -342,6 +342,7 @@ version = "0.3.0"
 dependencies = [
  "anicraft-doc",
  "anicraft-geom",
+ "craft-xfl",
  "thiserror 2.0.21",
 ]
 
