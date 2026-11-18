@@ -1,0 +1,65 @@
+//! AniCraft legacy Flash import (layer L2): the Flash 8–CS4 era `.fla` container and its
+//! record streams.
+//!
+//! A `.fla` saved by Flash 8 through CS4 is an OLE2 **compound binary file** (Microsoft
+//! `[MS-CFB]`), unlike the zip packages Flash CS5 and Animate write (imported by `anicraft-xfl`,
+//! ADR 0009 and ADR 0054). This crate reads the container from the public specification —
+//! its own reader, like every format in the workspace — and exposes the document's streams
+//! (`Contents`, `S <n> <stamp>` library items, `Symbol <n>` pages, `Media <n>` bitmaps and
+//! sounds). A tag scanner [`records`] lays out each stream's `CPic*`/`C*` record names, the
+//! reverse-engineering microscope behind `anicraft-cli fla-dump`.
+//!
+//! Container hardening follows ADR 0054's zip profile: the file is capped at 1 GiB and every
+//! stream at 256 MiB, chains (FAT, mini-FAT, DIFAT, directory tree) are cycle-guarded, nothing
+//! is written to disk, and hostile or damaged input is refused with a one-sentence error —
+//! never a panic. Decode of the record payloads into documents lives in later work (ADR 0096).
+
+#![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
+
+pub mod cfb;
+pub mod doc;
+pub mod records;
+pub mod report;
+
+#[cfg(test)]
+mod tests;
+
+pub use doc::import;
+pub use report::{ImportError, Report};
+
+/// The OLE2 compound-document magic: the first bytes of a Flash 8–CS4 `.fla`.
+pub const MAGIC: [u8; 8] = [0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1];
+
+/// The file's first bytes are the legacy compound-binary magic (its name doesn't matter).
+pub fn is_legacy(data: &[u8]) -> bool {
+    data.len() >= 8 && data[..8] == MAGIC
+}
+
+/// Everything the `fla-dump` microscope reports about one stream.
+pub struct StreamDump {
+    pub path: String,
+    pub size: u64,
+    /// The stream's first bytes, as `aa bb …`.
+    pub head: String,
+    /// The record tags the scanner found, in order.
+    pub tags: Vec<(usize, String)>,
+}
+
+/// Dumps a legacy document's streams for triage and reverse-engineering.
+pub fn dump(data: &[u8]) -> Result<Vec<StreamDump>, cfb::Error> {
+    let file = cfb::Compound::new(data)?;
+    let mut out = Vec::new();
+    for entry in file.entries() {
+        if entry.kind != cfb::Kind::Stream {
+            continue;
+        }
+        let bytes = file.stream(&entry.path)?;
+        out.push(StreamDump {
+            path: entry.path.clone(),
+            size: entry.size,
+            head: bytes.iter().take(8).map(|b| format!("{b:02x}")).collect::<Vec<_>>().join(" "),
+            tags: records::scan_tags(&bytes).into_iter().map(|t| (t.offset, t.name)).collect(),
+        });
+    }
+    Ok(out)
+}

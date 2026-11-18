@@ -79,6 +79,7 @@ crates/text     L1  Fonts on this computer, shaping and line layout into outline
 crates/render   L2  CPU oracle renderer (coverage accumulation, paints, strokes, PNG)
 crates/xfl      L2  XFL/FLA import: own XML + zip readers, edges → paths (ADR 0009)
 crates/svg      L2  SVG import: shapes, groups, use, styles, gradients, clips/masks → mask layers, text
+crates/fla      L2  Legacy Flash 8–CS4 import (start): the compound binary container (MS-CFB) and its record streams (ADR 0096)
 crates/engine   L3  Session, undo (with gesture coalescing), command registry, .anicraft format
 crates/gpu      L3  wgpu stage renderer (the default stage): tile binning, compute coverage, bitmaps, filters (ADR 0019, 0029, 0032)
 crates/cli      L4  anicraft-cli: info/render/render-seq/commands/exec/run/new/guide/serve/mcp

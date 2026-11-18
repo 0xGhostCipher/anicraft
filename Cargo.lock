@@ -284,6 +284,7 @@ version = "0.3.0"
 dependencies = [
  "anicraft-doc",
  "anicraft-engine",
+ "anicraft-fla",
  "anicraft-geom",
  "anicraft-guide",
  "anicraft-render",
@@ -311,6 +312,7 @@ name = "anicraft-engine"
 version = "0.3.0"
 dependencies = [
  "anicraft-doc",
+ "anicraft-fla",
  "anicraft-geom",
  "anicraft-plugins",
  "anicraft-render",
@@ -332,6 +334,14 @@ dependencies = [
  "wasm-bindgen-test",
  "wat",
  "web-time",
+]
+
+[[package]]
+name = "anicraft-fla"
+version = "0.3.0"
+dependencies = [
+ "anicraft-doc",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
