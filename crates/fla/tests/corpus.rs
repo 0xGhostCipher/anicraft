@@ -62,8 +62,8 @@ fn expected_layers(name: &str) -> Option<Vec<&str>> {
         "mademoiselle-legacy.fla" => vec!["notes", "character"],
         "magnebot-legacy.fla" => vec!["notes", "character"],
         "rabbit-legacy.fla" => vec!["notes", "character", "poses"],
-        // The audio layer's sound record embeds the sound's file name behind the same
-        // anchor as a layer name; the record-level decode pass will tell them apart.
+        // The twin has one more layer, named after the audio's sound file (the timeline
+        // differential below checks every layer exactly).
         "movietemplate-legacy.fla" => {
             vec!["notes", "audio", "sound 1", "sound 2", "maracas", "video", "frame counter", "field guide / mask", "fade in / out", "FX", "camera"]
         }
@@ -88,8 +88,7 @@ fn the_corpus_opens_with_the_twins_scenes_and_layers() {
         assert_eq!(doc.scenes[0].name, "Scene 1", "{}", path.display());
         let got: Vec<&str> = doc.scenes[0].timeline.layers.iter().map(|l| l.name.as_str()).collect();
         if name == "movietemplate-legacy.fla" {
-            // The real layers are all present, top-first, with the sound-name phantom
-            // possibly among them.
+            // These layers are all present, top-first, with the sound-named one among them.
             for real in &want_layers {
                 assert!(got.contains(real), "{}: layer {real:?} missing from {got:?}", path.display());
             }
@@ -314,4 +313,278 @@ fn the_corpus_decodes_curved_shapes_edge_for_edge_like_the_twins() {
     assert!(matched >= 3000, "expected the corpus's ~3200 shapes to match their twins, matched {matched}");
     assert!(curved >= 1500, "expected curved shapes among them, got {curved}");
     eprintln!("{matched} decoded shapes match their twins edge for edge ({curved} with curves)");
+}
+
+/// The XML of a twin's member: from its zip package, or its extracted folder.
+fn twin_member(path: &std::path::Path, member: &str) -> Option<Vec<u8>> {
+    if path.is_dir() {
+        return std::fs::read(path.join(member)).ok();
+    }
+    let bytes = std::fs::read(path).ok()?;
+    let archive = craft_xfl::Archive::open(&bytes).ok()?;
+    archive.read(member).ok().flatten()
+}
+
+fn twin_members(path: &std::path::Path) -> Vec<String> {
+    if path.is_dir() {
+        let mut out = Vec::new();
+        let mut dirs = vec![path.to_path_buf()];
+        while let Some(dir) = dirs.pop() {
+            for entry in std::fs::read_dir(&dir).expect("twin lists").flatten() {
+                let p = entry.path();
+                if p.is_dir() {
+                    dirs.push(p);
+                } else if let Ok(rel) = p.strip_prefix(path) {
+                    out.push(rel.to_string_lossy().replace('\\', "/"));
+                }
+            }
+        }
+        return out;
+    }
+    let bytes = std::fs::read(path).expect("twin reads");
+    let archive = craft_xfl::Archive::open(&bytes).expect("twin opens");
+    archive.names().map(str::to_string).collect()
+}
+
+/// One keyframe as compared: its span and its symbol instances (library name, matrix).
+#[derive(Debug, Clone, PartialEq)]
+struct KeyCmp {
+    start: u32,
+    duration: u32,
+    /// "motion" (classic) or "shape".
+    tween: Option<&'static str>,
+    instances: Vec<(String, [f32; 6])>,
+    /// Each instance's loop mode and first frame.
+    playback: Vec<(anicraft_doc::LoopMode, u32)>,
+}
+
+#[derive(Debug, Clone)]
+struct LayerCmp {
+    name: String,
+    keys: Vec<KeyCmp>,
+}
+
+fn local(name: &str) -> &str {
+    name.rsplit(':').next().unwrap_or(name)
+}
+
+fn kids<'a>(el: &'a craft_xml::El, name: &'a str) -> impl Iterator<Item = &'a craft_xml::El> + 'a {
+    el.elements().filter(move |e| local(&e.name) == name)
+}
+
+/// A twin `DOMTimeline` as compared: layers top-first, folders without frames.
+fn twin_timeline(tl: &craft_xml::El) -> Vec<LayerCmp> {
+    let mut out = Vec::new();
+    for layers in kids(tl, "layers") {
+        for l in kids(layers, "DOMLayer") {
+            let folder = l.attr("layerType") == Some("folder");
+            let mut keys = Vec::new();
+            for frames in kids(l, "frames").filter(|_| !folder) {
+                for f in kids(frames, "DOMFrame") {
+                    let start = f.attr("index").and_then(|v| v.parse().ok()).unwrap_or(0);
+                    let duration = f.attr("duration").and_then(|v| v.parse().ok()).unwrap_or(1);
+                    let tween = match f.attr("tweenType") {
+                        Some("motion") => Some("motion"),
+                        Some("shape") => Some("shape"),
+                        _ => None,
+                    };
+                    let mut instances = Vec::new();
+                    let mut playback = Vec::new();
+                    for els in kids(f, "elements") {
+                        for e in kids(els, "DOMSymbolInstance") {
+                            let name = e.attr("libraryItemName").unwrap_or("");
+                            let name = name.rsplit('/').next().unwrap_or(name).to_string();
+                            let m = kids(e, "matrix").flat_map(|m| kids(m, "Matrix")).next();
+                            let g = |k: &str, d: f32| m.and_then(|m| m.attr(k)).and_then(|v| v.parse::<f32>().ok()).unwrap_or(d);
+                            instances.push((name, [g("a", 1.0), g("b", 0.0), g("c", 0.0), g("d", 1.0), g("tx", 0.0), g("ty", 0.0)]));
+                            let lm = match e.attr("loop") {
+                                Some("play once" | "play once reverse") => anicraft_doc::LoopMode::PlayOnce,
+                                Some("single frame") => anicraft_doc::LoopMode::SingleFrame,
+                                _ => anicraft_doc::LoopMode::Loop,
+                            };
+                            playback.push((lm, e.attr("firstFrame").and_then(|v| v.parse().ok()).unwrap_or(0)));
+                        }
+                    }
+                    keys.push(KeyCmp { start, duration, tween, instances, playback });
+                }
+            }
+            out.push(LayerCmp { name: l.attr("name").unwrap_or("").to_string(), keys });
+        }
+    }
+    out
+}
+
+/// An imported timeline as compared.
+fn legacy_timeline(doc: &anicraft_doc::Document, tl: &anicraft_doc::Timeline) -> Vec<LayerCmp> {
+    tl.layers.iter().map(|l| LayerCmp {
+        name: l.name.clone(),
+        keys: l.keyframes.iter().map(|k| KeyCmp {
+            start: k.start,
+            duration: k.duration,
+            tween: k.tween.as_ref().map(|t| if t.kind == anicraft_doc::TweenKind::Shape { "shape" } else { "motion" }),
+            instances: k.elements.iter().filter_map(|e| match &e.kind {
+                anicraft_doc::ElementKind::Symbol { symbol, .. } => Some((doc.symbol(*symbol).map_or(String::new(), |s| s.name.clone()), e.transform.m)),
+                _ => None,
+            }).collect(),
+            playback: k.elements.iter().filter_map(|e| match &e.kind {
+                anicraft_doc::ElementKind::Symbol { loop_mode, first_frame, .. } => Some((*loop_mode, *first_frame)),
+                _ => None,
+            }).collect(),
+        }).collect(),
+    }).collect()
+}
+
+#[derive(Default, Debug)]
+struct Tally {
+    timelines: usize,
+    timelines_same_layers: usize,
+    layers: usize,
+    layers_same_keys: usize,
+    keyframes: usize,
+    instances: usize,
+    instances_same: usize,
+    tweens_same: usize,
+    playback_same: usize,
+    mismatches: Vec<String>,
+}
+
+fn compare(tag: &str, legacy: &[LayerCmp], twin: &[LayerCmp], t: &mut Tally) {
+    t.timelines += 1;
+    let names = |ls: &[LayerCmp]| ls.iter().map(|l| l.name.clone()).collect::<Vec<_>>();
+    if names(legacy) != names(twin) {
+        t.mismatches.push(format!("{tag}: layers {:?} vs twin {:?}", names(legacy), names(twin)));
+        return;
+    }
+    t.timelines_same_layers += 1;
+    for (a, b) in legacy.iter().zip(twin) {
+        t.layers += 1;
+        let spans = |l: &LayerCmp| l.keys.iter().map(|k| (k.start, k.duration)).collect::<Vec<_>>();
+        if spans(a) != spans(b) {
+            t.mismatches.push(format!("{tag} / {}: keyframes {:?} vs twin {:?}", a.name, spans(a), spans(b)));
+            continue;
+        }
+        t.layers_same_keys += 1;
+        for (ka, kb) in a.keys.iter().zip(&b.keys) {
+            t.keyframes += 1;
+            if ka.tween == kb.tween {
+                t.tweens_same += 1;
+            } else if t.mismatches.len() < 400 {
+                t.mismatches.push(format!("{tag} / {} @{}: tween {:?} vs twin {:?}", a.name, ka.start, ka.tween, kb.tween));
+            }
+            if ka.playback.len() == kb.playback.len() {
+                for (pa, pb) in ka.playback.iter().zip(&kb.playback) {
+                    if pa == pb {
+                        t.playback_same += 1;
+                    } else if t.mismatches.len() < 400 {
+                        t.mismatches.push(format!("{tag} / {} @{}: loop/first frame {pa:?} vs twin {pb:?}", a.name, ka.start));
+                    }
+                }
+            }
+            t.instances += kb.instances.len().max(ka.instances.len());
+            if ka.instances.len() != kb.instances.len() {
+                t.mismatches.push(format!("{tag} / {} @{}: {} instances vs twin {}", a.name, ka.start, ka.instances.len(), kb.instances.len()));
+                continue;
+            }
+            for ((na, ma), (nb, mb)) in ka.instances.iter().zip(&kb.instances) {
+                let close = (0..4).all(|i| (ma[i] - mb[i]).abs() <= 0.01) && (4..6).all(|i| (ma[i] - mb[i]).abs() <= 0.05);
+                if na == nb && close {
+                    t.instances_same += 1;
+                } else if t.mismatches.len() < 400 {
+                    t.mismatches.push(format!("{tag} / {} @{}: {na} {ma:?} vs twin {nb} {mb:?}", a.name, ka.start));
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn the_corpus_timelines_match_the_twins_keyframe_for_keyframe() {
+    let Some(dir) = corpus() else { return };
+    let mut all = Tally::default();
+    let mut lines = Vec::new();
+    for (legacy, twin) in TWINS {
+        let (legacy_path, twin_path) = (dir.join(legacy), dir.join(twin));
+        if !legacy_path.exists() || !twin_path.exists() {
+            continue;
+        }
+        let data = std::fs::read(&legacy_path).expect("legacy reads");
+        let (doc, _report) = anicraft_fla::import(&data).unwrap_or_else(|e| panic!("{legacy}: {e}"));
+        let mut t = Tally::default();
+        // The scenes, in order.
+        let dom = twin_member(&twin_path, "DOMDocument.xml").expect("DOMDocument.xml");
+        let dom = craft_xfl::document::Document::parse(&dom).expect("twin parses");
+        let scenes: Vec<&craft_xml::El> = dom.root().descendants().filter(|e| local(&e.name) == "DOMTimeline").collect();
+        for (scene, tl) in doc.scenes.iter().zip(scenes) {
+            compare(&format!("{legacy}:{}", scene.name), &legacy_timeline(&doc, &scene.timeline), &twin_timeline(tl), &mut t);
+        }
+        // Library symbols with a unique name in the twin.
+        let mut by_stem: std::collections::HashMap<String, Vec<String>> = std::collections::HashMap::new();
+        for m in twin_members(&twin_path).into_iter().filter(|m| m.starts_with("LIBRARY/") && m.ends_with(".xml")) {
+            let stem = m.rsplit('/').next().unwrap_or(&m).trim_end_matches(".xml").to_string();
+            by_stem.entry(stem).or_default().push(m);
+        }
+        for symbol in &doc.library {
+            let Some([member]) = by_stem.get(&symbol.name).map(Vec::as_slice) else { continue };
+            let Some(xml) = twin_member(&twin_path, member) else { continue };
+            let Ok(x) = craft_xfl::document::Document::parse(&xml) else { continue };
+            let Some(tl) = x.root().descendants().find(|e| local(&e.name) == "DOMTimeline") else { continue };
+            compare(&format!("{legacy}:{}", symbol.name), &legacy_timeline(&doc, &symbol.timeline), &twin_timeline(tl), &mut t);
+        }
+        lines.push(format!(
+            "{legacy}: timelines {}/{} same layers, layers {}/{} same keyframes, tweens {}/{} keyframes, instances {}/{} same name and matrix, {}/{} same loop and first frame",
+            t.timelines_same_layers, t.timelines, t.layers_same_keys, t.layers, t.tweens_same, t.keyframes, t.instances_same, t.instances, t.playback_same, t.instances
+        ));
+        all.tweens_same += t.tweens_same;
+        all.playback_same += t.playback_same;
+        all.timelines += t.timelines;
+        all.timelines_same_layers += t.timelines_same_layers;
+        all.layers += t.layers;
+        all.layers_same_keys += t.layers_same_keys;
+        all.keyframes += t.keyframes;
+        all.instances += t.instances;
+        all.instances_same += t.instances_same;
+        all.mismatches.extend(t.mismatches);
+    }
+    for l in &lines {
+        eprintln!("{l}");
+    }
+    eprintln!(
+        "all: timelines {}/{}, layers {}/{}, tweens {}/{} keyframes, instances {}/{} (loop and first frame {}/{})",
+        all.timelines_same_layers, all.timelines, all.layers_same_keys, all.layers, all.tweens_same, all.keyframes, all.instances_same, all.instances, all.playback_same, all.instances
+    );
+    for m in all.mismatches.iter().take(40) {
+        eprintln!("  {m}");
+    }
+    assert!(all.timelines >= 300, "expected the corpus's ~330 timelines, compared {}", all.timelines);
+    assert_eq!(all.timelines_same_layers, all.timelines, "every timeline has the twin's layers");
+    assert_eq!(all.layers_same_keys, all.layers, "every layer has the twin's keyframes");
+    assert_eq!(all.instances_same, all.instances, "every instance has the twin's symbol and matrix");
+    assert_eq!(all.tweens_same, all.keyframes, "every keyframe has the twin's tween kind");
+    assert_eq!(all.playback_same, all.instances, "every instance has the twin's loop mode and first frame");
+}
+
+#[test]
+fn the_corpus_stage_matches_the_twins() {
+    let Some(dir) = corpus() else { return };
+    let mut checked = 0;
+    for (legacy, twin) in TWINS {
+        let (legacy_path, twin_path) = (dir.join(legacy), dir.join(twin));
+        if !legacy_path.exists() || !twin_path.exists() {
+            continue;
+        }
+        let (doc, _) = anicraft_fla::import(&std::fs::read(&legacy_path).expect("reads")).expect("imports");
+        let dom = twin_member(&twin_path, "DOMDocument.xml").expect("DOMDocument.xml");
+        let dom = craft_xfl::document::Document::parse(&dom).expect("parses");
+        let r = dom.root();
+        let num = |k: &str, d: f32| r.attr(k).and_then(|v| v.parse::<f32>().ok()).unwrap_or(d);
+        assert_eq!((doc.stage.width, doc.stage.height), (num("width", 550.0) as u32, num("height", 400.0) as u32), "{legacy}");
+        assert!((doc.stage.fps - num("frameRate", 24.0)).abs() < 0.01, "{legacy}: {}", doc.stage.fps);
+        if let Some(bg) = r.attr("backgroundColor") {
+            let want = u32::from_str_radix(bg.trim_start_matches('#'), 16).expect("hex");
+            let got = ((doc.stage.background.r * 255.0).round() as u32) << 16 | ((doc.stage.background.g * 255.0).round() as u32) << 8 | (doc.stage.background.b * 255.0).round() as u32;
+            assert_eq!(got, want, "{legacy}: background");
+        }
+        checked += 1;
+    }
+    assert!(checked >= 6);
 }

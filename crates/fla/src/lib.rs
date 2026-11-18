@@ -12,11 +12,13 @@
 //! Container hardening follows ADR 0054's zip profile: the file is capped at 1 GiB and every
 //! stream at 256 MiB, chains (FAT, mini-FAT, DIFAT, directory tree) are cycle-guarded, nothing
 //! is written to disk, and hostile or damaged input is refused with a one-sentence error —
-//! never a panic. [`doc`] decodes the document's structure, and [`shape`] the `CPicShape`
-//! records' styles and straight and curved edges (ADR 0096).
+//! never a panic. [`archive`] reads an item stream's object graph (layers, keyframes, symbol
+//! instances, tweens), [`shape`] the shape records' styles and straight and curved edges, and
+//! [`doc`] maps them into the AniCraft model the way the XFL importer maps Animate's (ADR 0096).
 
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+pub mod archive;
 pub mod cfb;
 pub mod doc;
 pub mod records;

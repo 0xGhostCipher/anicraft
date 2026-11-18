@@ -15,6 +15,8 @@ thiserror.workspace = true
 [dev-dependencies]
 # The env-gated corpus tests read the Animate twins (zip packages, XFL edge strings).
 craft-xfl.workspace = true
+# The twins' XML trees, for the timeline differential (keyframes, instances).
+craft-xml.workspace = true
 
 [lints]
 workspace = true

@@ -310,25 +310,21 @@ fn synthetic_contents() -> Vec<u8> {
     c.extend_from_slice(&utf16("Symbol 9"));
     c.extend_from_slice(&[0xFF, 0xFE, 0xFF, 0x08]);
     c.extend_from_slice(&utf16("UFO mask"));
+    c.extend_from_slice(&9u32.to_le_bytes()); // its item id
+    c.push(0x00); // a graphic
     c.extend_from_slice(&[0u8; 8]);
     c
 }
 
-/// A minimal page stream: the item prologue, then two layer records — each the constant
-/// layer anchor, the marker, then the name (stored bottom-first).
+/// A minimal page stream: two layers (stored bottom-first), each with one empty keyframe.
 fn synthetic_page() -> Vec<u8> {
-    let utf16 = |s: &str| -> Vec<u8> { s.encode_utf16().flat_map(|c| c.to_le_bytes()).collect() };
-    let anchor = [0x00u8, 0x80, 0x00, 0x00, 0x00, 0x80, 0x00, 0x00, 0x0B];
-    let mut d = records::ITEM_PROLOGUE.to_vec();
-    d.extend_from_slice(&[0x08, 0x00]);
-    d.extend_from_slice(b"CPicPage");
-    for name in ["b", "a"] {
-        d.extend_from_slice(&anchor);
-        d.extend_from_slice(&[0xFF, 0xFE, 0xFF, name.len() as u8]);
-        d.extend_from_slice(&utf16(name));
-        d.extend_from_slice(&[0u8; 16]);
-    }
-    d
+    let mut w = Ar::new();
+    w.page(|w| {
+        for name in ["b", "a"] {
+            w.layer(name, 0, None, |w| w.frame(&[], &FrameSpec { duration: 1, ..FrameSpec::default() }, |_| {}));
+        }
+    });
+    w.out
 }
 
 #[test]
@@ -337,7 +333,7 @@ fn a_synthetic_legacy_document_opens_with_its_scenes_and_layers() {
     let payloads = vec![
         ("Contents", synthetic_contents()),
         ("P 1 1", synthetic_page()),
-        ("S 9 100", b"no records".to_vec()),
+        ("Symbol 9", one_frame_stream(&[])),
     ];
     let bytes = write(&payloads);
     let (document, report) = doc::import(&bytes).expect("the synthetic legacy document opens");
@@ -346,8 +342,8 @@ fn a_synthetic_legacy_document_opens_with_its_scenes_and_layers() {
     // Layers come bottom-first in the stream; the timeline is top-first.
     let names: Vec<&str> = document.scenes[0].timeline.layers.iter().map(|l| l.name.as_str()).collect();
     assert_eq!(names, vec!["a", "b"]);
-    // The structure-only open reports what stayed for the record-level decode.
-    assert!(report.skipped.is_empty(), "a stream with no known records skips nothing: {:?}", report.skipped);
+    // Everything in it decoded: nothing to report.
+    assert!(report.skipped.is_empty(), "{:?}", report.skipped);
 }
 
 #[test]
@@ -465,14 +461,33 @@ fn synthetic_shape_record() -> Vec<u8> {
     d
 }
 
-fn library_shapes(stream: Vec<u8>) -> (Vec<std::sync::Arc<anicraft_doc::Element>>, super::Report) {
+fn library_shapes(record: Vec<u8>) -> (Vec<std::sync::Arc<anicraft_doc::Element>>, super::Report) {
     use super::doc;
-    let payloads = vec![("Contents", synthetic_contents()), ("P 1 1", synthetic_page()), ("Symbol 9", stream)];
+    let payloads = vec![("Contents", synthetic_contents()), ("P 1 1", synthetic_page()), ("Symbol 9", one_frame_stream(&record_body(&record)))];
     let (document, report) = doc::import(&write(&payloads)).expect("opens");
     let elements = document.library.iter().find(|s| s.name == "UFO mask")
         .map(|symbol| symbol.timeline.layers[0].keyframes[0].elements.clone())
         .unwrap_or_default();
     (elements, report)
+}
+
+/// A shape record's body (from its matrix to the edge list's end), as a keyframe holds it.
+fn record_body(record: &[u8]) -> Vec<u8> {
+    let start = records::ITEM_PROLOGUE.len() + 6 + 9 + 15;
+    // Up to the edge list's end when it decodes (the tail after it is the library object's).
+    let end = super::shape::find_all(record).first().map_or(record.len(), |r| r.end);
+    record.get(start..end).map(<[u8]>::to_vec).unwrap_or_default()
+}
+
+/// An item stream of one layer with one keyframe whose raw artwork is `body`.
+fn one_frame_stream(body: &[u8]) -> Vec<u8> {
+    let mut w = Ar::new();
+    w.page(|w| {
+        w.layer("artwork", 0, None, |w| {
+            w.frame(body, &FrameSpec { duration: 1, ..FrameSpec::default() }, |_| {});
+        });
+    });
+    w.out
 }
 
 fn shape_of(element: &anicraft_doc::Element) -> &anicraft_doc::Shape {
@@ -670,11 +685,464 @@ fn a_shape_record_cut_short_anywhere_never_panics_and_never_half_draws() {
         let (elements, report) = library_shapes(good[..cut].to_vec());
         if cut < full_end {
             assert!(elements.is_empty(), "cut at {cut}: a partial record drew {} shapes", elements.len());
-            if cut > records::ITEM_PROLOGUE.len() + 6 + 9 {
+            // (A cut before the body's start leaves the keyframe an empty body: nothing lost.)
+            if cut > records::ITEM_PROLOGUE.len() + 6 + 9 + 15 {
                 assert!(!report.skipped.is_empty(), "cut at {cut}: the left-out shape is counted");
             }
         } else {
             assert_eq!(elements.len(), 3, "cut at {cut}");
         }
     }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Timelines: an independent writer for the item streams' object graph (ADR 0096), written from
+// the decoded grammar (`crate::archive`), never from corpus bytes.
+
+/// Writes an item stream: the `01` byte, then objects the way the format numbers them (classes
+/// and objects share one count from 1; a new class is declared by name, a known one referenced
+/// as `0x8000 | n`, an object written before as `n`).
+struct Ar {
+    out: Vec<u8>,
+    classes: Vec<(&'static str, u16)>,
+    count: u16,
+}
+
+/// What a keyframe record carries besides its artwork and objects.
+#[derive(Clone, Default)]
+struct FrameSpec {
+    duration: u16,
+    /// 0 none, 1 classic, 2 shape.
+    tween: u8,
+    ease: i16,
+    label: &'static str,
+    comment: bool,
+    /// Custom ease anchors for the `all` group: (in, anchor, out) points.
+    ease_all: Vec<[f64; 6]>,
+    script: &'static str,
+}
+
+/// A symbol instance as written.
+#[derive(Clone)]
+struct InstSpec {
+    class: &'static str,
+    item: u16,
+    matrix: [i32; 6],
+    /// The transformation point placed on the stage, in twips.
+    point: (i32, i32),
+    first_frame: u16,
+    loop_mode: u16,
+    /// (style, A mul, A add, R mul, R add, G mul, G add, B mul, B add, percent, tint RGBA)
+    color: (u8, [i16; 8], i16, [u8; 4]),
+    blend: u8,
+    flag: u8,
+    persistent: Vec<(&'static str, &'static str)>,
+}
+
+impl Default for InstSpec {
+    fn default() -> Self {
+        InstSpec {
+            class: "CPicSymbol",
+            item: 9,
+            matrix: [65536, 0, 0, 65536, 0, 0],
+            point: (0, 0),
+            first_frame: 0,
+            loop_mode: 0,
+            color: (0, [256, 0, 256, 0, 256, 0, 256, 0], 0, [255, 255, 255, 255]),
+            blend: 1,
+            flag: 0,
+            persistent: Vec::new(),
+        }
+    }
+}
+
+impl Ar {
+    fn new() -> Ar {
+        Ar { out: vec![0x01], classes: Vec::new(), count: 1 }
+    }
+    fn u16(&mut self, v: u16) {
+        self.out.extend_from_slice(&v.to_le_bytes());
+    }
+    fn i32(&mut self, v: i32) {
+        self.out.extend_from_slice(&v.to_le_bytes());
+    }
+    fn string(&mut self, s: &str) {
+        let units: Vec<u16> = s.encode_utf16().collect();
+        self.out.extend_from_slice(&[0xFF, 0xFE, 0xFF]);
+        if units.len() < 0xFF {
+            self.out.push(units.len() as u8);
+        } else {
+            self.out.push(0xFF);
+            self.u16(units.len() as u16);
+        }
+        for u in units {
+            self.u16(u);
+        }
+    }
+    /// An object's tag; returns the object's number.
+    fn tag(&mut self, class: &'static str) -> u16 {
+        if let Some(&(_, n)) = self.classes.iter().find(|(c, _)| *c == class) {
+            self.u16(0x8000 | n);
+        } else {
+            self.out.extend_from_slice(&[0xFF, 0xFF, 0x01, 0x00]);
+            self.u16(class.len() as u16);
+            self.out.extend_from_slice(class.as_bytes());
+            self.classes.push((class, self.count));
+            self.count += 1;
+        }
+        self.count += 1;
+        self.count - 1
+    }
+    /// A `CPic*` object's head, its children, then its base fields.
+    fn object(&mut self, class: &'static str, flag: u8, point: Option<(i32, i32)>, word: u16, kind: u8, children: impl FnOnce(&mut Ar)) -> u16 {
+        let n = self.tag(class);
+        self.out.extend_from_slice(&[0x04, flag]);
+        children(self);
+        self.out.extend_from_slice(&[0x00, 0x00]);
+        let (x, y) = point.unwrap_or((i32::MIN, i32::MIN));
+        self.i32(x);
+        self.i32(y);
+        self.u16(word);
+        self.out.push(kind);
+        n
+    }
+    fn page(&mut self, layers: impl FnOnce(&mut Ar)) {
+        self.object("CPicPage", 0, None, 0, 0x07, layers);
+        self.out.extend_from_slice(&[0x02, 0x00, 0x01, 0x00, 0, 0, 0, 0]);
+        self.i32(0); // no ruler guides
+    }
+    /// A layer; `parent` is the layer it sits under, written in place (as the first child of a
+    /// folder has it).
+    fn layer(&mut self, name: &str, kind: u8, parent: Option<Parent>, frames: impl FnOnce(&mut Ar)) -> u16 {
+        let n = self.object("CPicLayer", 0, None, 0, 0x0B, frames);
+        self.layer_fields(name, kind, parent);
+        n
+    }
+    fn layer_fields(&mut self, name: &str, kind: u8, parent: Option<Parent>) {
+        self.string(name);
+        self.out.extend_from_slice(&[0, 0, 1]); // not current, not hidden, locked
+        self.i32(-1);
+        self.out.extend_from_slice(&[0x4F, 0xFF, 0x4F, 0xFF]);
+        self.i32(0);
+        self.i32(1);
+        self.out.push(kind);
+        match parent {
+            None => self.u16(0),
+            Some(Parent::Inline(name, kind)) => {
+                self.object("CPicLayer", 0, None, 0, 0x0B, |_| {});
+                self.layer_fields(name, kind, None);
+            }
+        }
+        self.out.extend_from_slice(&[0x01, 0x00]);
+    }
+    /// A keyframe: its objects, its raw artwork (a shape body), then its fields.
+    fn frame(&mut self, body: &[u8], spec: &FrameSpec, objects: impl FnOnce(&mut Ar)) {
+        self.object("CPicFrame", 0, None, 0, 0x03, objects);
+        if body.is_empty() {
+            self.empty_shape();
+        } else {
+            self.out.extend_from_slice(body);
+        }
+        self.i32(0); // no cubic hints
+        self.out.push(0x18);
+        self.u16(spec.duration);
+        self.out.extend_from_slice(&[spec.tween, 0x06]);
+        self.out.extend_from_slice(&spec.ease.to_le_bytes());
+        self.u16(0); // no sound
+        self.u16(0); // no envelope
+        self.u16(1); // loops
+        self.out.push(0); // sync
+        self.i32(0);
+        self.i32(0x3FFF_FFFF);
+        self.u16(0xFFFF);
+        self.string(spec.label);
+        self.out.extend_from_slice(&[4, 0, 0, 0, 1, 0, 0, 0, 0x33, 0x0D, 0, 0, 0, 0, 0, 0]);
+        self.string(spec.script);
+        self.out.extend_from_slice(&[0; 8]);
+        self.i32(spec.comment as i32);
+        self.u16(0); // no shape-tween cache
+        self.out.extend_from_slice(&[0; 4]);
+        self.u16(0); // no hints
+        self.string("");
+        for v in [1, 0, 0, 1, (!spec.ease_all.is_empty()) as i32] {
+            self.i32(v);
+        }
+        if !spec.ease_all.is_empty() {
+            for group in 0..6 {
+                if group < 5 {
+                    self.i32(0);
+                    continue;
+                }
+                self.i32(spec.ease_all.len() as i32);
+                for a in &spec.ease_all {
+                    for v in a {
+                        self.out.extend_from_slice(&v.to_le_bytes());
+                    }
+                }
+            }
+        }
+    }
+    /// A shape body without edges: the identity matrix, no styles.
+    fn empty_shape(&mut self) {
+        for v in [65536, 0, 0, 65536, 0, 0] {
+            self.i32(v);
+        }
+        self.out.push(0x05);
+        self.i32(0);
+        self.u16(0);
+        self.u16(0);
+        self.out.push(0x00);
+    }
+    fn instance(&mut self, spec: &InstSpec) {
+        self.object(spec.class, spec.flag, Some(spec.point), 0, 0x13, |_| {});
+        for v in spec.matrix {
+            self.i32(v);
+        }
+        self.u16(spec.first_frame);
+        self.u16(spec.loop_mode);
+        self.out.push(1);
+        let (style, chans, percent, tint) = spec.color;
+        for v in chans {
+            self.out.extend_from_slice(&v.to_le_bytes());
+        }
+        self.out.extend_from_slice(&[style, 0]);
+        self.out.extend_from_slice(&percent.to_le_bytes());
+        self.out.extend_from_slice(&tint);
+        self.string("");
+        self.u16(spec.item);
+        self.out.extend_from_slice(&[0, 0, 0]);
+        if spec.persistent.is_empty() {
+            self.out.push(0);
+        } else {
+            self.out.push(1);
+            self.i32(1);
+            self.i32(spec.persistent.len() as i32);
+            for (k, v) in &spec.persistent {
+                self.out.push(0x05);
+                self.string(k);
+                self.string(v);
+            }
+        }
+        self.out.extend_from_slice(&[0, 0, spec.blend, 0, 0]);
+    }
+}
+
+enum Parent {
+    /// The parent layer, written in place.
+    Inline(&'static str, u8),
+}
+
+/// The rectangle's body (from `synthetic_shape_record`).
+fn rectangle_body() -> Vec<u8> {
+    record_body(&synthetic_shape_record())
+}
+
+/// A scene's page: a folder written in place as its first child's parent, a guide, a layer
+/// with a classic tween, a comment and a name label, a zero-length frame and a scaled,
+/// tinted, single-frame instance with a moved transformation point; then the folder's own
+/// place in the stack (a back-reference) and a top layer.
+fn rich_page() -> (Vec<u8>, InstSpec) {
+    let inst = InstSpec {
+        // Scale 1.25 and −0.5, a 30° rotation's b and c, translation (100.5, −20.25) px.
+        matrix: [81920, 32768, -32768, -32768, 2010, -405],
+        point: (2010 + 200, -405 + 100),
+        first_frame: 4,
+        loop_mode: 2,
+        color: (2, [256, 0, 128, 0, 128, 0, 128, 0], 50, [255, 0, 0, 255]),
+        blend: 7,
+        flag: 0x04,
+        persistent: vec![("rigData", "{\"id\":1}")],
+        ..InstSpec::default()
+    };
+    let mut w = Ar::new();
+    let rect = rectangle_body();
+    let i2 = inst.clone();
+    let mut folder = 0u16;
+    w.page(|w| {
+        // Bottom first: a layer inside a folder (the folder written in place as its parent).
+        w.layer("in folder", 0, Some(Parent::Inline("folder", 3)), |w| {
+            w.frame(&rect, &FrameSpec { duration: 10, ..FrameSpec::default() }, |_| {});
+        });
+        // The folder was the last object written.
+        folder = w.count - 1;
+        w.u16(folder); // the folder's own place in the stack: a back-reference
+        w.layer("animation", 0, None, |w| {
+            w.frame(&[], &FrameSpec { duration: 0, ..FrameSpec::default() }, |_| {}); // dropped
+            w.frame(&[], &FrameSpec { duration: 3, tween: 1, ease: -50, label: "start", ..FrameSpec::default() }, |w| w.instance(&i2));
+            w.frame(&[], &FrameSpec { duration: 7, label: "note to self", comment: true, ease_all: vec![[0.0, 0.0, 0.0, 0.0, 0.25, 0.1], [0.75, 0.9, 1.0, 1.0, 1.0, 1.0]], tween: 2, ..FrameSpec::default() }, |w| {
+                w.instance(&InstSpec { class: "CPicSprite", ..InstSpec::default() });
+            });
+        });
+        w.layer("guide", 1, None, |w| w.frame(&[], &FrameSpec { duration: 10, script: "stop();", ..FrameSpec::default() }, |_| {}));
+    });
+    (w.out, inst)
+}
+
+/// A movie-clip instance's settings after its common fields, in a layout not decoded: a
+/// version byte, the frame actions' header, two strings, then component data.
+fn sprite_extras(w: &mut Ar) {
+    w.out.push(0x08);
+    w.out.extend_from_slice(&[4, 0, 0, 0, 1, 0, 0, 0, 0x42, 0x57, 0, 0, 0, 0, 0, 0]);
+    w.string("");
+    w.string("");
+    w.out.extend_from_slice(&[2, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1, 1, 0, 0, 0]);
+    w.string("<component metaDataFetched='true'/>");
+}
+
+fn rich_document() -> (Vec<u8>, InstSpec) {
+    let (page, inst) = rich_page();
+    // The movie clip in `rich_page` carries its extras: rewrite it with them in place.
+    let page = with_sprite_extras(page);
+    let mut symbol = Ar::new();
+    let rect = rectangle_body();
+    symbol.page(|w| {
+        w.layer("artwork", 0, None, |w| {
+            w.frame(&rect, &FrameSpec { duration: 2, ..FrameSpec::default() }, |_| {});
+            w.frame(&[], &FrameSpec { duration: 3, ..FrameSpec::default() }, |_| {});
+        });
+    });
+    let payloads = vec![("Contents", synthetic_contents()), ("P 1 1", page), ("Symbol 9", symbol.out)];
+    (write(&payloads), inst)
+}
+
+/// `page` with a movie clip's extra settings after the sprite instance's common fields.
+fn with_sprite_extras(page: Vec<u8>) -> Vec<u8> {
+    let name = b"CPicSprite";
+    let Some(at) = page.windows(name.len()).position(|w| w == name) else { return page };
+    // The sprite's common fields end with its blend byte and two zero bytes: 15 bytes of base,
+    // 24 of matrix, 4, 1, 16, 1, 1, 2, 4, the empty name (4), the item (2), 3 + 1 + 1 + 1 + 1 + 2.
+    let end = at + name.len() + 15 + 24 + 4 + 1 + 16 + 1 + 1 + 2 + 4 + 4 + 2 + 3 + 1 + 1 + 1 + 1 + 2;
+    let mut extras = Ar::new();
+    extras.out.clear();
+    sprite_extras(&mut extras);
+    let mut out = page[..end].to_vec();
+    out.extend_from_slice(&extras.out);
+    out.extend_from_slice(&page[end..]);
+    out
+}
+
+fn scene(doc: &anicraft_doc::Document) -> &anicraft_doc::Timeline {
+    &doc.scenes[0].timeline
+}
+
+#[test]
+fn a_synthetic_timeline_decodes_its_layers_keyframes_tweens_and_instances() {
+    use anicraft_doc::{BlendMode, ColorEffect, ElementKind, LayerKind, LoopMode, TweenKind};
+    let (bytes, inst) = rich_document();
+    let (doc, report) = super::doc::import(&bytes).expect("the synthetic document opens");
+    let tl = scene(&doc);
+    // Top first: the guide, the animation, the folder, the layer in it.
+    let names: Vec<&str> = tl.layers.iter().map(|l| l.name.as_str()).collect();
+    assert_eq!(names, ["guide", "animation", "folder", "in folder"]);
+    let kinds: Vec<LayerKind> = tl.layers.iter().map(|l| l.kind).collect();
+    assert_eq!(kinds, [LayerKind::Guide, LayerKind::Normal, LayerKind::Folder, LayerKind::Normal]);
+    assert_eq!(tl.layers[3].parent, Some(tl.layers[2].id), "the layer sits in the folder");
+    assert!(tl.layers[2].keyframes.is_empty(), "a folder holds no frames");
+    assert!(tl.layers[0].locked && tl.layers[0].visible);
+    // The animation's keyframes: the zero-length record dropped, the rest one after another.
+    let anim = &tl.layers[1];
+    let spans: Vec<(u32, u32)> = anim.keyframes.iter().map(|k| (k.start, k.duration)).collect();
+    assert_eq!(spans, [(0, 3), (3, 7)]);
+    let first = &anim.keyframes[0];
+    assert_eq!(first.label, "start");
+    let tween = first.tween.as_ref().expect("a classic tween");
+    assert_eq!(tween.kind, TweenKind::Classic);
+    assert_eq!(tween.easing, anicraft_doc::Easing::Classic(-50.0));
+    let second = &anim.keyframes[1];
+    assert_eq!(second.label, "", "a comment is not a label");
+    let shape_tween = second.tween.as_ref().expect("a shape tween");
+    assert_eq!(shape_tween.kind, TweenKind::Shape);
+    let anicraft_doc::Easing::CubicBezier(x1, y1, x2, y2) = shape_tween.easing else { panic!("the custom ease's one segment: {:?}", shape_tween.easing) };
+    assert!(close(x1, 0.25) && close(y1, 0.1) && close(x2, 0.75) && close(y2, 0.9), "{:?}", shape_tween.easing);
+    // The instance: its symbol, matrix, loop, first frame, colour, blend and moved point.
+    let e = &first.elements[0];
+    let ElementKind::Symbol { symbol, loop_mode, first_frame, blend, pivot, .. } = &e.kind else { panic!("an instance: {:?}", e.kind) };
+    assert_eq!(doc.symbol(*symbol).map(|s| s.name.as_str()), Some("UFO mask"));
+    let want = [1.25, 0.5, -0.5, -0.5, 100.5, -20.25];
+    for (got, want) in e.transform.m.iter().zip(want) {
+        assert!((got - want).abs() < 1e-4, "{:?}", e.transform.m);
+    }
+    assert_eq!((*loop_mode, *first_frame, *blend), (LoopMode::SingleFrame, 4, BlendMode::Difference));
+    let placed = e.transform.apply(pivot.expect("a moved transformation point"));
+    assert!((placed.x - (inst.point.0 as f32 / 20.0)).abs() < 1e-3 && (placed.y - (inst.point.1 as f32 / 20.0)).abs() < 1e-3, "{placed:?}");
+    let ColorEffect::Tint { color, amount } = e.color else { panic!("a tint: {:?}", e.color) };
+    assert!((amount - 0.5).abs() < 1e-6 && color.r == 1.0 && color.g == 0.0);
+    // The movie clip after the tween: placed, its extra settings skipped.
+    assert!(matches!(second.elements[0].kind, ElementKind::Symbol { loop_mode: LoopMode::Loop, .. }));
+    // The raw artwork of the layer in the folder: the rectangle, merging (ADR 0042).
+    let raw = &tl.layers[3].keyframes[0].elements;
+    assert_eq!(raw.len(), 1);
+    assert!(matches!(&raw[0].kind, ElementKind::Shape(s) if s.merge));
+    // The library symbol has its own timeline now, not just its first shape.
+    let sym = doc.library.iter().find(|s| s.name == "UFO mask").expect("the symbol");
+    let spans: Vec<(u32, u32)> = sym.timeline.layers[0].keyframes.iter().map(|k| (k.start, k.duration)).collect();
+    assert_eq!(spans, [(0, 2), (2, 3)]);
+    // The report: what was left out, by kind.
+    assert_eq!(report.skipped.get("frame comments"), Some(&1), "{:?}", report.skipped);
+    assert_eq!(report.skipped.get("frame scripts (decode pending)"), Some(&1), "{:?}", report.skipped);
+    assert_eq!(report.skipped.get("movie clip and button settings (scripts, component data; left out)"), Some(&1), "{:?}", report.skipped);
+    assert_eq!(report.kept.get("symbol instances"), Some(&2));
+}
+
+#[test]
+fn an_object_of_a_kind_not_decoded_is_skipped_and_its_siblings_still_place() {
+    use anicraft_doc::ElementKind;
+    let mut w = Ar::new();
+    w.page(|w| {
+        w.layer("notes", 0, None, |w| {
+            w.frame(&[], &FrameSpec { duration: 5, ..FrameSpec::default() }, |w| {
+                // Two objects of a class this pass doesn't decode (a text, in a made-up
+                // layout), then an instance.
+                for _ in 0..2 {
+                    w.object("CPicText", 0, None, 0, 0x0D, |_| {});
+                    for v in [65536, 0, 0, 65536, 40, 60] {
+                        w.i32(v);
+                    }
+                    w.string("hello, world");
+                    w.out.extend_from_slice(&[0x0C, 0x80, 0x02, 0x05, 0x41, 0x00, 0x00, 0x80]);
+                }
+                w.instance(&InstSpec::default());
+            });
+        });
+    });
+    let payloads = vec![("Contents", synthetic_contents()), ("P 1 1", w.out), ("Symbol 9", one_frame_stream(&rectangle_body()))];
+    let (doc, report) = super::doc::import(&write(&payloads)).expect("opens");
+    let k = &scene(&doc).layers[0].keyframes[0];
+    assert_eq!((k.start, k.duration), (0, 5));
+    assert_eq!(k.elements.len(), 1);
+    assert!(matches!(k.elements[0].kind, ElementKind::Symbol { .. }));
+    assert_eq!(report.skipped.get("texts (decode pending)"), Some(&2), "{:?}", report.skipped);
+}
+
+#[test]
+fn a_timeline_cut_short_or_damaged_anywhere_never_panics() {
+    let (bytes, _) = rich_page();
+    let page = with_sprite_extras(bytes);
+    for cut in 0..page.len() {
+        let payloads = vec![("Contents", synthetic_contents()), ("P 1 1", page[..cut].to_vec())];
+        let (doc, _) = super::doc::import(&write(&payloads)).expect("a damaged timeline still opens the document");
+        assert_eq!(doc.scenes.len(), 1);
+    }
+    // Every byte flipped, one at a time.
+    for at in 1..page.len() {
+        let mut bad = page.clone();
+        bad[at] ^= 0xA5;
+        let payloads = vec![("Contents", synthetic_contents()), ("P 1 1", bad)];
+        assert!(super::doc::import(&write(&payloads)).is_ok(), "flip at {at}");
+    }
+}
+
+#[test]
+fn the_object_graph_refuses_what_it_cannot_number() {
+    use super::archive::parse;
+    assert!(parse(&[]).is_err());
+    assert!(parse(&[0x02]).is_err(), "the stream's first byte");
+    // A back-reference to an object never written.
+    assert!(parse(&[0x01, 0x05, 0x00]).is_err());
+    // A class reference to a number that is no class.
+    assert!(parse(&[0x01, 0x07, 0x80, 0x04, 0x00]).is_err());
+    // The root must be a page.
+    let mut w = Ar::new();
+    w.layer("x", 0, None, |_| {});
+    assert!(parse(&w.out).is_err());
 }

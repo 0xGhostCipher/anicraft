@@ -1,7 +1,8 @@
 # ADR 0096: Legacy Flash import — the compound binary container
 
-Date: 2026-11-16 · Status: accepted — the container (Stage 1) and the structure pass
-(scenes, layers, library; Stage 2 part 1) are implemented; record-payload decode continues
+Date: 2026-11-16 · Status: accepted — the container (Stage 1), shapes and the timelines
+(scenes, layers, keyframes, instances, tweens, library symbols) are implemented; text, media,
+scripts and filters continue
 
 ## Context
 
@@ -24,8 +25,9 @@ follow-on work tracked in `openspec/changes/add-legacy-fla-import/`.
 
 2. **Record streams read as data first.** Observation on real files establishes the
    stream layout: a 5-byte prologue per stream family (`Contents`: `3F 01 00 00 00`,
-   `Media`: `03 05 60 01 58`, library items: `01 FF FF 01 00`), then records whose names
-   are 16-bit little-endian length-prefixed ASCII: `CPicPage → CPicLayer → CPicFrame`
+   `Media`: `03 05 60 01 58`, library items: `01 FF FF 01 00`), then an object graph
+   framed the way MFC's `CArchive` writes objects (its documented behaviour, see below),
+   whose class names are 16-bit little-endian length-prefixed ASCII: `CPicPage → CPicLayer → CPicFrame`
    (structure), `CPicShape`, `CPicSymbol`, `CPicText`, `CPicSprite`, `CPicButton`,
    `CPicMorphShape` (+ `CMorphSegment`/`CMorphCurve`/`CMorphHintItem`), `CPicBitmap`,
    `CMediaBits`, `CMediaSound`, `CQTAudioSettings`, `CDocumentPage`, `CColorDef`,
@@ -72,17 +74,56 @@ follow-on work tracked in `openspec/changes/add-legacy-fla-import/`.
   in the corpus (3197, 2201 of them curved) matches its twin's XFL edges, styles and
   matrix. (An earlier reading took the edge unit for half-pixels; it is half-twips — the
   "UFO mask" fixture is 10.9 × 11.2 px.) Fill regions are rebuilt per style as the XFL
-  importer does. Library symbols show each item's first shape record; the other records
-  are placed by the frame pass, so the stage stays empty until placements land. Bitmap
-  fills and stroke kinds (dashed, dotted, hairline) are not yet located.
-- **What stays open**: frame records (durations are u16 LE near keyframes; the exact
-  keyframe record layout is not yet mapped), tweens, text, bitmaps
-  and sounds — each counted in the report's `skipped` per kind, and a sound file's name
-  inside a frame currently reads as an extra layer (the record-level pass will tell them
-  apart). Committed fixtures stay synthetic; the CC BY-NC-SA corpus runs via
-  `ANICRAFT_FLA_CORPUS`.
+  importer does. Bitmap fills and stroke kinds (dashed, dotted, hairline) are not yet
+  located.
+- **Timelines** (`crates/fla/src/archive.rs` holds the full grammar): every item stream is a
+  `01` byte and one object graph. Objects are tagged as MFC's `CArchive` tags them — `FF FF`,
+  schema, length and name to declare a class; `0x8000 | n` for an object of class `n`; a
+  bare `n` for an object written before; `00 00` for none — with classes and objects sharing
+  one count. Every `CPic*` object starts with `04`, a flag byte, its children up to `00 00`,
+  two i32 (a point in twips, `0x80000000` for none), a u16 and a kind byte. A page's
+  children are its layers (bottom-first); a layer's are its keyframes, then its name,
+  current/hidden/locked bytes, colour (RGBA), outline, type (0 normal, 1 guide, 3 folder,
+  4 mask) and its parent layer as an object reference (a folder is written in place as its
+  first child's parent and later back-referenced at its own place in the stack); a
+  keyframe's children are its objects, then its raw artwork (a shape body + cubic hints),
+  then `18`, the u16 duration, the tween word (low byte none/classic/shape, high byte flags),
+  the i16 ease, the sound block, the label, the frame actions, the label kind (1 comment),
+  the shape tween's cache and hints (objects), and six custom ease curves (position,
+  rotation, scale, colour, filters, all) when flagged. An instance (`CPicSymbol`,
+  `CPicSprite` movie clip, `CPicButton`) holds the matrix, first frame, loop mode, colour
+  effect (A, R, G, B multipliers in 1/256 and offsets, style, percent, tint), name, the u16
+  **library item id from `Contents`** (not the stream number), persistent data, filter count
+  and blend (SWF numbering); its base point is the transformation point already placed by
+  the matrix. A `CPicShape` object is a drawing object (base u16 1), a loose shape (flag
+  bit 0) or a group (members as children). `Contents` gives each library item's u32 id
+  and symbol type after its label, and the stage (rectangle in twips, background, 16.16
+  frame rate) in the document properties.
+- **Skipping what isn't decoded.** Texts, bitmaps, a movie clip's or button's extra
+  settings and anything newer are skipped to where their parent continues — its own end
+  (`00 00` and its base with its kind byte) or the next sibling, confirmed by parsing that
+  sibling — counting class declarations inside the skipped bytes so later class numbers
+  stay right. A keyframe whose artwork doesn't decode keeps its timing (its fields are found
+  by trial parse). Scan bytes, trial parses, nesting and object counts are capped per
+  stream; a timeline that doesn't decode falls back to the structure-only reading.
+- **Mapping** mirrors the XFL importer: folders hold no frames, zero-length frame records
+  are dropped (the twins don't have them), raw shapes merge (ADR 0042), comments are
+  reported, classic and shape tweens keep their eases (shape tweens are rebuilt by the
+  engine; the stored morph cache and hints are not used), movie clips and buttons loop.
+  A moved transformation point becomes the instance's pivot (ADR 0111).
+- **Verified differentially** against all 9 pairs: 337/337 timelines have the twins' layers,
+  1628/1628 layers their keyframes (index and duration), 6993/6993 keyframes their tween
+  kind, 4457/4457 instances their library item, matrix, loop mode and first frame; the
+  stage matches on all pairs; rendered frames of the movie template and the character rigs
+  match their twins' apart from text and dotted strokes.
+- **What stays open**: text, bitmaps, sounds, frame and button scripts, filters (an
+  instance with filters loses its blend mode too), dashed/dotted strokes, instance names
+  on buttons, library folders — each counted in the report's `skipped` per kind. Committed
+  fixtures stay synthetic; the CC BY-NC-SA corpus runs via `ANICRAFT_FLA_CORPUS`.
 
 ## References
 
 - Microsoft `[MS-CFB]`: Compound File Binary Format specification (public).
+- Microsoft's MFC documentation of `CArchive` object serialization (`CArchive::WriteObject`,
+  `CRuntimeClass` schemas): the public description of the object framing.
 - The PR's task list and the local corpus notes (not committed; EDAP samples are CC BY-NC-SA).
