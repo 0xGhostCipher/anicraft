@@ -378,13 +378,13 @@ fn bitmaps_come_across_when_their_image_is_png_or_jpeg() {
         ("LIBRARY/Art/photo.png".to_string(), png_2x1()),
         // A .fla may hold only the data file; a PNG or JPEG there is used as it is.
         ("bin/M 2 2.dat".to_string(), png_2x1()),
-        // Animate's own encoding is not public: reported, not guessed.
-        ("bin/M 3 3.dat".to_string(), vec![3, 5, 0, 0, 1, 2, 3]),
+        // Animate's own layout in a pixel format not yet seen: reported, not guessed.
+        ("bin/M 3 3.dat".to_string(), [3u8, 3].into_iter().chain([0u8; 24]).collect()),
     ]);
     let read = |p: &str| -> Result<Option<Vec<u8>>, XflError> { Ok(files.get(p).cloned()) };
     let (doc, report) = import_with(&read).unwrap();
     assert_eq!(doc.bitmaps.iter().map(|b| (b.name.as_str(), b.width, b.height)).collect::<Vec<_>>(), [("photo.png", 2, 1), ("packed.png", 2, 1)]);
-    assert_eq!(report.skipped.get("bitmaps stored in Animate's own format"), Some(&1));
+    assert_eq!(report.names.get("bitmaps in Animate's own format AniCraft can't decode"), Some(&vec!["private.jpg: bitmap pixel format 3, which AniCraft doesn't read yet".to_string()]));
     assert_eq!(report.skipped.get("missing bitmap files"), Some(&1));
     assert_eq!(report.skipped.get("instances of missing bitmaps"), Some(&1));
     assert_eq!(report.skipped.get("bitmap fills of missing bitmaps"), Some(&1));
@@ -995,4 +995,76 @@ fn valid_long_bitmap_sequence_imports_under_budget() {
     assert_eq!(doc.bitmaps.len(), count, "all {count} sequence bitmaps fit within the 256 MP budget");
     assert_eq!(doc.timeline(0).layers[0].keyframes.len(), count);
     assert!(!report.skipped.contains_key("bitmaps past the import pixel budget"));
+}
+
+/// A bitmap in Animate's own data layout (`anicraft_flamedia`), written from its grammar:
+/// premultiplied A,R,G,B rows in zlib chunks.
+fn animate_bitmap(width: u16, height: u16, argb: &[u8]) -> Vec<u8> {
+    let mut out = vec![3, 5];
+    for v in [width * 4, width, height] {
+        out.extend_from_slice(&v.to_le_bytes());
+    }
+    for twips in [0i32, i32::from(width) * 20, 0, i32::from(height) * 20] {
+        out.extend_from_slice(&twips.to_le_bytes());
+    }
+    out.extend_from_slice(&[1, 1]);
+    for part in miniz_oxide::deflate::compress_to_vec_zlib(argb, 6).chunks(3) {
+        out.extend_from_slice(&(part.len() as u16).to_le_bytes());
+        out.extend_from_slice(part);
+    }
+    out.extend_from_slice(&[0, 0]);
+    out
+}
+
+const OWN_MEDIA_DOC: &str = r##"<DOMDocument width="200" height="100">
+  <media>
+    <DOMBitmapItem name="Copyright/badge.png" href="Copyright/badge.png" bitmapDataHRef="M 4 4.dat" frameRight="40" frameBottom="20"/>
+    <DOMBitmapItem name="cut.png" href="cut.png" bitmapDataHRef="M 5 5.dat"/>
+    <DOMSoundItem name="Audio/blip" href="Audio/blip.wav" soundDataHRef="M 6 6.dat" format="44kHz 16bit Stereo" sampleCount="3" dataLength="12"/>
+    <DOMSoundItem name="Audio/hum" href="Audio/hum.wav" soundDataHRef="M 7 7.dat" format="22kHz 16bit Mono" sampleCount="4"/>
+    <DOMSoundItem name="Audio/eight" soundDataHRef="M 8 8.dat" format="44kHz 8bit Mono" sampleCount="4"/>
+    <DOMSoundItem name="Audio/other" soundDataHRef="M 9 9.dat" format="44kHz 16bit Mono" sampleCount="400"/>
+  </media>
+  <timelines><DOMTimeline name="Scene 1"><layers>
+    <DOMLayer name="Sound"><frames><DOMFrame index="0" duration="4" soundName="Audio/blip" soundSync="stream"/></frames></DOMLayer>
+    <DOMLayer name="Art"><frames><DOMFrame index="0" duration="4"><elements><DOMBitmapInstance libraryItemName="Copyright/badge.png"/></elements></DOMFrame></frames></DOMLayer>
+  </layers></DOMTimeline></timelines>
+</DOMDocument>"##;
+
+#[test]
+fn bitmaps_and_sounds_in_animates_own_data_layout_come_across() {
+    // Opaque red, half-transparent blue (premultiplied), clear, opaque near-black.
+    let argb = [255, 255, 0, 0, 128, 0, 0, 128, 0, 0, 0, 0, 255, 0x23, 0x1f, 0x20];
+    let badge = animate_bitmap(2, 2, &argb);
+    let pcm = |s: &[i16]| -> Vec<u8> { s.iter().flat_map(|v| v.to_le_bytes()).collect() };
+    let files: HashMap<String, Vec<u8>> = HashMap::from([
+        ("DOMDocument.xml".to_string(), OWN_MEDIA_DOC.as_bytes().to_vec()),
+        ("bin/M 4 4.dat".to_string(), badge.clone()),
+        ("bin/M 5 5.dat".to_string(), badge[..badge.len() - 3].to_vec()),
+        ("bin/M 6 6.dat".to_string(), pcm(&[0, 16_384, -16_384, 0, 32_767, -32_768])),
+        ("bin/M 7 7.dat".to_string(), pcm(&[1, 2, 3, 4])),
+        ("bin/M 8 8.dat".to_string(), vec![128, 129, 130, 131]),
+        ("bin/M 9 9.dat".to_string(), vec![1, 2, 3, 4, 5, 6, 7, 8]),
+    ]);
+    let read = |p: &str| -> Result<Option<Vec<u8>>, XflError> { Ok(files.get(p).cloned()) };
+    let (doc, report) = import_with(&read).unwrap();
+
+    assert_eq!(doc.bitmaps.iter().map(|b| (b.name.as_str(), b.width, b.height)).collect::<Vec<_>>(), [("badge.png", 2, 2)]);
+    let px = doc.bitmaps[0].pixels().unwrap();
+    assert_eq!(px.rgba, [255, 0, 0, 255, 0, 0, 255, 128, 0, 0, 0, 0, 0x23, 0x1f, 0x20, 255], "straight alpha, A,R,G,B order");
+    let path = doc.entry_path(anicraft_doc::LibraryEntry::Item(anicraft_doc::LibraryItem::Bitmap(doc.bitmaps[0].id)));
+    assert_eq!(path, "Copyright/badge.png");
+    assert_eq!(doc.timeline(0).layers[1].keyframes[0].elements.len(), 1, "its instance is placed");
+    assert_eq!(report.names.get("bitmaps in Animate's own format AniCraft can't decode"), Some(&vec!["cut.png: the data is cut short".to_string()]));
+
+    let sounds: Vec<_> = doc.sounds.iter().map(|s| (s.name.as_str(), s.format, s.rate, s.channels, s.frames)).collect();
+    use anicraft_doc::SoundFormat::Wav;
+    assert_eq!(sounds, [("blip", Wav, 44_100, 2, 3), ("hum", Wav, 22_050, 1, 4)]);
+    let blip = doc.sounds[0].decoded().unwrap();
+    assert_eq!(blip.pcm.samples, [0.0, 0.5, -0.5, 0.0, 32_767.0 / 32_768.0, -1.0], "left, right interleaved, bit for bit");
+    assert_eq!(doc.timeline(0).layers[0].keyframes[0].sound.as_ref().map(|s| s.sound), Some(doc.sounds[0].id));
+    assert_eq!(
+        report.names.get("sounds in formats AniCraft can't decode"),
+        Some(&vec!["Audio/eight: Animate's own sound data (8-bit sound data, which AniCraft doesn't read yet)".to_string(), "Audio/other: Animate's own sound data".to_string()])
+    );
 }

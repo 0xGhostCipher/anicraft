@@ -350,6 +350,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "anicraft-flamedia"
+version = "0.3.0"
+dependencies = [
+ "craft-audio",
+ "miniz_oxide 0.8.9",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "anicraft-geom"
 version = "0.3.0"
 dependencies = [
@@ -437,6 +446,7 @@ name = "anicraft-xfl"
 version = "0.3.0"
 dependencies = [
  "anicraft-doc",
+ "anicraft-flamedia",
  "anicraft-geom",
  "anicraft-text",
  "anicraft-xml",

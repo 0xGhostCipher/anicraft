@@ -262,6 +262,14 @@
   * Off by default and per tween. Tweens without it, and older files, play exactly as before.
   * Every export shows it. Headless, CLI and MCP: `timeline.set_keep_area`.
 
+* **Bitmaps and sounds kept in Animate's own data format** come across from `.fla` and XFL
+  files. Animate often keeps a library image or sound only as its own data file in `bin/`
+  (no PNG, JPEG or WAV beside it); these used to be reported as "stored in Animate's own
+  format" and left out. Lossless bitmaps now decode with their transparency, and raw 16-bit
+  sounds come across as WAV, with the frames that play them. Variants not yet seen in real
+  files (other pixel formats, uncompressed or JPEG-backed bitmaps, compressed or 8-bit sounds)
+  are still named in the report with why. The decoder (`anicraft-flamedia`) is shared with the
+  Flash 8–CS4 importer, whose media streams hold the same bytes.
 * **Layer parenting** (fixes #388, ADR 0113, M7): a layer can follow another layer, as in
   Animate, so a forearm moves with the upper arm while each keeps its own tweens.
   * **Parenting view** in the timeline: the tree button beside **Layers** (or View › Parenting

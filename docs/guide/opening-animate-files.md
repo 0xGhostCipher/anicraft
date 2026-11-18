@@ -101,9 +101,11 @@ These come across, but look a little different from Animate, and the report coun
 ### Left out, for now
 
 * **Motion tweens** come across as keyframes, without their property curves or motion path.
-* **Bitmaps and sounds stored only in Animate's own internal format.** Animate keeps some media
-  in an undocumented form; those are listed, by name for sounds, instead of guessed at. Media
-  kept as PNG, JPEG, WAV, Ogg or MP3 comes across.
+* **Rare forms of Animate's own media storage.** Animate often keeps a library image or sound
+  only in its own data format. Lossless bitmaps and uncompressed 16-bit sounds in that format
+  come across, like media kept as PNG, JPEG, WAV, Ogg or MP3. Forms not yet seen in real files
+  (other pixel formats, uncompressed or JPEG-backed bitmaps, compressed or 8-bit sounds) are
+  listed by name, with why, instead of guessed at.
 * Sounds in formats AniCraft doesn't decode (AIFF, compressed WAV such as ADPCM, FLAC, AAC);
   convert them to WAV, Ogg or MP3 and import them again (**File › Import › Import to
   Library**).
