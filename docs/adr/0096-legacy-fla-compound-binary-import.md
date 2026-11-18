@@ -60,6 +60,14 @@ follow-on work tracked in `openspec/changes/add-legacy-fla-import/`.
   streams' layer records (constant `00 80 00 00 00 80 00 00 0b` anchor + `ff fe ff`-marked
   UTF-16 name, stored bottom-first). Strings are one-byte-length UTF-16 behind
   `ff fe ff` (names) or `01 80 17` (library stream names) markers.
+- **Shape records (first pass):** a `CPicShape` carries an i32-twips matrix translation, an
+  inline RGBA solid fill, and an edge list whose start/deltas are i16 half-pixels with a
+  `30` marker per straight line (`01 | x y | dx dy | 30 | dx dy | …`). Straight-edged
+  shapes decode into library symbols' artwork (verified byte-exactly on the "UFO mask"
+  rectangle fixture: 218×224 px, white α 80/255, matrix 26.9/−1.55); 12 real library
+  shapes decode across the corpus. Curved shapes use additional markers still unmapped —
+  they are counted, not drawn; placements on the main timeline are still pending, so the
+  stage stays empty until that pass.
 - **What stays open**: frame records (durations are u16 LE near keyframes; the exact
   keyframe record layout is not yet mapped), `CPicShape` geometry, tweens, text, bitmaps
   and sounds — each counted in the report's `skipped` per kind, and a sound file's name

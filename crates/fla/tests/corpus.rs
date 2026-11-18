@@ -102,3 +102,26 @@ fn the_corpus_opens_with_the_twins_scenes_and_layers() {
     }
     assert!(checked >= 6, "expected the corpus's 6 legacy pairs, ran {checked}");
 }
+
+
+#[test]
+fn the_corpus_decodes_straight_edged_library_shapes() {
+    let Some(dir) = corpus() else { return };
+    let mut total = 0usize;
+    let mut files = 0usize;
+    for entry in std::fs::read_dir(&dir).expect("corpus directory lists") {
+        let path = entry.expect("entry").path();
+        let Some(name) = path.file_name().and_then(|n| n.to_str()) else { continue };
+        if !name.ends_with("-legacy.fla") { continue; }
+        let data = std::fs::read(&path).expect("file reads");
+        if !anicraft_fla::is_legacy(&data) { continue; }
+        let (doc, _) = anicraft_fla::import(&data).expect("import");
+        let shapes: usize = doc.library.iter()
+            .map(|s| s.timeline.layers.iter().map(|l| l.keyframes.iter().map(|k| k.elements.len()).sum::<usize>()).sum::<usize>())
+            .sum();
+        if shapes > 0 { files += 1; }
+        total += shapes;
+    }
+    assert!(total >= 10, "expected real straight-edged shapes to decode, got {total}");
+    assert!(files >= 3, "expected several files with decoded artwork, got {files}");
+}

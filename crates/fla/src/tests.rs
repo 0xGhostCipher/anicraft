@@ -305,6 +305,11 @@ fn synthetic_contents() -> Vec<u8> {
     c.extend_from_slice(&utf16("P 1 1")); // the page's stream name (marker-terminated)
     c.extend_from_slice(&[0xFF, 0xFE, 0xFF, 0x07]); // the scene label: marker + length
     c.extend_from_slice(&utf16("Scene 1"));
+    // A library item: the stream-name string (`01 80 17` marker) then its label.
+    c.extend_from_slice(&[0x01, 0x80, 0x17, 0x08]);
+    c.extend_from_slice(&utf16("Symbol 9"));
+    c.extend_from_slice(&[0xFF, 0xFE, 0xFF, 0x08]);
+    c.extend_from_slice(&utf16("UFO mask"));
     c.extend_from_slice(&[0u8; 8]);
     c
 }
@@ -355,6 +360,78 @@ fn an_unsupported_version_is_refused_with_the_specific_sentence() {
     let error = doc::import(&bytes).expect_err("an unsupported version is refused");
     let message = error.to_string();
     assert!(message.contains("unsupported Flash version"), "{message}");
+}
+
+/// A `CPicShape` record with the decoded field layout, holding the corpus's smallest
+/// shape (Symbol 123, "UFO mask"): a 218×224 px rectangle, white fill at 31 % opacity,
+/// its matrix translated to (26.9, −1.55). The bytes are the decoded record's, written
+/// from the differential analysis (ADR 0096), not copied from any file.
+fn synthetic_shape_record() -> Vec<u8> {
+    let mut d = Vec::new();
+    d.extend_from_slice(&[0x09, 0x00]);
+    d.extend_from_slice(b"CPicShape");
+    d.extend_from_slice(&[0x04, 0x00, 0, 0, 0, 0]);
+    d.extend_from_slice(&[0x00, 0x00, 0x80, 0x00, 0x00, 0x00, 0x80, 0x01, 0x00, 0x03, 0xFF, 0xFF]);
+    d.extend_from_slice(&[0u8; 6]);
+    d.extend_from_slice(&[0xFF, 0xFF, 0x00, 0x00]);
+    d.extend_from_slice(&538i32.to_le_bytes()); // the matrix's x: 26.9 px in twips
+    d.extend_from_slice(&(-31i32).to_le_bytes()); // the matrix's y: −1.55 px in twips
+    d.push(0x05); // the fill signature
+    d.extend_from_slice(&4u32.to_le_bytes()); // the fill style number
+    d.extend_from_slice(&[0x01, 0x00]);
+    d.extend_from_slice(&[0xFF, 0xFF, 0xFF, 0x50]); // white at 80/255
+    d.extend_from_slice(&[0u8; 4]);
+    d.extend_from_slice(&[0xF3, 0x00, 0x00]);
+    d.push(0x01); // the edge list's start marker
+    d.extend_from_slice(&(-858i16).to_le_bytes()); // (−429, −81) px in half-pixels
+    d.extend_from_slice(&(-162i16).to_le_bytes());
+    d.extend_from_slice(&0i16.to_le_bytes()); // (0, +224) px
+    d.extend_from_slice(&448i16.to_le_bytes());
+    d.push(0x30); // a straight edge
+    d.extend_from_slice(&(-436i16).to_le_bytes()); // (−218, 0) px
+    d.extend_from_slice(&0i16.to_le_bytes());
+    d.push(0x30);
+    d.extend_from_slice(&0i16.to_le_bytes()); // (0, −224) px
+    d.extend_from_slice(&(-448i16).to_le_bytes());
+    d.push(0x30);
+    d.extend_from_slice(&436i16.to_le_bytes()); // (+218, 0) px, closing the loop
+    d.extend_from_slice(&0i16.to_le_bytes());
+    d.extend_from_slice(&[0x00, 0x80, 0x00, 0x00, 0x00, 0x80, 0x00, 0x00, 0x03]); // the tail
+    d
+}
+
+#[test]
+fn a_straight_edged_shape_decodes_with_its_geometry_and_fill() {
+    use super::doc;
+    let payloads = vec![
+        ("Contents", synthetic_contents()),
+        ("P 1 1", synthetic_page()),
+        ("Symbol 9", synthetic_shape_record()),
+    ];
+    let bytes = write(&payloads);
+    let (document, report) = doc::import(&bytes).expect("opens");
+    let symbol = document.library.iter().find(|s| s.name == "UFO mask")
+        .expect("a library symbol is registered");
+    let layer = &symbol.timeline.layers[0];
+    let elements = &layer.keyframes[0].elements;
+    assert_eq!(elements.len(), 1, "the rectangle decodes as one shape");
+    let shape = match &elements[0].kind {
+        anicraft_doc::ElementKind::Shape(shape) => shape,
+        other => panic!("expected a shape, got {other:?}"),
+    };
+    // The fill: white at 80/255.
+    let Some(anicraft_doc::Paint::Solid(fill)) = shape.fill else { panic!("a solid fill") };
+    assert!((fill.a - 80.0 / 255.0).abs() < 0.001, "fill alpha {fill:?}");
+    // The matrix translation: (26.9, −1.55) px.
+    assert!((elements[0].transform.m[4] - 26.9).abs() < 0.001);
+    assert!((elements[0].transform.m[5] + 1.55).abs() < 0.001);
+    // The path: the rectangle's four corners in half-pixel precision.
+    let points: Vec<_> = shape.path.cmds.iter().map(|c| match *c {
+        anicraft_geom::PathCmd::MoveTo(p) | anicraft_geom::PathCmd::LineTo(p) => (p.x, p.y),
+        _ => panic!("straight edges only"),
+    }).collect();
+    assert_eq!(points, vec![(-429.0, -81.0), (-429.0, 143.0), (-647.0, 143.0), (-647.0, -81.0), (-429.0, -81.0)]);
+    assert!(report.skipped.is_empty(), "a fully straight shape skips nothing: {:?}", report.skipped);
 }
 
 
