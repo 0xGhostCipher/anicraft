@@ -19,6 +19,8 @@ AniCraft CLI — headless animation engine
 
 USAGE:
   anicraft-cli info <file|--sample>
+  anicraft-cli fla-dump <legacy.fla> [--stream <name>]   the legacy Flash 8–CS4 container's
+                                                         streams and CPic* record tags (JSON)
   anicraft-cli render <file|--sample> --out <frame.png> [--frame N] [--scale S]
   anicraft-cli render-seq <file|--sample> --out-dir <dir> [--from A] [--to B] [--scale S]
   anicraft-cli gif <file|--sample> --out <anim.gif> [--from A] [--to B] [--scale S] [--overwrite yes]
@@ -290,6 +292,27 @@ pub fn run(argv: &[String]) -> Result<String, String> {
         "info" => {
             let s = session(&a, Some(src.ok_or("info needs a file or --sample")?))?;
             serde_json::to_string_pretty(&s.info()).map_err(|e| e.to_string())
+        }
+        // The legacy Flash container's stream tree and record tags (ADR 0096): the
+        // reverse-engineering microscope for Flash 8–CS4 era `.fla` files.
+        "fla-dump" => {
+            let p = src.ok_or("fla-dump needs a legacy .fla file")?;
+            let data = std::fs::read(p).map_err(|e| format!("{p}: {e}"))?;
+            if !anicraft_fla::is_legacy(&data) {
+                return Err(format!("{p}: not a legacy Flash document (its first bytes are not the compound binary signature)"));
+            }
+            let streams = anicraft_fla::dump(&data).map_err(|e| format!("{p}: {e}"))?;
+            let wanted = a.flag("stream");
+            let list: Vec<Value> = streams.iter()
+                .filter(|s| wanted.is_none_or(|w| s.path == w))
+                .map(|s| json!({
+                    "stream": s.path,
+                    "size": s.size,
+                    "head": s.head,
+                    "tags": s.tags.iter().map(|(o, n)| json!({"at": o, "name": n})).collect::<Vec<_>>(),
+                }))
+                .collect();
+            serde_json::to_string_pretty(&list).map_err(|e| e.to_string())
         }
         "render" => {
             let mut s = session(&a, Some(src.ok_or("render needs a file or --sample")?))?;
