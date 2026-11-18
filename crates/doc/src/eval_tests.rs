@@ -739,6 +739,78 @@ fn raw_stroke_runs_with_different_colour_effects_keep_them_in_a_shape_tween() {
     assert_eq!(by(1).color, ColorEffect::None.transform(), "the first run took the later run's colour");
 }
 
+/// A plain black stroke 2 wide.
+fn solid_stroke() -> crate::Stroke {
+    Shape::filled(Path::new(), Paint::Solid(Rgba::BLACK)).with_stroke(Rgba::BLACK, 2.0).stroke.unwrap()
+}
+
+/// A shape tween from a triangle's raw stroke runs (ids 1-3) to a square's (ids 11-14), all in
+/// `stroke`: different run counts, so the runs are joined into outlines that morph.
+fn polygon_runs_doc(stroke: &crate::Stroke) -> Document {
+    let v = anicraft_geom::Vec2::new;
+    let runs = |first: u64, pts: &[anicraft_geom::Vec2]| -> Vec<Arc<Element>> {
+        (0..pts.len())
+            .map(|k| {
+                let mut p = Path::new();
+                p.move_to(pts[k]).line_to(pts[(k + 1) % pts.len()]);
+                let mut s = Shape::filled(p, Paint::Solid(Rgba::BLACK));
+                s.fill = None;
+                s.stroke = Some(stroke.clone());
+                s.merge = true;
+                Arc::new(Element { id: ElementId(first + k as u64), name: String::new(), transform: Affine::IDENTITY, color: ColorEffect::None, kind: ElementKind::Shape(s) })
+            })
+            .collect()
+    };
+    let mut d = Document::default();
+    let mut k0 = Keyframe::new(0, 10);
+    k0.elements = runs(1, &[v(50.0, 0.0), v(100.0, 90.0), v(0.0, 90.0)]);
+    k0.tween = Some(Tween { easing: Easing::Linear, kind: TweenKind::Shape, ..Default::default() });
+    let mut k1 = Keyframe::new(10, 1);
+    k1.elements = runs(11, &[v(0.0, 0.0), v(100.0, 0.0), v(100.0, 100.0), v(0.0, 100.0)]);
+    layer0(&mut d).keyframes = vec![Arc::new(k0), Arc::new(k1)];
+    d
+}
+
+/// Runs joined into one outline in a shape tween all keep their identities in between: the
+/// first draws the outline, the others stand over it undrawn, so a selection of any of them
+/// survives the tween and has bounds (a selection of a run missing from the frame is dropped).
+#[test]
+fn joined_stroke_runs_keep_their_identities_in_a_shape_tween() {
+    let d = polygon_runs_doc(&solid_stroke());
+    let els = crate::evaluate_layer_elements(&d.timeline(0).layers[0], 5).unwrap().1;
+    let ids: Vec<u64> = els.iter().map(|e| e.id.0).collect();
+    assert_eq!(ids, [1, 2, 3], "every run of the start key is there");
+    let stroked: Vec<_> = els.iter().filter(|e| matches!(&e.kind, ElementKind::Shape(s) if s.stroke.is_some())).collect();
+    assert_eq!(stroked.len(), 1, "one outline is drawn, once");
+    assert_eq!(stroked[0].id, ElementId(1));
+    for e in els.iter() {
+        assert!(!e.bounds(&d).is_empty(), "{:?} has bounds", e.id);
+    }
+    let list = evaluate(&d, 5);
+    assert_eq!(list.items.iter().filter(|i| i.stroke.is_some() || i.fill.is_some()).count(), 1, "nothing is drawn twice");
+}
+
+/// A dash pattern restarts on each run and a width profile is measured along each, so dashed or
+/// profiled runs are not chained into one outline: right after the key they look as they did.
+#[test]
+fn dashed_or_profiled_stroke_runs_stay_apart_in_a_shape_tween() {
+    let subpaths = |d: &Document| {
+        let list = evaluate(d, 1);
+        list.items.iter().filter(|i| i.stroke.is_some()).map(|i| i.path.cmds.iter().filter(|c| matches!(c, anicraft_geom::PathCmd::MoveTo(_))).count()).sum::<usize>()
+    };
+    let solid = solid_stroke();
+    assert_eq!(subpaths(&polygon_runs_doc(&solid)), 1, "solid runs join into one outline");
+    let mut dashed = solid.clone();
+    dashed.style.dash = crate::Dash::dashed(6.0, 3.0);
+    assert!(dashed.style.dash.is_some());
+    // Three runs on the start key: three pieces still, the square's fourth side growing in.
+    assert!(subpaths(&polygon_runs_doc(&dashed)) >= 3, "a dashed outline keeps its runs");
+    let mut tapered = solid;
+    tapered.profile = crate::ProfilePreset::ALL.into_iter().find_map(crate::ProfilePreset::profile);
+    assert!(tapered.profile.is_some());
+    assert!(subpaths(&polygon_runs_doc(&tapered)) >= 3, "a profiled outline keeps its runs");
+}
+
 /// A classic tween from scale `a` to scale `b` (with a turn and a skew at the end), eased.
 fn squash_doc(a: (f32, f32), b: (f32, f32), easing: Easing, keep_area: bool) -> Document {
     let at = |s: (f32, f32), rot: f32, skew: f32, x: f32| {

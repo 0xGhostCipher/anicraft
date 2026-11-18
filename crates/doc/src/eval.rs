@@ -374,11 +374,44 @@ fn joined_runs(els: &[Arc<Element>]) -> Vec<Joined> {
         }
     }
     for j in &mut out {
-        if let ElementKind::Shape(s) = &mut j.el.kind {
+        // A dash pattern restarts, and a width profile is measured, on each run; chained, the
+        // pattern and widths would jump on the first frame after the key. Such runs stay apart.
+        if let ElementKind::Shape(s) = &mut j.el.kind
+            && s.stroke.as_ref().is_some_and(|st| st.style.dash.is_none() && st.profile.is_none())
+        {
             s.path = Arc::new(anicraft_geom::morph::chain(&s.path, anicraft_geom::planar::SNAP));
         }
     }
     out
+}
+
+/// `e` with its origin moved to `origin` (in its parent's space) and its path moved back, so
+/// it looks the same.
+fn rebase(e: &mut Element, origin: anicraft_geom::Vec2) {
+    let mut moved = e.transform;
+    moved.m[4] = origin.x;
+    moved.m[5] = origin.y;
+    let (Some(inv), ElementKind::Shape(s)) = (moved.inverse(), &mut e.kind) else { return };
+    let d = inv.apply(e.transform.translation());
+    if !d.is_finite() {
+        return;
+    }
+    s.path = Arc::new(s.path.transformed(&Affine::translate(d.x, d.y)));
+    e.transform = moved;
+}
+
+/// What stands, in an in-between frame, for a run `x` joined into the outline `el`: nothing
+/// drawn (no fill, no stroke) but the run's identity over the outline, so a run selected on a
+/// key stays selected through the tween, with the outline's bounds.
+fn joined_member(x: &Element, el: &Element) -> Element {
+    let mut e = el.clone();
+    e.id = x.id;
+    e.name.clone_from(&x.name);
+    if let ElementKind::Shape(s) = &mut e.kind {
+        s.stroke = None;
+        s.fill = None;
+    }
+    e
 }
 
 /// The partner on `b` of each joined outline of `a`: one with the same stroke and colour first, then the
@@ -422,7 +455,19 @@ fn collapsed(e: &Element) -> Element {
 /// pairs in order, as in a plain shape tween.
 fn morph_raw_strokes(kf: &crate::Keyframe, next: &crate::Keyframe, t: Progress, guide: Option<(&PathWalk, bool)>) -> Vec<Arc<Element>> {
     let (a, b) = (&kf.elements, &next.elements);
-    let (runs_a, runs_b) = (joined_runs(a), joined_runs(b));
+    let (mut runs_a, mut runs_b) = (joined_runs(a), joined_runs(b));
+    if guide.is_some() {
+        // A guide places each element by its own origin, so outlines with origins of their own
+        // would take other paths than the fill they edge. Each key's outlines share the origin
+        // of its raw fill (or of its first outline) and travel with it.
+        for (els, runs) in [(a, &mut runs_a), (b, &mut runs_b)] {
+            let fill = els.iter().find(|e| matches!(&e.kind, ElementKind::Shape(s) if s.merge && s.fill.is_some()));
+            let Some(origin) = fill.map(|e| e.transform.translation()).or_else(|| runs.first().map(|r| r.el.transform.translation())) else { continue };
+            for r in runs.iter_mut() {
+                rebase(&mut r.el, origin);
+            }
+        }
+    }
     let partner = pair_joined(&runs_a, &runs_b);
     let placed = if kf.hints.is_empty() { Vec::new() } else { crate::hints::placed_hints(kf, next) };
     // The hints placed on what `on_a` and `on_b` pick, in the spaces of `x` and `y`.
@@ -433,6 +478,8 @@ fn morph_raw_strokes(kf: &crate::Keyframe, next: &crate::Keyframe, t: Progress, 
         };
     let mut rest_b = b.iter().enumerate().filter(|(_, e)| raw_stroke(e).is_none());
     let mut out = Vec::with_capacity(a.len());
+    // Each joined outline of the start key, tweened; it stands in for its first run.
+    let mut tweened: Vec<Option<Arc<Element>>> = vec![None; runs_a.len()];
     for (i, x) in a.iter().enumerate() {
         if raw_stroke(x).is_none() {
             let y = rest_b.next();
@@ -441,7 +488,12 @@ fn morph_raw_strokes(kf: &crate::Keyframe, next: &crate::Keyframe, t: Progress, 
             );
             continue;
         }
-        let Some((k, ra)) = runs_a.iter().enumerate().find(|(_, r)| r.members.first() == Some(&i)) else { continue };
+        let Some((k, ra)) = runs_a.iter().enumerate().find(|(_, r)| r.members.contains(&i)) else { continue };
+        if let Some(el) = tweened.get(k).and_then(Option::as_ref) {
+            // A later run of the outline keeps its identity, drawn by the first.
+            out.push(Arc::new(joined_member(x, el)));
+            continue;
+        }
         let el = match partner.get(k).copied().flatten().and_then(|m| runs_b.get(m)) {
             Some(rb) => {
                 interpolate(&ra.el, &rb.el, t, true, &hints(&|h| ra.members.contains(&h), &|h| rb.members.contains(&h), &ra.el, &rb.el), guide)
@@ -449,7 +501,11 @@ fn morph_raw_strokes(kf: &crate::Keyframe, next: &crate::Keyframe, t: Progress, 
             // No partner on the end keyframe: it shrinks away.
             None => interpolate(&ra.el, &collapsed(&ra.el), t, false, &[], guide),
         };
-        out.push(Arc::new(el.unwrap_or_else(|| ra.el.clone())));
+        let el = Arc::new(el.unwrap_or_else(|| ra.el.clone()));
+        if let Some(slot) = tweened.get_mut(k) {
+            *slot = Some(el.clone());
+        }
+        out.push(el);
     }
     // Outlines only on the end keyframe grow in.
     for (_, rb) in runs_b.iter().enumerate().filter(|(m, _)| !partner.contains(&Some(*m))) {
