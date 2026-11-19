@@ -139,10 +139,15 @@ follow-on work tracked in `openspec/changes/add-legacy-fla-import/`.
   bitmap records in a layout not seen (or that don't end where their parent continues), and
   anything newer are skipped to where their parent continues — its own end
   (`00 00` and its base with its kind byte) or the next sibling, confirmed by parsing that
-  sibling — counting class declarations inside the skipped bytes so later class numbers
-  stay right. A keyframe whose artwork doesn't decode keeps its timing (its fields are found
+  sibling, maybe behind references to objects read before — numbering class declarations
+  inside the skipped bytes once each as the scan passes them, so later class numbers stay
+  right. An object of an already declared class that doesn't parse stops the skip: what it
+  holds took object numbers a byte scan can't count, and a later reference would find the
+  wrong object. A keyframe whose artwork doesn't decode keeps its timing (its fields are found
   by trial parse). Scan bytes, trial parses, nesting and object counts are capped per
-  stream; a timeline that doesn't decode falls back to the structure-only reading.
+  stream; a timeline that doesn't decode falls back to the structure-only reading. Mapping a
+  document converts at most a million objects, and a group that contains itself is left out,
+  so groups shared many times over can't stand for exponentially many.
 - **Mapping** mirrors the XFL importer: folders hold no frames, zero-length frame records
   are dropped (the twins don't have them), raw shapes merge (ADR 0042), comments are
   reported, classic and shape tweens keep their eases (shape tweens are rebuilt by the
