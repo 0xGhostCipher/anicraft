@@ -338,6 +338,63 @@ fn push(path: &mut Path, s: &Seg) {
     };
 }
 
+/// Fill segments chained into closed loops, end to start: each step takes the first unused
+/// segment that starts where the last ended, found through a per-vertex cursor (segments only
+/// ever become used, so the cursor never has to look back).
+fn fill_loops(segs: &[Seg]) -> Path {
+    let mut by_start: HashMap<(i64, i64), (usize, Vec<usize>)> = HashMap::new();
+    for (i, s) in segs.iter().enumerate() {
+        // Zero-length segments carry no area and would confuse the chaining.
+        if key(s.from) != key(s.to) {
+            by_start.entry(key(s.from)).or_default().1.push(i);
+        }
+    }
+    let mut used = vec![false; segs.len()];
+    let mut path = Path::new();
+    for (first, start) in segs.iter().enumerate() {
+        if used.get(first).copied().unwrap_or(true) || key(start.from) == key(start.to) {
+            continue;
+        }
+        path.move_to(start.from);
+        let mut at = first;
+        while let Some(s) = segs.get(at) {
+            if let Some(u) = used.get_mut(at) {
+                *u = true;
+            }
+            push(&mut path, s);
+            if key(s.to) == key(start.from) {
+                break;
+            }
+            let next = by_start.get_mut(&key(s.to)).and_then(|(cursor, list)| {
+                while list.get(*cursor).is_some_and(|&j| used.get(j).copied().unwrap_or(true)) {
+                    *cursor += 1;
+                }
+                list.get(*cursor).copied()
+            });
+            match next {
+                Some(j) => at = j,
+                None => break,
+            }
+        }
+        path.close();
+    }
+    path
+}
+
+/// Stroke segments in drawing order, a new subpath wherever one doesn't start at the last's end.
+fn stroke_run<'a>(segs: impl Iterator<Item = &'a Seg>) -> Path {
+    let mut path = Path::new();
+    let mut last: Option<Vec2> = None;
+    for s in segs {
+        if last.is_none_or(|l| key(l) != key(s.from)) {
+            path.move_to(s.from);
+        }
+        push(&mut path, s);
+        last = Some(s.to);
+    }
+    path
+}
+
 impl ShapeRecord {
     /// The region of fill style `style` as closed loops: the edges with the fill on their
     /// right as drawn, those with it on their left reversed, chained end to start — the
@@ -352,68 +409,45 @@ impl ShapeRecord {
                 segs.push(e.seg.reversed());
             }
         }
-        let mut by_start: HashMap<(i64, i64), Vec<usize>> = HashMap::new();
-        for (i, s) in segs.iter().enumerate() {
-            // Zero-length segments carry no area and would confuse the chaining.
-            if key(s.from) != key(s.to) {
-                by_start.entry(key(s.from)).or_default().push(i);
-            }
-        }
-        let mut used = vec![false; segs.len()];
-        let mut path = Path::new();
-        for (first, start) in segs.iter().enumerate() {
-            if used.get(first).copied().unwrap_or(true) || key(start.from) == key(start.to) {
-                continue;
-            }
-            path.move_to(start.from);
-            let mut at = first;
-            while let Some(s) = segs.get(at) {
-                if let Some(u) = used.get_mut(at) {
-                    *u = true;
-                }
-                push(&mut path, s);
-                if key(s.to) == key(start.from) {
-                    break;
-                }
-                let next = by_start.get(&key(s.to)).and_then(|v| v.iter().copied().find(|&j| !used.get(j).copied().unwrap_or(true)));
-                match next {
-                    Some(j) => at = j,
-                    None => break,
-                }
-            }
-            path.close();
-        }
-        path
+        fill_loops(&segs)
     }
 
     /// The edges of stroke style `style`, in drawing order.
     pub fn stroke_path(&self, style: u16) -> Path {
-        let mut path = Path::new();
-        let mut last: Option<Vec2> = None;
-        for e in self.edges.iter().filter(|e| e.stroke == style) {
-            if last.is_none_or(|l| key(l) != key(e.seg.from)) {
-                path.move_to(e.seg.from);
-            }
-            push(&mut path, &e.seg);
-            last = Some(e.seg.to);
-        }
-        path
+        stroke_run(self.edges.iter().filter(|e| e.stroke == style).map(|e| &e.seg))
     }
 
     /// The record as AniCraft shapes: one per fill style (bottom), then one per stroke
-    /// style, as Animate draws them.
+    /// style, as Animate draws them. The edges are sorted by style once, in edge order (so
+    /// each style's segments are exactly those [`ShapeRecord::fill_path`] and
+    /// [`ShapeRecord::stroke_path`] gather), not scanned again for every style.
     pub fn shapes(&self) -> Vec<Shape> {
+        let mut fill_segs: Vec<Vec<Seg>> = vec![Vec::new(); self.fills.len()];
+        let mut stroke_segs: Vec<Vec<&Seg>> = vec![Vec::new(); self.strokes.len()];
+        // Style n (1-based) is slot n - 1; 0 is none, and a style the record doesn't list is
+        // drawn by nothing.
+        let slot = |style: u16| usize::from(style).checked_sub(1);
+        for e in &self.edges {
+            if let Some(v) = slot(e.fill_right).and_then(|i| fill_segs.get_mut(i)) {
+                v.push(e.seg);
+            }
+            if let Some(v) = slot(e.fill_left).and_then(|i| fill_segs.get_mut(i)) {
+                v.push(e.seg.reversed());
+            }
+            if let Some(v) = slot(e.stroke).and_then(|i| stroke_segs.get_mut(i)) {
+                v.push(&e.seg);
+            }
+        }
         let mut out = Vec::new();
-        for (i, paint) in self.fills.iter().enumerate() {
-            let (Some(paint), Ok(index)) = (paint, u16::try_from(i + 1)) else { continue };
-            let path = self.fill_path(index);
+        for (paint, segs) in self.fills.iter().zip(&fill_segs) {
+            let Some(paint) = paint else { continue };
+            let path = fill_loops(segs);
             if !path.is_empty() {
                 out.push(Shape { path: Arc::new(path), fill: Some(paint.clone()), stroke: None, fill_rule: FillRule::EvenOdd, merge: false, warp: None });
             }
         }
-        for (i, stroke) in self.strokes.iter().enumerate() {
-            let Ok(index) = u16::try_from(i + 1) else { continue };
-            let path = self.stroke_path(index);
+        for (stroke, segs) in self.strokes.iter().zip(&stroke_segs) {
+            let path = stroke_run(segs.iter().copied());
             if !path.is_empty() {
                 out.push(Shape { path: Arc::new(path), fill: None, stroke: Some(stroke.clone()), fill_rule: FillRule::NonZero, merge: false, warp: None });
             }
