@@ -429,6 +429,8 @@ fn rtl_helper_recognizes_hebrew_and_legacy_iw() {
     assert!(!is_rtl_code("ku-Latn-TR"));
     assert!(!is_rtl_code("sd-Deva-IN"));
     assert!(!is_rtl_code("en-x-arab"));
+    assert!(!is_rtl_code("x-Arab"));
+    assert!(!is_rtl_code("x-Hebr"));
     assert!(!is_rtl_code("en"));
     assert!(!is_rtl_code("ka"));
     assert!(!is_rtl());
