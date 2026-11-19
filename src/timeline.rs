@@ -666,6 +666,9 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
             if let (Some(a), Some(b)) = (layers.first(), layers.last()) {
                 app.frame_sel = Some(FrameSel { anchor: (a.id, app.s.frame), head: (b.id, app.s.frame) });
             }
+            // Keyboard focus follows the click, as it does on a frame: Ctrl+X/C/V then act on
+            // the selected frames, not on artwork.
+            app.timeline_focus = true;
         }
     // The onion menu on a right-click, as the markers live here (ADR 0047).
     ruler_resp.context_menu(|ui| crate::onion::menu(app, ui));
@@ -2243,6 +2246,11 @@ mod tests {
         frame(&mut app, vec![press(true)]);
         frame(&mut app, vec![press(false)]);
         frame(&mut app, Vec::new());
+        // The click takes the keyboard focus to the timeline, as a click on a frame does, so
+        // Ctrl+C copies the selected frames rather than artwork.
+        assert!(app.timeline_focus, "a click on the ruler focuses the timeline");
+        app.invoke("edit.copy");
+        assert!(!app.s.frame_clipboard.is_empty(), "Ctrl+C after a click on the ruler copies frames");
         let f = app.s.frame;
         assert!(f > 0, "the click moved the playhead");
         let before = ends(&app);
