@@ -1115,3 +1115,46 @@ fn bitmaps_in_animates_own_data_share_one_pixel_budget() {
         Some(&vec!["cut.png: the data is cut short".to_string(), "junk.png: damaged data: the pixel data doesn't inflate".to_string()])
     );
 }
+
+#[test]
+fn a_wav_or_ogg_or_mp3_data_file_of_the_raw_pcm_length_is_read_as_that_file() {
+    // 100 frames of 8 kHz mono WAV, whose length is also a whole number of frames of the item's
+    // own 44.1 kHz stereo raw PCM, and the item's sampleCount says that many.
+    let wav = anicraft_doc::audio::wav::encode(8000, 1, &[0.25; 100], anicraft_doc::audio::wav::Bits::Int16);
+    assert_eq!(wav.len() % 4, 0);
+    let doc = format!(
+        r#"<DOMDocument width="200" height="100"><media><DOMSoundItem name="tone" soundDataHRef="M 1 1.dat" format="44kHz 16bit Stereo" sampleCount="{}"/></media></DOMDocument>"#,
+        wav.len() / 4
+    );
+    let files: HashMap<String, Vec<u8>> = HashMap::from([("DOMDocument.xml".to_string(), doc.as_bytes().to_vec()), ("bin/M 1 1.dat".to_string(), wav)]);
+    let read = |p: &str| -> Result<Option<Vec<u8>>, XflError> { Ok(files.get(p).cloned()) };
+    let (doc, report) = import_with(&read).unwrap();
+    let sounds: Vec<_> = doc.sounds.iter().map(|s| (s.name.as_str(), s.format, s.rate, s.channels, s.frames)).collect();
+    assert_eq!(sounds, [("tone", anicraft_doc::SoundFormat::Wav, 8_000, 1, 100)], "the WAV itself, not its bytes as PCM");
+    assert!(report.skipped.is_empty(), "{:?}", report.skipped);
+}
+
+#[test]
+fn raw_pcm_that_starts_like_a_sound_file_stays_raw_pcm() {
+    // Raw PCM whose first samples spell a WAV, Ogg, ID3 or MPEG frame signature: the decoders
+    // don't read it as such a file, so it is the item's PCM.
+    let heads: [&[u8]; 4] = [b"RIFF\x24\0\0\0WAVEfmt ", b"OggS\0\x02\0\0\0\0\0\0\0\0\0\0", b"ID3\x04\0\0\0\0\0\0\0\0\0\0\0\0", &[0xFF, 0xFB, 0x90, 0x64, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]];
+    let mut media = String::new();
+    let mut files: HashMap<String, Vec<u8>> = HashMap::new();
+    for (n, head) in heads.iter().enumerate() {
+        assert!(anicraft_doc::audio::Format::sniff(head).is_some(), "{head:?} starts like a sound file");
+        media.push_str(&format!(r#"<DOMSoundItem name="s{n}" soundDataHRef="M {n} {n}.dat" format="44kHz 16bit Mono" sampleCount="8"/>"#));
+        files.insert(format!("bin/M {n} {n}.dat"), head.to_vec());
+    }
+    let doc = format!(r#"<DOMDocument width="200" height="100"><media>{media}</media></DOMDocument>"#);
+    files.insert("DOMDocument.xml".to_string(), doc.into_bytes());
+    let read = |p: &str| -> Result<Option<Vec<u8>>, XflError> { Ok(files.get(p).cloned()) };
+    let (doc, report) = import_with(&read).unwrap();
+    assert!(report.skipped.is_empty(), "{:?}", report.names);
+    assert_eq!(doc.sounds.len(), heads.len());
+    for (sound, head) in doc.sounds.iter().zip(heads) {
+        assert_eq!((sound.format, sound.rate, sound.channels, sound.frames), (anicraft_doc::SoundFormat::Wav, 44_100, 1, 8), "{}", sound.name);
+        let want: Vec<f32> = head.as_chunks::<2>().0.iter().map(|s| f32::from(i16::from_le_bytes(*s)) / 32_768.0).collect();
+        assert_eq!(sound.decoded().unwrap().pcm.samples, want, "{}: bit for bit", sound.name);
+    }
+}

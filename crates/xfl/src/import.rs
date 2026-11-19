@@ -174,6 +174,12 @@ const MAX_BITMAPS: usize = 10_000;
 pub(crate) const MAX_BITMAP_PIXELS: u64 = 256 * 1024 * 1024;
 const MAX_SOUNDS: usize = 10_000;
 const MAX_VIDEOS: usize = 10_000;
+/// `data` as a WAV, Ogg Vorbis or MP3 file, when it starts like one and the decoders read all
+/// of it; `None` otherwise. Copies the data only when it starts like one.
+fn encoded_sound(data: &[u8], name: &str) -> Option<anicraft_doc::Sound> {
+    anicraft_doc::audio::Format::sniff(data)?;
+    anicraft_doc::Sound::from_data(anicraft_doc::SoundId(0), name, data.to_vec()).ok()
+}
 
 /// Names the format of sound data that didn't decode, and why when it is a kind AniCraft reads:
 /// "AIFF", "WAV in IMA ADPCM", "Animate's own sound data".
@@ -1069,9 +1075,9 @@ impl<'a> Builder<'a> {
     /// sound is looked for as the original file in `LIBRARY/` and then as its data file in
     /// `bin/`, and is used when it is a WAV, Ogg Vorbis or MP3 file the decoders read. A data
     /// file may also be Animate's own raw PCM (`anicraft_flamedia`), told by its length: exactly
-    /// the item's `sampleCount` frames of its `format` ("44kHz 16bit Stereo"); it comes across
-    /// as a WAV. Every sound that doesn't come across is reported by name, with its format and
-    /// why (ADR 0039).
+    /// the item's `sampleCount` frames of its `format` ("44kHz 16bit Stereo"), and not a WAV,
+    /// Ogg or MP3 file the decoders read; it comes across as a WAV. Every sound that doesn't
+    /// come across is reported by name, with its format and why (ADR 0039).
     fn register_sounds(&mut self, root: &X) -> Result<(), XflError> {
         use craft_xfl::shape::XflElement;
         // The same elements, in the same order, as the catalog's: for the attributes it doesn't
@@ -1110,6 +1116,13 @@ impl<'a> Builder<'a> {
                 let mut raw_why = None;
                 if from_bin && let (Some(format), Some(count)) = (&raw_format, sample_count) {
                     match format.clone().and_then(|f| anicraft_flamedia::decode_sound(&bytes, f, Some(count))) {
+                        // A WAV, Ogg or MP3 file can be that length too: one the decoders read
+                        // whole is that file. Raw PCM whose first samples only look like such a
+                        // file's signature doesn't decode, and stays PCM.
+                        Ok(_) if let Some(s) = encoded_sound(&bytes, &short) => {
+                            sound = Some(s);
+                            break;
+                        }
                         Ok(pcm) => match pcm.to_wav().map(|wav| anicraft_doc::Sound::from_data(anicraft_doc::SoundId(0), short.clone(), wav)) {
                             Some(Ok(s)) => {
                                 sound = Some(s);
