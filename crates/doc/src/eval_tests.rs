@@ -811,6 +811,128 @@ fn dashed_or_profiled_stroke_runs_stay_apart_in_a_shape_tween() {
     assert!(subpaths(&polygon_runs_doc(&tapered)) >= 3, "a profiled outline keeps its runs");
 }
 
+/// A raw regular polygon centred on `at` as the merge stores it: its fill element (id `first`),
+/// then one stroke run per side (ids `first + 1`…), each with its own origin.
+fn polygon_at(first: u64, at: anicraft_geom::Vec2, radius: f32, sides: usize, stroke: &crate::Stroke) -> Vec<Arc<Element>> {
+    use std::f32::consts::{PI, TAU};
+    let pts: Vec<anicraft_geom::Vec2> = (0..sides)
+        .map(|k| {
+            let a = -PI / 2.0 + k as f32 * TAU / sides as f32;
+            at + anicraft_geom::Vec2::new(radius * a.cos(), radius * a.sin())
+        })
+        .collect();
+    let mut outline = Path::new();
+    if let Some(&p) = pts.first() {
+        outline.move_to(p);
+    }
+    for &p in pts.iter().skip(1) {
+        outline.line_to(p);
+    }
+    outline.close();
+    let piece = |id: u64, path: &Path, centre: anicraft_geom::Vec2, fill: bool| {
+        let mut s = Shape::filled(path.transformed(&Affine::translate(-centre.x, -centre.y)), Paint::Solid(Rgba::BLACK));
+        s.fill = fill.then_some(Paint::Solid(Rgba::BLACK));
+        s.stroke = (!fill).then(|| stroke.clone());
+        s.merge = true;
+        Arc::new(Element {
+            id: ElementId(id),
+            name: String::new(),
+            transform: Affine::translate(centre.x, centre.y),
+            color: ColorEffect::None,
+            kind: ElementKind::Shape(s),
+        })
+    };
+    let mut out = vec![piece(first, &outline, at, true)];
+    for (k, &a) in pts.iter().enumerate() {
+        let b = pts[(k + 1) % sides];
+        let mut side = Path::new();
+        side.move_to(a).line_to(b);
+        out.push(piece(first + 1 + k as u64, &side, (a + b) * 0.5, false));
+    }
+    out
+}
+
+/// A solid outline on one key against a dashed one on the other: the keys' outlines correspond
+/// as the fill's do, so the stroke stays on the morphed fill instead of pairing a whole outline
+/// with the other key's loose runs.
+#[test]
+fn a_solid_outline_morphs_against_a_dashed_one() {
+    let v = anicraft_geom::Vec2::new;
+    let solid = solid_stroke();
+    let mut dashed = solid.clone();
+    dashed.style.dash = crate::Dash::dashed(6.0, 3.0);
+    let mut d = Document::default();
+    let mut k0 = Keyframe::new(0, 10);
+    k0.elements = polygon_at(1, v(50.0, 45.0), 50.0, 3, &solid);
+    k0.tween = Some(Tween { easing: Easing::Linear, kind: TweenKind::Shape, ..Default::default() });
+    let mut k1 = Keyframe::new(10, 1);
+    k1.elements = polygon_at(11, v(50.0, 50.0), 55.0, 4, &dashed);
+    layer0(&mut d).keyframes = vec![Arc::new(k0), Arc::new(k1)];
+    for frame in [3u32, 5, 7] {
+        let list = evaluate(&d, frame);
+        let fill = list.items.iter().find(|i| i.fill.is_some()).expect("the fill");
+        let strokes: Vec<_> = list.items.iter().filter(|i| i.stroke.is_some()).collect();
+        assert!(!strokes.is_empty(), "frame {frame}: the stroke is drawn");
+        for pl in fill.path.flatten(&fill.transform, 0.25) {
+            for &p in &pl.points {
+                let d = strokes.iter().map(|st| st.path.distance_to_edge(p, &st.transform)).fold(f32::INFINITY, f32::min);
+                assert!(d < 1.5, "frame {frame}: fill edge point {p:?} is {d} from the stroke");
+            }
+        }
+        for st in &strokes {
+            for pl in st.path.flatten(&st.transform, 0.25) {
+                for &p in &pl.points {
+                    let d = fill.path.distance_to_edge(p, &fill.transform);
+                    assert!(d < 1.5, "frame {frame}: stroke point {p:?} is {d} off the fill's edge");
+                }
+            }
+        }
+    }
+}
+
+/// A guide places each element by its own origin, so each joined stroke outline takes the origin
+/// of the fill it edges: with two merged fill regions, each stroke travels with its own fill
+/// rather than following the first region's guide path.
+#[test]
+fn a_guided_shape_tween_keeps_each_stroke_with_its_own_fill() {
+    let v = anicraft_geom::Vec2::new;
+    let black = solid_stroke();
+    let mut blue = black.clone();
+    blue.color = Rgba::hex(0x0000ff);
+    let mut d = Document::default();
+    let mut k0 = Keyframe::new(0, 10);
+    k0.elements = polygon_at(1, v(0.0, 0.0), 40.0, 3, &black);
+    k0.elements.extend(polygon_at(10, v(300.0, 0.0), 40.0, 4, &blue));
+    k0.tween = Some(Tween { easing: Easing::Linear, kind: TweenKind::Shape, ..Default::default() });
+    let mut k1 = Keyframe::new(10, 1);
+    k1.elements = polygon_at(20, v(0.0, 100.0), 40.0, 5, &black);
+    k1.elements.extend(polygon_at(30, v(300.0, 100.0), 40.0, 5, &blue));
+    layer0(&mut d).keyframes = vec![Arc::new(k0), Arc::new(k1)];
+    // A straight guide from the first region's start to the second's end: each element travels
+    // the stretch of it between its own start and end origins.
+    let pts: Vec<anicraft_geom::Vec2> = (0..=20).map(|k| v(300.0 * k as f32 / 20.0, 100.0 * k as f32 / 20.0)).collect();
+    let walk = anicraft_geom::walk::PathWalk::new(&pts).expect("the guide");
+    let layer = d.timeline(0).layers[0].clone();
+    let of = |els: &[Arc<Element>], id: u64| els.iter().find(|e| e.id == ElementId(id)).cloned();
+    for frame in [1u32, 3, 5, 7, 9] {
+        let (_, els) = crate::evaluate_guided(&layer, frame, Some(&walk)).expect("an in-between frame");
+        // The outline standing for a region's first run takes that region's fill's origin, so it
+        // travels the same stretch of the guide as the fill it edges.
+        for (run, fill) in [(2u64, 1u64), (11, 10)] {
+            let (Some(r), Some(f)) = (of(&els, run), of(&els, fill)) else { panic!("frame {frame}: run {run} and fill {fill}") };
+            let (a, b) = (r.transform.translation(), f.transform.translation());
+            assert!(a.distance(b) < 0.01, "frame {frame}: run {run} at {a:?} left its fill at {b:?}");
+        }
+        // The regions travel different stretches: a stroke on the first region's path would be
+        // far from the second region's fill.
+        let (Some(first), Some(second)) = (of(&els, 1), of(&els, 10)) else { panic!("both fills") };
+        assert!(first.transform.translation().distance(second.transform.translation()) > 100.0, "frame {frame}: the regions are apart");
+        let (Some(run), Some(fill)) = (of(&els, 11), of(&els, 10)) else { panic!("the second region") };
+        let off = run.bounds(&d).center().distance(fill.bounds(&d).center());
+        assert!(off < 20.0, "frame {frame}: the second region's stroke is {off} from its fill");
+    }
+}
+
 /// A classic tween from scale `a` to scale `b` (with a turn and a skew at the end), eased.
 fn squash_doc(a: (f32, f32), b: (f32, f32), easing: Easing, keep_area: bool) -> Document {
     let at = |s: (f32, f32), rot: f32, skew: f32, x: f32| {

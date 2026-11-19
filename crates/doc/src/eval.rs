@@ -354,6 +354,13 @@ struct Joined {
     el: Element,
 }
 
+/// Whether an outline's runs are chained into whole outlines by [`joined_runs`]: a stroke with
+/// no dash pattern and no width profile. A dash pattern restarts, and a profile is measured, on
+/// each run, so those runs stay apart.
+fn chained(el: &Element) -> bool {
+    raw_stroke(el).is_some_and(|st| st.style.dash.is_none() && st.profile.is_none())
+}
+
 /// The raw stroke runs of `els` joined into one element per stroke style (and scale, rotation
 /// and skew, which the stroke's width follows, and colour effect), each in the space of its first run.
 fn joined_runs(els: &[Arc<Element>]) -> Vec<Joined> {
@@ -376,9 +383,7 @@ fn joined_runs(els: &[Arc<Element>]) -> Vec<Joined> {
     for j in &mut out {
         // A dash pattern restarts, and a width profile is measured, on each run; chained, the
         // pattern and widths would jump on the first frame after the key. Such runs stay apart.
-        if let ElementKind::Shape(s) = &mut j.el.kind
-            && s.stroke.as_ref().is_some_and(|st| st.style.dash.is_none() && st.profile.is_none())
-        {
+        if chained(&j.el) && let ElementKind::Shape(s) = &mut j.el.kind {
             s.path = Arc::new(anicraft_geom::morph::chain(&s.path, anicraft_geom::planar::SNAP));
         }
     }
@@ -437,6 +442,17 @@ fn pair_joined(a: &[Joined], b: &[Joined]) -> Vec<Option<usize>> {
     out
 }
 
+/// `el` with its runs chained into whole outlines, for a morph against an outline that is
+/// chained: both ends then correspond along the whole outline, the way the fill's do. Only the
+/// in-between frames see this; the keys keep their own runs.
+fn chained_for_morph(el: &Element) -> Element {
+    let mut e = el.clone();
+    if let ElementKind::Shape(s) = &mut e.kind {
+        s.path = Arc::new(anicraft_geom::morph::chain(&s.path, anicraft_geom::planar::SNAP));
+    }
+    e
+}
+
 /// `e` shrunk to the centre of its path: where an outline without a partner grows from or
 /// shrinks to.
 fn collapsed(e: &Element) -> Element {
@@ -457,14 +473,22 @@ fn morph_raw_strokes(kf: &crate::Keyframe, next: &crate::Keyframe, t: Progress, 
     let (a, b) = (&kf.elements, &next.elements);
     let (mut runs_a, mut runs_b) = (joined_runs(a), joined_runs(b));
     if guide.is_some() {
-        // A guide places each element by its own origin, so outlines with origins of their own
-        // would take other paths than the fill they edge. Each key's outlines share the origin
-        // of its raw fill (or of its first outline) and travel with it.
+        // A guide places each element by its own origin, so an outline with an origin of its own
+        // would take another path than the fill it edges. Each outline takes the origin of the
+        // fill nearest it, so it travels with that fill; with no fill, of the first outline.
         for (els, runs) in [(a, &mut runs_a), (b, &mut runs_b)] {
-            let fill = els.iter().find(|e| matches!(&e.kind, ElementKind::Shape(s) if s.merge && s.fill.is_some()));
-            let Some(origin) = fill.map(|e| e.transform.translation()).or_else(|| runs.first().map(|r| r.el.transform.translation())) else { continue };
+            let fills: Vec<anicraft_geom::Vec2> = els
+                .iter()
+                .filter(|e| matches!(&e.kind, ElementKind::Shape(s) if s.merge && s.fill.is_some()))
+                .map(|e| e.transform.translation())
+                .collect();
+            let first = runs.first().map(|r| r.el.transform.translation());
             for r in runs.iter_mut() {
-                rebase(&mut r.el, origin);
+                let own = r.el.transform.translation();
+                let origin = fills.iter().copied().min_by(|x, y| own.distance(*x).total_cmp(&own.distance(*y))).or(first);
+                if let Some(origin) = origin {
+                    rebase(&mut r.el, origin);
+                }
             }
         }
     }
@@ -496,7 +520,16 @@ fn morph_raw_strokes(kf: &crate::Keyframe, next: &crate::Keyframe, t: Progress, 
         }
         let el = match partner.get(k).copied().flatten().and_then(|m| runs_b.get(m)) {
             Some(rb) => {
-                interpolate(&ra.el, &rb.el, t, true, &hints(&|h| ra.members.contains(&h), &|h| rb.members.contains(&h), &ra.el, &rb.el), guide)
+                // A solid outline against a dashed or profiled one: only one of the two is
+                // chained, so a whole outline would morph against the other key's loose runs and
+                // the stroke would follow a different correspondence than the fill. Both are
+                // chained for the morph.
+                let (x, y) = if chained(&ra.el) == chained(&rb.el) {
+                    (Cow::Borrowed(&ra.el), Cow::Borrowed(&rb.el))
+                } else {
+                    (Cow::Owned(chained_for_morph(&ra.el)), Cow::Owned(chained_for_morph(&rb.el)))
+                };
+                interpolate(&x, &y, t, true, &hints(&|h| ra.members.contains(&h), &|h| rb.members.contains(&h), &x, &y), guide)
             }
             // No partner on the end keyframe: it shrinks away.
             None => interpolate(&ra.el, &collapsed(&ra.el), t, false, &[], guide),
