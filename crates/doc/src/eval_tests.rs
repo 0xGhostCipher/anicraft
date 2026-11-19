@@ -788,6 +788,35 @@ fn joined_stroke_runs_keep_their_identities_in_a_shape_tween() {
     }
     let list = evaluate(&d, 5);
     assert_eq!(list.items.iter().filter(|i| i.stroke.is_some() || i.fill.is_some()).count(), 1, "nothing is drawn twice");
+    // Horizontal and vertical outlines have zero height or width before stroke padding: undrawn
+    // members still keep non-empty bounds.
+    let v = anicraft_geom::Vec2::new;
+    let seg = |id: u64, a, b| {
+        let mut p = Path::new();
+        p.move_to(a).line_to(b);
+        let mut s = Shape::filled(p, Paint::Solid(Rgba::BLACK));
+        s.fill = None;
+        s.stroke = Some(solid_stroke());
+        s.merge = true;
+        Arc::new(Element { id: ElementId(id), name: String::new(), transform: Affine::IDENTITY, color: ColorEffect::None, kind: ElementKind::Shape(s) })
+    };
+    for (a0, a1, a2, b0, b1, b2, b3) in [
+        (v(0.0, 20.0), v(40.0, 20.0), v(80.0, 20.0), v(0.0, 20.0), v(30.0, 20.0), v(60.0, 20.0), v(90.0, 20.0)),
+        (v(20.0, 0.0), v(20.0, 40.0), v(20.0, 80.0), v(20.0, 0.0), v(20.0, 30.0), v(20.0, 60.0), v(20.0, 90.0)),
+    ] {
+        let mut d = Document::default();
+        let mut k0 = Keyframe::new(0, 10);
+        k0.elements = vec![seg(1, a0, a1), seg(2, a1, a2)];
+        k0.tween = Some(Tween { easing: Easing::Linear, kind: TweenKind::Shape, ..Default::default() });
+        let mut k1 = Keyframe::new(10, 1);
+        k1.elements = vec![seg(11, b0, b1), seg(12, b1, b2), seg(13, b2, b3)];
+        layer0(&mut d).keyframes = vec![Arc::new(k0), Arc::new(k1)];
+        let els = crate::evaluate_layer_elements(&d.timeline(0).layers[0], 5).unwrap().1;
+        assert_eq!(els.len(), 2);
+        for e in els.iter() {
+            assert!(!e.bounds(&d).is_empty(), "axis-aligned run {:?} has bounds", e.id);
+        }
+    }
 }
 
 /// A dash pattern restarts on each run and a width profile is measured along each, so dashed or
@@ -899,37 +928,41 @@ fn a_guided_shape_tween_keeps_each_stroke_with_its_own_fill() {
     let black = solid_stroke();
     let mut blue = black.clone();
     blue.color = Rgba::hex(0x0000ff);
-    let mut d = Document::default();
-    let mut k0 = Keyframe::new(0, 10);
-    k0.elements = polygon_at(1, v(0.0, 0.0), 40.0, 3, &black);
-    k0.elements.extend(polygon_at(10, v(300.0, 0.0), 40.0, 4, &blue));
-    k0.tween = Some(Tween { easing: Easing::Linear, kind: TweenKind::Shape, ..Default::default() });
-    let mut k1 = Keyframe::new(10, 1);
-    k1.elements = polygon_at(20, v(0.0, 100.0), 40.0, 5, &black);
-    k1.elements.extend(polygon_at(30, v(300.0, 100.0), 40.0, 5, &blue));
-    layer0(&mut d).keyframes = vec![Arc::new(k0), Arc::new(k1)];
-    // A straight guide from the first region's start to the second's end: each element travels
-    // the stretch of it between its own start and end origins.
-    let pts: Vec<anicraft_geom::Vec2> = (0..=20).map(|k| v(300.0 * k as f32 / 20.0, 100.0 * k as f32 / 20.0)).collect();
-    let walk = anicraft_geom::walk::PathWalk::new(&pts).expect("the guide");
-    let layer = d.timeline(0).layers[0].clone();
-    let of = |els: &[Arc<Element>], id: u64| els.iter().find(|e| e.id == ElementId(id)).cloned();
-    for frame in [1u32, 3, 5, 7, 9] {
-        let (_, els) = crate::evaluate_guided(&layer, frame, Some(&walk)).expect("an in-between frame");
-        // The outline standing for a region's first run takes that region's fill's origin, so it
-        // travels the same stretch of the guide as the fill it edges.
-        for (run, fill) in [(2u64, 1u64), (11, 10)] {
-            let (Some(r), Some(f)) = (of(&els, run), of(&els, fill)) else { panic!("frame {frame}: run {run} and fill {fill}") };
-            let (a, b) = (r.transform.translation(), f.transform.translation());
-            assert!(a.distance(b) < 0.01, "frame {frame}: run {run} at {a:?} left its fill at {b:?}");
+    // Both different stroke styles and the same stroke style across the two regions: runs that
+    // edge different fills stay in separate outlines and each travels its own fill's stretch.
+    for second_stroke in [&blue, &black] {
+        let mut d = Document::default();
+        let mut k0 = Keyframe::new(0, 10);
+        k0.elements = polygon_at(1, v(0.0, 0.0), 40.0, 3, &black);
+        k0.elements.extend(polygon_at(10, v(300.0, 0.0), 40.0, 4, second_stroke));
+        k0.tween = Some(Tween { easing: Easing::Linear, kind: TweenKind::Shape, ..Default::default() });
+        let mut k1 = Keyframe::new(10, 1);
+        k1.elements = polygon_at(20, v(0.0, 100.0), 40.0, 5, &black);
+        k1.elements.extend(polygon_at(30, v(300.0, 100.0), 40.0, 5, second_stroke));
+        layer0(&mut d).keyframes = vec![Arc::new(k0), Arc::new(k1)];
+        // A straight guide from the first region's start to the second's end: each element travels
+        // the stretch of it between its own start and end origins.
+        let pts: Vec<anicraft_geom::Vec2> = (0..=20).map(|k| v(300.0 * k as f32 / 20.0, 100.0 * k as f32 / 20.0)).collect();
+        let walk = anicraft_geom::walk::PathWalk::new(&pts).expect("the guide");
+        let layer = d.timeline(0).layers[0].clone();
+        let of = |els: &[Arc<Element>], id: u64| els.iter().find(|e| e.id == ElementId(id)).cloned();
+        for frame in [1u32, 3, 5, 7, 9] {
+            let (_, els) = crate::evaluate_guided(&layer, frame, Some(&walk)).expect("an in-between frame");
+            // The outline standing for a region's first run takes that region's fill's origin, so it
+            // travels the same stretch of the guide as the fill it edges.
+            for (run, fill) in [(2u64, 1u64), (11, 10)] {
+                let (Some(r), Some(f)) = (of(&els, run), of(&els, fill)) else { panic!("frame {frame}: run {run} and fill {fill}") };
+                let (a, b) = (r.transform.translation(), f.transform.translation());
+                assert!(a.distance(b) < 0.01, "frame {frame}: run {run} at {a:?} left its fill at {b:?}");
+            }
+            // The regions travel different stretches: a stroke on the first region's path would be
+            // far from the second region's fill.
+            let (Some(first), Some(second)) = (of(&els, 1), of(&els, 10)) else { panic!("both fills") };
+            assert!(first.transform.translation().distance(second.transform.translation()) > 100.0, "frame {frame}: the regions are apart");
+            let (Some(run), Some(fill)) = (of(&els, 11), of(&els, 10)) else { panic!("the second region") };
+            let off = run.bounds(&d).center().distance(fill.bounds(&d).center());
+            assert!(off < 20.0, "frame {frame}: the second region's stroke is {off} from its fill");
         }
-        // The regions travel different stretches: a stroke on the first region's path would be
-        // far from the second region's fill.
-        let (Some(first), Some(second)) = (of(&els, 1), of(&els, 10)) else { panic!("both fills") };
-        assert!(first.transform.translation().distance(second.transform.translation()) > 100.0, "frame {frame}: the regions are apart");
-        let (Some(run), Some(fill)) = (of(&els, 11), of(&els, 10)) else { panic!("the second region") };
-        let off = run.bounds(&d).center().distance(fill.bounds(&d).center());
-        assert!(off < 20.0, "frame {frame}: the second region's stroke is {off} from its fill");
     }
 }
 

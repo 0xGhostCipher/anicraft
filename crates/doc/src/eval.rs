@@ -347,10 +347,29 @@ fn raw_stroke(e: &Element) -> Option<&Stroke> {
     }
 }
 
+/// The raw fill of `els` that `path` (in `xf` space) edges: the one whose edge is within two
+/// snaps of a point on `path`, or that contains it, or the one whose origin is nearest `xf`'s.
+fn fill_of(els: &[Arc<Element>], path: &Path, xf: &Affine) -> Option<usize> {
+    if let Some(p) = path.flatten(xf, 0.25).into_iter().next().and_then(|pl| pl.points.get(pl.points.len() / 2).copied())
+        && let Some((k, _)) = els.iter().enumerate().find(|(_, e)| {
+            matches!(&e.kind, ElementKind::Shape(s) if s.merge && s.fill.is_some() && (s.path.contains(p, &e.transform, s.fill_rule) || s.path.distance_to_edge(p, &e.transform) <= 2.0 * anicraft_geom::planar::SNAP))
+        })
+    {
+        return Some(k);
+    }
+    let own = xf.translation();
+    els.iter()
+        .enumerate()
+        .filter(|(_, e)| matches!(&e.kind, ElementKind::Shape(s) if s.merge && s.fill.is_some()))
+        .min_by(|(_, a), (_, b)| own.distance(a.transform.translation()).total_cmp(&own.distance(b.transform.translation())))
+        .map(|(k, _)| k)
+}
+
 /// Raw stroke runs joined into one outline: the indices of the runs (the first one's space is
-/// the outline's) and the joined element.
+/// the outline's), the fill they edge, and the joined element.
 struct Joined {
     members: Vec<usize>,
+    fill: Option<usize>,
     el: Element,
 }
 
@@ -362,22 +381,25 @@ fn chained(el: &Element) -> bool {
 }
 
 /// The raw stroke runs of `els` joined into one element per stroke style (and scale, rotation
-/// and skew, which the stroke's width follows, and colour effect), each in the space of its first run.
-fn joined_runs(els: &[Arc<Element>]) -> Vec<Joined> {
+/// and skew, which the stroke's width follows, and colour effect), each in the space of its first run;
+/// when `by_fill`, runs that edge different fills stay in separate outlines so each outline can
+/// follow its own fill along a motion guide.
+fn joined_runs(els: &[Arc<Element>], by_fill: bool) -> Vec<Joined> {
     let mut out: Vec<Joined> = Vec::new();
     for (i, e) in els.iter().enumerate() {
         let (Some(st), ElementKind::Shape(s)) = (raw_stroke(e), &e.kind) else { continue };
+        let fill = by_fill.then(|| fill_of(els, &s.path, &e.transform)).flatten();
         let slot = out.iter_mut().find_map(|j| {
             let ElementKind::Shape(js) = &mut j.el.kind else { return None };
             let into = j.el.transform.inverse()?.mul(&e.transform);
-            (j.el.transform.m[..4] == e.transform.m[..4] && js.stroke.as_ref() == Some(st) && j.el.color == e.color).then_some((&mut j.members, js, into))
+            (j.fill == fill && j.el.transform.m[..4] == e.transform.m[..4] && js.stroke.as_ref() == Some(st) && j.el.color == e.color).then_some((&mut j.members, js, into))
         });
         match slot {
             Some((members, js, into)) => {
                 members.push(i);
                 Arc::make_mut(&mut js.path).cmds.extend(s.path.transformed(&into).cmds);
             }
-            None => out.push(Joined { members: vec![i], el: (**e).clone() }),
+            None => out.push(Joined { members: vec![i], fill, el: (**e).clone() }),
         }
     }
     for j in &mut out {
@@ -413,6 +435,12 @@ fn joined_member(x: &Element, el: &Element) -> Element {
     e.id = x.id;
     e.name.clone_from(&x.name);
     if let ElementKind::Shape(s) = &mut e.kind {
+        let pad = s.stroke.as_ref().map_or(0.0, Stroke::reach);
+        let b = s.path.bounds();
+        if (b.width() == 0.0 || b.height() == 0.0) && pad > 0.0 {
+            let r = b.inflate(pad);
+            s.path = Arc::new(Path::rect(r.min.x, r.min.y, r.width(), r.height()));
+        }
         s.stroke = None;
         s.fill = None;
     }
@@ -471,21 +499,15 @@ fn collapsed(e: &Element) -> Element {
 /// pairs in order, as in a plain shape tween.
 fn morph_raw_strokes(kf: &crate::Keyframe, next: &crate::Keyframe, t: Progress, guide: Option<(&PathWalk, bool)>) -> Vec<Arc<Element>> {
     let (a, b) = (&kf.elements, &next.elements);
-    let (mut runs_a, mut runs_b) = (joined_runs(a), joined_runs(b));
+    let (mut runs_a, mut runs_b) = (joined_runs(a, guide.is_some()), joined_runs(b, guide.is_some()));
     if guide.is_some() {
         // A guide places each element by its own origin, so an outline with an origin of its own
         // would take another path than the fill it edges. Each outline takes the origin of the
-        // fill nearest it, so it travels with that fill; with no fill, of the first outline.
+        // fill it edges, so it travels with that fill; with no fill, of the first outline.
         for (els, runs) in [(a, &mut runs_a), (b, &mut runs_b)] {
-            let fills: Vec<anicraft_geom::Vec2> = els
-                .iter()
-                .filter(|e| matches!(&e.kind, ElementKind::Shape(s) if s.merge && s.fill.is_some()))
-                .map(|e| e.transform.translation())
-                .collect();
             let first = runs.first().map(|r| r.el.transform.translation());
             for r in runs.iter_mut() {
-                let own = r.el.transform.translation();
-                let origin = fills.iter().copied().min_by(|x, y| own.distance(*x).total_cmp(&own.distance(*y))).or(first);
+                let origin = r.fill.and_then(|k| els.get(k)).map(|e| e.transform.translation()).or(first);
                 if let Some(origin) = origin {
                     rebase(&mut r.el, origin);
                 }
