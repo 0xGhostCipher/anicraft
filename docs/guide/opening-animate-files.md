@@ -136,13 +136,13 @@ A `.fla` saved by **Flash 8, CS3 or CS4** uses an older, binary format. AniCraft
 any other Animate file, untitled, so saving asks for a new `.anicraft` name.
 
 * **What comes across**: scenes, layers and layer folders, keyframes and their timing, shapes
-  with their curves, gradients and strokes, groups, symbol instances (transform, loop mode,
-  first frame, colour effect), classic and shape tweens with their eases and shape hints, static
-  and dynamic text, bitmaps, sounds on frames, button names, Library folders, and the stage size
-  and frame rate.
+  with their curves, gradients and strokes (dashed and dotted ones with their pattern), groups,
+  symbol instances (transform, loop mode, first frame, colour effect), classic and shape tweens
+  with their eases and shape hints, static and dynamic text, bitmaps, sounds on frames, button
+  names, Library folders, and the stage size and frame rate.
 * **Frame scripts** are kept exactly as written, but don't run in Test Movie.
-* **Not yet**: filters, movie clip component settings and bitmap fills are left out, and dashed
-  or dotted strokes are drawn solid. An instance with filters also loses its blend mode and is
+* **Not yet**: filters, movie clip component settings and bitmap fills are left out, and
+  ragged, stipple and hatched strokes are drawn solid. An instance with filters also loses its blend mode and is
   drawn as Normal. The report names each of them.
 
 ## Old, damaged and unusual files

@@ -69,7 +69,7 @@ follow-on work tracked in `openspec/changes/add-legacy-fla-import/`.
   reference and a 15-byte object header) holds the full matrix (a–d 16.16, tx/ty i32
   twips), `05`, the edge count, the fill styles (solid RGBA; linear `10` and radial `12`
   gradients with matrix, focal point and stops), the stroke styles (RGBA, width in twips,
-  cap/join/miter bytes, a fill), then edge records. Each record's flag byte holds four
+  ten style bytes, a fill), then edge records. Each record's flag byte holds four
   2-bit fields — move, control, anchor, style — whose point codes pick the storage
   (i16 in 1/256 twip, i32 in 1/256 twip, i16 in 1/2 twip), all relative to the pen; style
   changes carry stroke/left-fill/right-fill indices as u8 or u16. A record with a control
@@ -77,8 +77,22 @@ follow-on work tracked in `openspec/changes/add-legacy-fla-import/`.
   in the corpus (3197, 2201 of them curved) matches its twin's XFL edges, styles and
   matrix. (An earlier reading took the edge unit for half-pixels; it is half-twips — the
   "UFO mask" fixture is 10.9 × 11.2 px.) Fill regions are rebuilt per style as the XFL
-  importer does. Bitmap fills and stroke kinds (dashed, dotted, hairline) are not yet
-  located.
+  importer does. Bitmap fills are not yet located.
+- **Stroke styles:** of a stroke's ten style bytes, [0..2] is a dashed line's dash length
+  and [2..4] its gap, both u16 twips; without a dash, [2..4] is `(pattern << 4) | type`,
+  the type in the order of Animate's stroke style list (0 solid, 2 dotted, 5 hatched seen;
+  3 and 4 presumably ragged and stipple), a dotted line's pattern its dot spacing in tenths
+  of a pixel. [6] is the cap, [7] the join, [9] the miter limit; [4] and [8] are zero in
+  every corpus stroke, [5] (0 or 3) has no drawing effect found. Dashed and dotted lines map
+  to the model's `Dash` as the XFL importer maps `DashedStroke` and `DottedStroke`; ragged,
+  stipple and hatched lines draw solid and are counted with the XFL importer's wording; a
+  type or byte 4/8 the corpus doesn't show is counted as a style not decoded yet. Verified
+  on all 25 patterned strokes of the twins (11 dotted, 8 dashed, 4 hatched, kind, colour,
+  width and pattern). The twins omit `dash1`/`dash2` when they are Animate's defaults, and
+  the legacy bytes of those strokes read 6 and 6 px (`dash2="9"` is written where it
+  differs). Only one dot spacing (3 px) and one hatch setting occur, so the dot spacing's
+  unit and the low pattern bits (`2` on the dotted lines) rest on that one sample. Hairlines
+  are stored as one-twip widths.
 - **Timelines** (`crates/fla/src/archive.rs` holds the full grammar): every item stream is a
   `01` byte and one object graph. Objects are tagged as MFC's `CArchive` tags them — `FF FF`,
   schema, length and name to declare a class; `0x8000 | n` for an object of class `n`; a
@@ -176,14 +190,14 @@ follow-on work tracked in `openspec/changes/add-legacy-fla-import/`.
   envelope) and 4/4 sound items (folder, rate, channels, length); 39/39 library folders and
   328/328 symbols at their twins' library paths and types; the stage matches on all pairs.
   Rendered frames of the movie template and the character rigs match their twins' apart
-  from dotted strokes, text antialiasing on a few pixels, and the shape tweens whose hints
+  from text antialiasing on a few pixels, and the shape tweens whose hints
   the twins' XFL path drops.
 - **What stays open**, each counted in the report's `skipped` per kind: filters (an instance
   with filters loses its blend mode too; the corpus's six filtered instances all hold one
   blur in a 52-byte block before the blend — a type byte 1, then what look like distance,
   blur x, blur y and angle as f32 and quality and strength as u32 — too few samples to tell
   the fields apart), a movie clip's component settings, bitmap fills (kinds `40`–`43`, absent
-  from the corpus), dashed and dotted strokes, sound in and out points (as in the XFL
+  from the corpus), ragged, stipple and hatched strokes (drawn solid, as from XFL), sound in and out points (as in the XFL
   importer), a button's track-as-menu byte (no place in the model), sound formats other than
   raw 16-bit PCM and bitmaps other than the lossless layout or PNG / JPEG. Committed fixtures
   stay synthetic; the CC BY-NC-SA corpus runs via `ANICRAFT_FLA_CORPUS`.

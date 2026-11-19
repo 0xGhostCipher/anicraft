@@ -661,6 +661,103 @@ fn a_curved_shape_imports_as_fill_regions_and_strokes() {
     assert!(matches!(third.path.cmds[1], PathCmd::QuadTo(..)));
 }
 
+/// A stroke's ten style bytes from the grammar: dash and gap fields, cap, join, miter limit.
+fn stroke_style_bytes(dash: u16, gap: u16) -> [u8; 10] {
+    let (d, g) = (dash.to_le_bytes(), gap.to_le_bytes());
+    [d[0], d[1], g[0], g[1], 0, 0, 0x01, 0x01, 0x00, 0x03]
+}
+
+#[test]
+fn stroke_style_bytes_read_as_their_kind_and_pattern() {
+    use super::shape::StrokeKind::{self, *};
+    let of = |dash, field| StrokeKind::of(&stroke_style_bytes(dash, field));
+    assert_eq!(of(0, 0), Solid);
+    // A dash length: dashed, both lengths in twips (6 and 6 px is Animate's default).
+    assert_eq!(of(120, 120), Dashed { dash: 6.0, gap: 6.0 });
+    assert_eq!(of(120, 180), Dashed { dash: 6.0, gap: 9.0 });
+    // Otherwise the low four bits are the type: 2 dotted, its spacing in tenths of a pixel.
+    assert_eq!(of(0, (30 << 4) | 2), Dotted { spacing: 3.0 });
+    assert_eq!(of(0, (45 << 4) | 2), Dotted { spacing: 4.5 });
+    assert_eq!(of(0, (7 << 4) | 3), Ragged);
+    assert_eq!(of(0, (7 << 4) | 4), Stipple);
+    assert_eq!(of(0, (7 << 4) | 5), Hatched);
+    // Types the corpus doesn't show, and a solid type with a pattern, aren't guessed at.
+    for field in [1, 6, 0xF, 0x10, (3 << 4) | 1] {
+        assert_eq!(of(0, field), Unknown, "{field:#x}");
+    }
+    // Bytes 4 and 8 are zero in every known stroke: anything else isn't decoded yet.
+    for at in [4, 8] {
+        let mut style = stroke_style_bytes(120, 120);
+        style[at] = 1;
+        assert_eq!(StrokeKind::of(&style), Unknown, "byte {at}");
+    }
+}
+
+#[test]
+fn stroke_kinds_draw_as_dashes_dots_or_solid_lines_with_a_note() {
+    use super::shape::StrokeKind::*;
+    use anicraft_doc::Dash;
+    assert_eq!(Solid.dash(), (None, None));
+    assert_eq!(Dashed { dash: 6.0, gap: 9.0 }.dash(), (Dash::dashed(6.0, 9.0), None));
+    assert_eq!(Dotted { spacing: 3.0 }.dash(), (Dash::dotted(3.0), None));
+    // A dash with no gap is a solid line.
+    assert_eq!(Dashed { dash: 6.0, gap: 0.0 }.dash(), (None, None));
+    // The largest fields stay drawable (the model clamps the lengths).
+    assert!(super::shape::StrokeKind::of(&stroke_style_bytes(u16::MAX, u16::MAX)).dash().0.is_some());
+    assert!(super::shape::StrokeKind::of(&stroke_style_bytes(0, 0xFFF2)).dash().0.is_some());
+    for kind in [Ragged, Stipple, Hatched] {
+        assert_eq!(kind.dash(), (None, Some("ragged, stipple and hatched strokes (drawn solid)")));
+    }
+    assert_eq!(Unknown.dash(), (None, Some("stroke styles not decoded yet (drawn solid)")));
+}
+
+/// Where the synthetic curve record's stroke style bytes start: after the radial and solid
+/// fills, the stroke count, the stroke's RGBA and width.
+fn curve_record_stroke_style(data: &[u8]) -> usize {
+    let body = super::shape::body_after_tag(data, records::ITEM_PROLOGUE.len() + 6 + 9).expect("the body");
+    let fill2 = body + 7 + 6 + 24 + 9 + 10;
+    fill2 + 6 + 2 + 4 + 2
+}
+
+#[test]
+fn dashed_and_dotted_strokes_import_with_their_pattern() {
+    use anicraft_doc::Dash;
+    let good = synthetic_curve_record();
+    let at = curve_record_stroke_style(&good);
+    assert_eq!(&good[at..at + 10], &[0, 0, 0, 0, 0, 0, 0x02, 0x00, 0x00, 0x05], "the square-capped stroke");
+    let stroke_of = |data: Vec<u8>| {
+        let (elements, report) = library_shapes(data);
+        assert_eq!(elements.len(), 3, "two fill regions, then one stroke");
+        (shape_of(&elements[2]).stroke.clone().expect("a stroke"), report)
+    };
+    // The solid original stays solid.
+    assert_eq!(stroke_of(good.clone()).0.style.dash, None);
+    // Dashed, 8 px on and 2.5 px off, its caps, joins and miter limit kept.
+    let mut style = [0u8; 10];
+    style.copy_from_slice(&good[at..at + 10]);
+    style[..4].copy_from_slice(&[160, 0, 50, 0]);
+    let (stroke, report) = stroke_of(patch(good.clone(), at, &style));
+    assert_eq!(stroke.style.dash, Dash::dashed(8.0, 2.5));
+    assert_eq!((stroke.style.cap, stroke.style.join), (anicraft_doc::Cap::Square, anicraft_doc::Join::Miter));
+    assert!(close(stroke.style.miter_limit, 5.0));
+    assert!(report.skipped.is_empty(), "{:?}", report.skipped);
+    // Dotted, 5 px apart.
+    style[..4].copy_from_slice(&[0, 0, 0x22, 0x03]); // (50 << 4) | 2
+    let (stroke, report) = stroke_of(patch(good.clone(), at, &style));
+    assert_eq!(stroke.style.dash, Dash::dotted(5.0));
+    assert!(report.skipped.is_empty(), "{:?}", report.skipped);
+    // Hatched: solid, counted as the XFL importer counts it.
+    style[..4].copy_from_slice(&[0, 0, 0x75, 0x00]);
+    let (stroke, report) = stroke_of(patch(good.clone(), at, &style));
+    assert_eq!(stroke.style.dash, None);
+    assert_eq!(report.skipped.get("ragged, stipple and hatched strokes (drawn solid)"), Some(&1), "{:?}", report.skipped);
+    // A style not decoded yet draws solid, and the import counts it.
+    style[4] = 0x01;
+    let (stroke, report) = stroke_of(patch(good, at, &style));
+    assert_eq!(stroke.style.dash, None);
+    assert_eq!(report.skipped.get("stroke styles not decoded yet (drawn solid)"), Some(&1), "{:?}", report.skipped);
+}
+
 /// `data` with `to` written over it at `at`.
 fn patch(mut data: Vec<u8>, at: usize, to: &[u8]) -> Vec<u8> {
     data[at..at + to.len()].copy_from_slice(to);
