@@ -54,8 +54,11 @@
 //! What isn't decoded — a movie clip's component settings, filter lists, objects of other
 //! classes, a text or bitmap record in a layout not seen — is skipped by finding where the
 //! parent continues: its own end (`00 00`, then its base with its kind
-//! byte) or the next sibling object, checked by parsing that sibling. Nothing here panics or
-//! reads past the end; a stream that doesn't make sense is refused as a whole.
+//! byte) or the next sibling object, checked by parsing that sibling (or a reference to an
+//! object read before). Class declarations in the skipped bytes are numbered as they pass; an
+//! object of a known class there that doesn't parse stops the skip, since what it holds took
+//! numbers that can't be counted. Nothing here panics or reads past the end; a stream that
+//! doesn't make sense is refused as a whole.
 
 use crate::shape::{self, ShapeRecord};
 use crate::text::TextRecord;
@@ -73,6 +76,8 @@ const SCAN_BUDGET: usize = 256 << 20;
 const MAX_TRIALS: usize = 1 << 16;
 /// Most envelope points, persistent-data entries, guides or ease anchors in one list.
 const MAX_LIST: usize = 1 << 16;
+/// Most references in a row looked past to find where a parent continues.
+const MAX_REF_RUN: usize = 64;
 /// The base point of a page, layer or frame: none.
 const NO_POINT: [u8; 8] = [0x00, 0x00, 0x00, 0x80, 0x00, 0x00, 0x00, 0x80];
 
@@ -275,6 +280,15 @@ enum Tag {
     Null,
     Ref(usize),
     New(usize),
+}
+
+/// What a sibling's head starts with.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Head {
+    /// A new class's declaration, and an object of it.
+    Declaration,
+    /// An object of a class declared before.
+    Object,
 }
 
 struct Parser<'a> {
@@ -571,33 +585,41 @@ impl<'a> Parser<'a> {
     }
 
     /// Moves past bytes not decoded to where the parent continues: its end (when its kind is
-    /// known) or the next sibling, which must parse.
+    /// known) or the next sibling, which must parse. Class declarations in the skipped bytes
+    /// are numbered as the scan passes them, once each; a failed trial rolls back only what it
+    /// read. An object of a class declared before that doesn't parse can't be skipped: it and
+    /// what it holds took numbers this pass can't count, and a later back-reference would find
+    /// the wrong object, so the skip fails instead.
     fn resync(&mut self, parent: Option<u8>) -> R<()> {
         let from = self.at;
+        let mut numbered_to = from;
         for i in from..self.d.len() {
             self.budget = self.budget.checked_sub(1).ok_or(Bad)?;
             if parent.is_some_and(|k| self.parent_end_at(i, k)) {
-                self.count_declarations(from, i);
+                self.number_declarations(&mut numbered_to, i);
                 self.at = i;
                 self.resyncs += 1;
                 return Ok(());
             }
-            if self.sibling_head_at(i) && self.trials < MAX_TRIALS && self.depth < MAX_DEPTH {
+            let Some(head) = self.head_at(i) else { continue };
+            if self.trials < MAX_TRIALS && self.depth < MAX_DEPTH {
                 self.trials += 1;
-                let before = self.snap();
-                self.count_declarations(from, i);
-                let after = Snap { at: i, ..self.snap() };
+                self.number_declarations(&mut numbered_to, i);
+                let numbered = self.snap();
                 self.at = i;
                 let ok = matches!(self.obj(parent), Ok(Some(_)));
                 // What a trial reads counts against the budget too (a hostile stream can't
                 // make the skipping quadratic).
                 self.budget = self.budget.saturating_sub(self.at.saturating_sub(i));
+                self.restore(numbered);
                 if ok {
-                    self.restore(after);
+                    self.at = i;
                     self.resyncs += 1;
                     return Ok(());
                 }
-                self.restore(before);
+            }
+            if head == Head::Object {
+                return Err(Bad);
             }
         }
         Err(Bad)
@@ -624,54 +646,88 @@ impl<'a> Parser<'a> {
 
     /// Whether an object of a known class (or a new class's declaration) starts at `i`.
     fn sibling_head_at(&self, i: usize) -> bool {
-        let d = self.d;
-        let byte = |o: usize| i.checked_add(o).and_then(|j| d.get(j)).copied();
-        let (Some(lo), Some(hi)) = (byte(0), byte(1)) else { return false };
-        let t = u16::from_le_bytes([lo, hi]);
-        let body = if t == 0xFFFF {
-            let len = match (byte(4), byte(5)) {
-                (Some(a), Some(b)) => u16::from_le_bytes([a, b]) as usize,
-                _ => return false,
-            };
-            if byte(6) != Some(b'C') || !(4..=40).contains(&len) {
-                return false;
-            }
-            6 + len
-        } else if t & 0x8000 != 0 && t != 0x7FFF {
-            if !matches!(self.map.get((t & 0x7FFF) as usize), Some(Entry::Class(_))) {
-                return false;
-            }
-            2
-        } else {
-            return false;
-        };
-        byte(body) == Some(0x04) && byte(body + 1).is_some_and(|f| f < 0x10)
+        self.head_at(i).is_some()
     }
 
-    /// Class declarations inside skipped bytes, so later class numbers stay right (each
-    /// declares a class and, right after, an object of it).
-    fn count_declarations(&mut self, from: usize, to: usize) {
-        let Some(span) = self.d.get(from..to) else { return };
-        let mut i = 0usize;
-        while i + 6 < span.len() {
-            let len = span.get(i + 4..i + 6).map_or(0, |b| u16::from_le_bytes([b.first().copied().unwrap_or(0), b.get(1).copied().unwrap_or(0)]) as usize);
-            let name = span.get(i + 6..i + 6 + len);
-            if span.get(i..i + 2) == Some(&[0xFF, 0xFF][..])
+    /// The object of a known class (or the new class's declaration) that starts at `i`, if one
+    /// does.
+    fn head_at(&self, i: usize) -> Option<Head> {
+        let d = self.d;
+        let byte = |o: usize| i.checked_add(o).and_then(|j| d.get(j)).copied();
+        let t = u16::from_le_bytes([byte(0)?, byte(1)?]);
+        let (head, body) = if t == 0xFFFF {
+            let len = u16::from_le_bytes([byte(4)?, byte(5)?]) as usize;
+            if byte(6) != Some(b'C') || !(4..=40).contains(&len) {
+                return None;
+            }
+            (Head::Declaration, 6 + len)
+        } else if t & 0x8000 != 0 && t != 0x7FFF {
+            if !matches!(self.map.get((t & 0x7FFF) as usize), Some(Entry::Class(_))) {
+                return None;
+            }
+            (Head::Object, 2)
+        } else {
+            return None;
+        };
+        (byte(body) == Some(0x04) && byte(body + 1).is_some_and(|f| f < 0x10)).then_some(head)
+    }
+
+    /// The length of a reference at `i` (`n`, or `7F FF` and a u32) to an object read before:
+    /// its number must hold an object in the map, not a class or nothing.
+    fn reference_at(&self, i: usize) -> Option<usize> {
+        let d = self.d;
+        let byte = |o: usize| i.checked_add(o).and_then(|j| d.get(j)).copied();
+        let (index, len) = match u16::from_le_bytes([byte(0)?, byte(1)?]) {
+            0x7FFF => {
+                let big = u32::from_le_bytes([byte(2)?, byte(3)?, byte(4)?, byte(5)?]);
+                if big & 0x8000_0000 != 0 {
+                    return None;
+                }
+                (big as usize, 6)
+            }
+            t if t == 0 || t & 0x8000 != 0 => return None,
+            t => (usize::from(t), 2),
+        };
+        matches!(self.map.get(index), Some(Entry::Object(_))).then_some(len)
+    }
+
+    /// Numbers the class declarations in skipped bytes from `*at` up to `to`, and moves `*at`
+    /// on, so later class numbers stay right (each declares a class and, right after, an object
+    /// of it). Two declarations never overlap (a name holds no `FF`, a length no `FF FF`), so
+    /// numbering a span in steps finds just what one pass over it would; a declaration that
+    /// runs past `to` waits for a later step.
+    fn number_declarations(&mut self, at: &mut usize, to: usize) {
+        let d = self.d;
+        while *at < to {
+            let i = *at;
+            let byte = |o: usize| i.checked_add(o).and_then(|j| d.get(j)).copied();
+            let len = match (byte(4), byte(5)) {
+                (Some(a), Some(b)) => u16::from_le_bytes([a, b]) as usize,
+                _ => 0,
+            };
+            let name = i.checked_add(6).and_then(|s| d.get(s..s.checked_add(len)?));
+            if byte(0) == Some(0xFF)
+                && byte(1) == Some(0xFF)
                 && (4..=40).contains(&len)
                 && let Some(name) = name
                 && name.first() == Some(&b'C')
                 && name.iter().all(|b| b.is_ascii_alphanumeric() || *b == b'_')
-                && self.map.len() + 2 < MAX_OBJECTS
             {
-                let name = String::from_utf8_lossy(name).into_owned();
-                self.declare(name.clone());
-                let n = self.nodes.len();
-                self.nodes.push(Node::Skipped(name));
-                self.map.push(Entry::Object(n));
-                i += 6 + len;
-                continue;
+                let end = i + 6 + len;
+                if end > to {
+                    return;
+                }
+                if self.map.len() + 2 < MAX_OBJECTS {
+                    let name = String::from_utf8_lossy(name).into_owned();
+                    self.declare(name.clone());
+                    let n = self.nodes.len();
+                    self.nodes.push(Node::Skipped(name));
+                    self.map.push(Entry::Object(n));
+                    *at = end;
+                    continue;
+                }
             }
-            i += 1;
+            *at = i + 1;
         }
     }
 
@@ -738,7 +794,7 @@ impl<'a> Parser<'a> {
             self.trials += 1;
             let snap = self.snap();
             self.at = i;
-            let ok = self.frame_tail().is_ok() && (self.parent_end_at(self.at, KIND_LAYER) || self.sibling_head_at(self.at));
+            let ok = self.frame_tail().is_ok() && self.continues_at(self.at, Some(KIND_LAYER));
             self.budget = self.budget.saturating_sub(self.at.saturating_sub(i));
             self.restore(snap);
             if ok {
@@ -815,12 +871,21 @@ impl<'a> Parser<'a> {
     }
 
     /// Whether the bytes at `i` are where an object's parent (of kind `parent`) continues: its
-    /// end, or a next sibling's head. Without a known parent, anything goes.
+    /// end or a next sibling's head, maybe behind references to objects read before (siblings
+    /// too). Without a known parent, anything goes.
     fn continues_at(&self, i: usize, parent: Option<u8>) -> bool {
-        match parent {
-            Some(k) => self.parent_end_at(i, k) || self.sibling_head_at(i),
-            None => true,
+        let Some(k) = parent else { return true };
+        let mut i = i;
+        for _ in 0..=MAX_REF_RUN {
+            if self.parent_end_at(i, k) || self.sibling_head_at(i) {
+                return true;
+            }
+            match self.reference_at(i).and_then(|len| i.checked_add(len)) {
+                Some(next) => i = next,
+                None => return false,
+            }
         }
+        false
     }
 
     /// A text record (its head here), decoded by [`crate::text`]; one in a layout not seen,

@@ -1,8 +1,11 @@
-//! The mapping's guards on hostile input (ADR 0096): groups used more than once or inside
-//! themselves, and the `Contents` scans. Every byte here is written from the grammar in
-//! `crate::archive` and `crate::doc`, never taken from a corpus file.
+//! The object graph's recovery paths and the mapping's guards on hostile input (ADR 0096):
+//! skipping undecoded bytes in linear work without losing count of the objects in them,
+//! references as siblings, groups used more than once or inside themselves, and the
+//! `Contents` scans. Every byte here is written from the grammar in `crate::archive` and
+//! `crate::doc`, never taken from a corpus file.
 
-use crate::tests::{one_frame_stream, rectangle_body, scene, synthetic_contents, write, Ar, FrameSpec};
+use crate::tests::{one_frame_stream, rectangle_body, scene, synthetic_contents, write, Ar, FrameSpec, InstSpec};
+use crate::text_tests::{record, units, Head, Style};
 use anicraft_doc::{Element, ElementKind};
 use std::sync::Arc;
 
@@ -31,6 +34,11 @@ fn page_with(objects: impl FnOnce(&mut Ar)) -> Vec<u8> {
     w.out
 }
 
+/// The number the last object written took (one with no children of its own).
+fn last(w: &Ar) -> u16 {
+    w.count - 1
+}
+
 fn skipped(report: &crate::Report, what: &str) -> usize {
     report.skipped.get(what).copied().unwrap_or(0)
 }
@@ -43,6 +51,151 @@ fn kinds(elements: &[Arc<Element>]) -> Vec<&'static str> {
         ElementKind::Group { .. } => "group",
         _ => "other",
     }).collect()
+}
+
+// Skipping undecoded bytes.
+
+#[test]
+fn skipping_past_many_class_declarations_takes_linear_work_and_numbers_each_once() {
+    // An object of a class not decoded, its 6 MB holding 15 000 declarations of a class that
+    // doesn't parse there: each is tried as the next sibling and fails. The skip numbers them
+    // once each as it passes, not again from the start for every later trial (about a minute
+    // of work here), so the instance after them and a back-reference to it still line up.
+    const FAKES: u16 = 15_000;
+    let page = page_with(|w| {
+        w.tag("CPicFuture");
+        w.out.extend([0x04, 0x00]);
+        for _ in 0..FAKES {
+            w.out.extend([0xFF, 0xFF, 0x01, 0x00, 0x08, 0x00]);
+            w.out.extend(b"CPicPage");
+            w.out.extend([0x04, 0x00, 0xFE, 0xFF]);
+            w.out.extend([0u8; 400]);
+        }
+        // Each declared a class and an object of it.
+        w.count += 2 * FAKES;
+        let mut inst = InstSpec::default();
+        inst.first_frame = 2;
+        w.instance(&inst);
+        let n = last(w);
+        w.u16(n);
+    });
+    let (doc, report) = open(page);
+    let k = &scene(&doc).layers[0].keyframes[0];
+    assert_eq!(kinds(&k.elements), ["symbol", "symbol"], "the instance and the reference to it");
+    for e in &k.elements {
+        assert!(matches!(e.kind, ElementKind::Symbol { first_frame: 2, .. }), "{:?}", e.kind);
+    }
+    assert_eq!(skipped(&report, "objects of a kind not decoded (left out)"), 1, "{:?}", report.skipped);
+}
+
+#[test]
+fn an_object_of_a_known_class_that_does_not_parse_is_never_skipped_over() {
+    // An object not decoded holds an instance (its class declared before) that doesn't parse:
+    // that instance took a number, and what it holds may have taken more, which a skip can't
+    // count. Skipping past it would leave every later number one off, and the reference to `b`
+    // at the end would find `c`; instead the timeline is refused and the scene comes in by its
+    // layer names.
+    let page = page_with(|w| {
+        let mut a = InstSpec::default();
+        a.first_frame = 1;
+        w.instance(&a);
+        w.tag("CPicFuture");
+        w.out.extend([0x04, 0x00]);
+        w.tag("CPicSymbol");
+        w.out.extend([0x04, 0x00, 0xFE, 0xFF]);
+        let (mut b, mut c) = (InstSpec::default(), InstSpec::default());
+        b.first_frame = 2;
+        c.first_frame = 3;
+        w.instance(&b);
+        let b_number = last(w);
+        w.instance(&c);
+        w.u16(b_number);
+    });
+    let (doc, report) = open(page);
+    assert_eq!(skipped(&report, "scenes whose timeline didn't decode (layer names only)"), 1, "{:?}", report.skipped);
+    let tl = scene(&doc);
+    assert_eq!(tl.layers.iter().map(|l| l.name.as_str()).collect::<Vec<_>>(), ["art"]);
+    assert!(tl.layers.iter().all(|l| l.keyframes.iter().all(|k| k.elements.is_empty())), "nothing placed by a wrong number");
+}
+
+// References where a parent continues.
+
+#[test]
+fn a_reference_after_a_text_a_bitmap_or_a_button_is_their_next_sibling() {
+    let page = page_with(|w| {
+        let mut inst = InstSpec::default();
+        inst.first_frame = 1;
+        w.instance(&inst);
+        let i = last(w);
+        // A dynamic text, then the instance again by reference.
+        w.tag("CPicText");
+        let head = Head { field: 0x0003, matrix: [65536, 0, 0, 65536, 400, 600], bounds: [0, 2000, 0, 400], ..Head::default() };
+        w.out.extend(record(&head, &[(units("Score"), Style::default())]));
+        w.u16(i);
+        // A bitmap instance (its media isn't in this file), then the reference.
+        w.object("CPicBitmap", 0, None, 0, 0x02, |_| {});
+        for v in [65536, 0, 0, 65536, 0, 0] {
+            w.i32(v);
+        }
+        w.u16(7);
+        w.out.push(0);
+        w.u16(i);
+        // A button with its settings, then the reference (the last child: the frame's end next).
+        let mut button = InstSpec::default();
+        button.class = "CPicButton";
+        w.instance(&button);
+        w.out.push(0x0B);
+        w.out.extend_from_slice(&[4, 0, 0, 0, 1, 0, 0, 0, 0x10, 0x20, 0, 0, 0, 0, 0, 0]);
+        w.string("");
+        w.out.push(0);
+        w.string("");
+        w.i32(0);
+        w.u16(i);
+    });
+    let (doc, report) = open(page);
+    let k = &scene(&doc).layers[0].keyframes[0];
+    assert_eq!(kinds(&k.elements), ["symbol", "text", "symbol", "symbol", "symbol", "symbol"], "{:?}", report.skipped);
+    for what in ["texts whose records didn't decode", "bitmap instances whose records didn't decode", "button settings in a layout not decoded (left out)"] {
+        assert_eq!(skipped(&report, what), 0, "{what}: {:?}", report.skipped);
+    }
+    assert_eq!(skipped(&report, "instances of missing bitmaps"), 1, "{:?}", report.skipped);
+}
+
+#[test]
+fn a_recovered_keyframe_followed_by_a_reference_keeps_its_fields() {
+    // The second keyframe's artwork uses a fill kind not decoded (its fields are found by trial
+    // parse), and the layer then lists the first keyframe again by reference.
+    let mut bad = rectangle_body();
+    bad[24 + 1 + 4 + 2 + 4] = 0x40; // the fill's kind: a bitmap fill
+    let mut w = Ar::new();
+    w.page(|w| {
+        w.layer("art", 0, None, |w| {
+            let mut first = 0u16;
+            w.frame(&[], &frame_spec(2), |w| first = w.count - 1);
+            w.frame(&bad, &frame_spec(3), |_| {});
+            w.u16(first);
+        });
+    });
+    let (doc, report) = open(w.out);
+    let spans: Vec<(u32, u32)> = scene(&doc).layers[0].keyframes.iter().map(|k| (k.start, k.duration)).collect();
+    assert_eq!(spans, [(0, 2), (2, 3), (5, 2)], "{:?}", report.skipped);
+    assert_eq!(skipped(&report, "keyframes that didn't decode"), 0, "{:?}", report.skipped);
+    assert_eq!(skipped(&report, "shapes with bitmap fills (decode pending)"), 1, "{:?}", report.skipped);
+}
+
+#[test]
+fn references_to_classes_are_not_siblings() {
+    // A text followed by the number of `CPicText`'s class slot (a class, not an object): not
+    // where the frame continues, so the text is skipped to the frame's end.
+    let page = page_with(|w| {
+        w.tag("CPicText");
+        let class_slot = w.count - 2;
+        let head = Head { field: 0x0003, ..Head::default() };
+        w.out.extend(record(&head, &[(units("x"), Style::default())]));
+        w.u16(class_slot);
+    });
+    let (_, report) = open(page);
+    assert_eq!(skipped(&report, "texts whose records didn't decode"), 1, "{:?}", report.skipped);
 }
 
 // Groups used more than once.
