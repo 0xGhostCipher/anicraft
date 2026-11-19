@@ -502,6 +502,16 @@ fn morph_raw_strokes(kf: &crate::Keyframe, next: &crate::Keyframe, t: Progress, 
         };
     let mut rest_b = b.iter().enumerate().filter(|(_, e)| raw_stroke(e).is_none());
     let mut out = Vec::with_capacity(a.len());
+    // Which outline of the start key draws each of its runs, worked out once: searching the
+    // outlines for every run would cost n(n+1)/2 comparisons for an outline of n runs.
+    let mut outline_of: Vec<Option<usize>> = vec![None; a.len()];
+    for (k, r) in runs_a.iter().enumerate() {
+        for &m in &r.members {
+            if let Some(slot) = outline_of.get_mut(m) {
+                *slot = Some(k);
+            }
+        }
+    }
     // Each joined outline of the start key, tweened; it stands in for its first run.
     let mut tweened: Vec<Option<Arc<Element>>> = vec![None; runs_a.len()];
     for (i, x) in a.iter().enumerate() {
@@ -512,7 +522,7 @@ fn morph_raw_strokes(kf: &crate::Keyframe, next: &crate::Keyframe, t: Progress, 
             );
             continue;
         }
-        let Some((k, ra)) = runs_a.iter().enumerate().find(|(_, r)| r.members.contains(&i)) else { continue };
+        let Some((k, ra)) = outline_of.get(i).copied().flatten().and_then(|k| runs_a.get(k).map(|r| (k, r))) else { continue };
         if let Some(el) = tweened.get(k).and_then(Option::as_ref) {
             // A later run of the outline keeps its identity, drawn by the first.
             out.push(Arc::new(joined_member(x, el)));
