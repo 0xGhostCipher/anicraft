@@ -112,17 +112,17 @@ fn the_directory_reads_no_further_than_the_most_entries() {
 }
 
 #[test]
-fn a_stream_chain_longer_than_its_size_is_refused() {
+fn a_stream_chain_longer_than_its_size_reads_only_its_size() {
     // Through the FAT: a 5000-byte stream is sectors 0 to 9; its chain goes on into 10.
     let mut f = write(&[("Contents", vec![1; 5000])]);
     assert_eq!(Compound::new(&f).unwrap().stream("Contents").unwrap(), vec![1; 5000]);
     let at = fat_word(&f, 9);
     assert_eq!(u32_at(&f, at), ENDOFCHAIN);
     set_u32(&mut f, at, 10);
-    assert_eq!(Compound::new(&f).unwrap().stream("Contents"), Err(Error::ChainTooLong));
-    // Looping back past its size is refused just the same, without a second lap.
+    assert_eq!(Compound::new(&f).unwrap().stream("Contents").unwrap(), vec![1; 5000]);
+    // Looping back past its size is never followed: no second lap, the declared bytes.
     set_u32(&mut f, at, 0);
-    assert_eq!(Compound::new(&f).unwrap().stream("Contents"), Err(Error::ChainTooLong));
+    assert_eq!(Compound::new(&f).unwrap().stream("Contents").unwrap(), vec![1; 5000]);
 
     // Through the mini-FAT: 100 bytes are mini sectors 0 and 1; the chain goes on into 2.
     let mut f = write(&[("Contents", vec![2; 100])]);
@@ -130,7 +130,7 @@ fn a_stream_chain_longer_than_its_size_is_refused() {
     let at = minifat_word(&f, 1);
     assert_eq!(u32_at(&f, at), ENDOFCHAIN);
     set_u32(&mut f, at, 2);
-    assert_eq!(Compound::new(&f).unwrap().stream("Contents"), Err(Error::ChainTooLong));
+    assert_eq!(Compound::new(&f).unwrap().stream("Contents").unwrap(), vec![2; 100]);
 }
 
 #[test]
@@ -154,7 +154,7 @@ fn the_root_mini_stream_chain_is_read_to_its_size() {
     let at = fat_word(&f, first);
     assert_eq!(u32_at(&f, at), ENDOFCHAIN, "the writer's mini stream is one sector");
     set_u32(&mut f, at, first);
-    assert!(matches!(Compound::new(&f), Err(Error::ChainTooLong)));
+    assert_eq!(Compound::new(&f).unwrap().stream("Contents").unwrap(), vec![3; 100], "a looping tail is never followed");
     set_u32(&mut f, at, ENDOFCHAIN);
     // A root claiming more than the file holds is refused before anything is reserved.
     f[root + 120..root + 128].copy_from_slice(&0x8000_0000u64.to_le_bytes());

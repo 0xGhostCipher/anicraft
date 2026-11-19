@@ -334,8 +334,9 @@ pub(crate) fn dir_sectors_max(sector: usize) -> usize {
 
 /// Copies a stream of `size` bytes from its chain of `unit`-byte sectors: exactly the
 /// sectors the size needs, and of the last only the bytes it declares. A chain that ends
-/// before them is [`Error::Truncated`]; one that goes on past them is refused as well. An
-/// empty stream reads nothing, wherever its chain claims to start.
+/// before them is [`Error::Truncated`]. Links past them are never followed: the declared
+/// size bounds the work, and slack sectors at a chain's end cost nothing, so a writer that
+/// leaves some still opens. An empty stream reads nothing, wherever its chain claims to start.
 pub(crate) fn copy_chain<'d>(first: u32, size: usize, unit: usize, next_of: impl Fn(u32) -> Option<u32>, sector_of: impl Fn(u32) -> Option<&'d [u8]>) -> Result<Vec<u8>, Error> {
     let mut out = Vec::with_capacity(size);
     let mut next = first;
@@ -350,10 +351,9 @@ pub(crate) fn copy_chain<'d>(first: u32, size: usize, unit: usize, next_of: impl
         let bytes = sector_of(next).ok_or(Error::Truncated)?;
         let take = (size - out.len()).min(unit);
         out.extend_from_slice(bytes.get(..take).ok_or(Error::Truncated)?);
-        next = next_of(next).ok_or(Error::Truncated)?;
-    }
-    if size > 0 && next != ENDOFCHAIN && next != FREESECT {
-        return Err(Error::ChainTooLong);
+        if out.len() < size {
+            next = next_of(next).ok_or(Error::Truncated)?;
+        }
     }
     Ok(out)
 }
