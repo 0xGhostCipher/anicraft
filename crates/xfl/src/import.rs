@@ -986,8 +986,9 @@ impl<'a> Builder<'a> {
             }
             let short: String = name.rsplit('/').next().unwrap_or(name).chars().take(256).collect();
             let (mut found_data, mut unreadable) = (false, false);
-            // Why data in Animate's own layout didn't decode.
-            let mut why = None;
+            // Why data in Animate's own layout didn't decode, and its size when it was left out
+            // for being past what is left of the pixel budget.
+            let (mut why, mut over_budget) = (None, None);
             let mut bitmap = None;
             for path in candidates {
                 let bytes = match (self.read)(&path) {
@@ -1002,9 +1003,22 @@ impl<'a> Builder<'a> {
                 };
                 found_data = true;
                 if anicraft_flamedia::is_bitmap(&bytes) {
+                    // What it would hold once decoded, read from its header and weighed against
+                    // what is left of the budget before anything is inflated. A header the
+                    // decoder refuses anyway (an unseen variant, a bad size) is left to say why.
+                    let decodable = |h: &anicraft_flamedia::BitmapHeader| {
+                        h.format == anicraft_flamedia::FORMAT_ARGB32 && h.compressed && h.width > 0 && h.height > 0 && u32::from(h.width.max(h.height)) <= anicraft_flamedia::MAX_EDGE
+                    };
+                    if let Some(h) = anicraft_flamedia::bitmap_header(&bytes).ok().filter(decodable)
+                        && self.bitmap_pixels.saturating_add(u64::from(h.width) * u64::from(h.height)) > self.bitmap_pixel_budget
+                    {
+                        over_budget.get_or_insert((h.width, h.height));
+                        continue;
+                    }
                     match anicraft_flamedia::decode_bitmap(&bytes) {
                         Ok(px) => match Bitmap::from_rgba(BitmapId(0), short.clone(), px.width, px.height, px.rgba) {
                             Some(b) => {
+                                // Charged below, with every other bitmap, once it comes across.
                                 bitmap = Some(b);
                                 break;
                             }
@@ -1038,6 +1052,9 @@ impl<'a> Builder<'a> {
                     self.place_in_folder(name, anicraft_doc::LibraryItem::Bitmap(b.id));
                     self.bitmaps.insert(name.to_string(), b.id);
                     self.doc.bitmaps.push(Arc::new(b));
+                }
+                None if let Some((w, h)) = over_budget => {
+                    self.report.skip_named("bitmaps past the import pixel budget", format!("{shown}: {w} × {h} px"))
                 }
                 None if let Some(why) = why => self.report.skip_named("bitmaps in Animate's own format AniCraft can't decode", format!("{shown}: {why}")),
                 None if found_data => self.report.skip("bitmaps in formats AniCraft can't read"),

@@ -1068,3 +1068,50 @@ fn bitmaps_and_sounds_in_animates_own_data_layout_come_across() {
         Some(&vec!["Audio/eight: Animate's own sound data (8-bit sound data, which AniCraft doesn't read yet)".to_string(), "Audio/other: Animate's own sound data".to_string()])
     );
 }
+
+#[test]
+fn bitmaps_in_animates_own_data_share_one_pixel_budget() {
+    let doc = r##"<DOMDocument width="200" height="100">
+  <media>
+    <DOMBitmapItem name="cut.png" bitmapDataHRef="M 1 1.dat"/>
+    <DOMBitmapItem name="first.png" bitmapDataHRef="M 2 2.dat"/>
+    <DOMBitmapItem name="second.png" bitmapDataHRef="M 3 3.dat"/>
+    <DOMBitmapItem name="junk.png" bitmapDataHRef="M 4 4.dat"/>
+    <DOMBitmapItem name="dot.png" bitmapDataHRef="M 5 5.dat"/>
+  </media>
+</DOMDocument>"##;
+    let square = animate_bitmap(2, 2, &[255; 16]);
+    // A bitmap header whose pixels are not zlib at all: it would be reported as damaged if it
+    // were inflated.
+    let junk: Vec<u8> = square[..26].iter().copied().chain([3, 0, 1, 2, 3, 0, 0]).collect();
+    let files: HashMap<String, Vec<u8>> = HashMap::from([
+        ("DOMDocument.xml".to_string(), doc.as_bytes().to_vec()),
+        ("bin/M 1 1.dat".to_string(), square[..square.len() - 3].to_vec()),
+        ("bin/M 2 2.dat".to_string(), square.clone()),
+        ("bin/M 3 3.dat".to_string(), square.clone()),
+        ("bin/M 4 4.dat".to_string(), junk),
+        ("bin/M 5 5.dat".to_string(), animate_bitmap(1, 1, &[255, 1, 2, 3])),
+    ]);
+    let read = |p: &str| -> Result<Option<Vec<u8>>, XflError> { Ok(files.get(p).cloned()) };
+    const OVER: &str = "bitmaps past the import pixel budget";
+    const BAD: &str = "bitmaps in Animate's own format AniCraft can't decode";
+
+    // Room for one 2 x 2 image (4 pixels) and one 1 x 1. The cut one fails and costs
+    // nothing; the second square and the junk are refused from their headers, never inflated;
+    // the dot after them still fits.
+    let (doc, report) = crate::import::import_with_bitmap_budget(&read, 5).unwrap();
+    assert_eq!(doc.bitmaps.iter().map(|b| (b.name.as_str(), b.width, b.height)).collect::<Vec<_>>(), [("first.png", 2, 2), ("dot.png", 1, 1)]);
+    assert_eq!(report.names.get(OVER), Some(&vec!["second.png: 2 × 2 px".to_string(), "junk.png: 2 × 2 px".to_string()]));
+    assert_eq!(report.skipped.get(OVER), Some(&2));
+    assert_eq!(report.names.get(BAD), Some(&vec!["cut.png: the data is cut short".to_string()]));
+
+    // With the full budget all three good ones come across, and the junk is damaged: so above,
+    // it was left out unread.
+    let (doc, report) = import_with(&read).unwrap();
+    assert_eq!(doc.bitmaps.iter().map(|b| b.name.as_str()).collect::<Vec<_>>(), ["first.png", "second.png", "dot.png"]);
+    assert_eq!(report.skipped.get(OVER), None);
+    assert_eq!(
+        report.names.get(BAD),
+        Some(&vec!["cut.png: the data is cut short".to_string(), "junk.png: damaged data: the pixel data doesn't inflate".to_string()])
+    );
+}
