@@ -32,6 +32,8 @@ pub mod text;
 #[cfg(test)]
 mod tests;
 #[cfg(test)]
+mod tests_bounds;
+#[cfg(test)]
 mod text_tests;
 
 pub use doc::import;
@@ -53,6 +55,8 @@ pub struct StreamDump {
     pub head: String,
     /// The record tags the scanner found, in order.
     pub tags: Vec<(usize, String)>,
+    /// False when the scan stopped at [`records::MAX_TAGS`]: `tags` are the first ones only.
+    pub tags_complete: bool,
 }
 
 /// Dumps a legacy document's streams for triage and reverse-engineering.
@@ -64,11 +68,13 @@ pub fn dump(data: &[u8]) -> Result<Vec<StreamDump>, cfb::Error> {
             continue;
         }
         let bytes = file.stream(&entry.path)?;
+        let scan = records::scan_tags(&bytes);
         out.push(StreamDump {
             path: entry.path.clone(),
             size: entry.size,
             head: bytes.iter().take(8).map(|b| format!("{b:02x}")).collect::<Vec<_>>().join(" "),
-            tags: records::scan_tags(&bytes).into_iter().map(|t| (t.offset, t.name)).collect(),
+            tags: scan.tags.into_iter().map(|t| (t.offset, t.name)).collect(),
+            tags_complete: scan.complete,
         });
     }
     Ok(out)

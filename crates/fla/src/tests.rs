@@ -7,7 +7,7 @@ use super::records;
 /// Builds a version-3 compound file holding named streams. Streams shorter than the
 /// 4096-byte cutoff go through the mini stream, longer ones through the FAT — so both
 /// paths are exercised by construction. (`name`, `bytes`) pairs; names are ASCII.
-fn write(streams: &[(&str, Vec<u8>)]) -> Vec<u8> {
+pub(crate) fn write(streams: &[(&str, Vec<u8>)]) -> Vec<u8> {
     const SECTOR: usize = 512;
     const CUTOFF: usize = 0x1000;
     const ENDOFCHAIN: u32 = 0xFFFF_FFFE;
@@ -173,7 +173,7 @@ fn write(streams: &[(&str, Vec<u8>)]) -> Vec<u8> {
     out
 }
 
-fn entry_record(f: &[u8], name: &str) -> usize {
+pub(crate) fn entry_record(f: &[u8], name: &str) -> usize {
     let needle = name.encode_utf16().flat_map(u16::to_le_bytes).collect::<Vec<u8>>();
     let at = f.windows(needle.len()).position(|w| w == needle).expect("entry found");
     at - (at % 128) // the entry's 128-byte record, absolutely addressed

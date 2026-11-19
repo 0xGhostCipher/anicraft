@@ -31,6 +31,8 @@ pub enum Error {
     BadHeader(&'static str),
     #[error("this legacy Flash document is damaged: the container's allocation chains loop")]
     ChainCycle,
+    #[error("this legacy Flash document is damaged: an allocation chain runs past the structure it holds")]
+    ChainTooLong,
     #[error("this legacy Flash document is damaged: its directory tree loops or is too deep")]
     TreeCycle,
     #[error("this legacy Flash document claims a stream far larger than the file could hold")]
@@ -96,7 +98,6 @@ impl<'a> Compound<'a> {
 
         let major = u16_at(26);
         let sector_shift = u16_at(30);
-        let sector = 1usize << sector_shift;
         if major != 3 && major != 4 {
             return Err(Error::BadHeader("the container's version is neither 3 nor 4"));
         }
@@ -104,6 +105,8 @@ impl<'a> Compound<'a> {
         if sector_shift != expected_shift {
             return Err(Error::BadHeader("the container's sector size doesn't match its version"));
         }
+        // Shifted only once validated: the file's own shift could overflow.
+        let sector = 1usize << expected_shift;
         if mini_shift(h) != 6 {
             return Err(Error::BadHeader("the mini-sector size isn't 64 bytes"));
         }
@@ -115,16 +118,19 @@ impl<'a> Compound<'a> {
         }
         let sectors_in_file = data.len() / sector;
 
-        // The FAT sector list: 109 in the header, then chained extended DIFAT sectors.
+        // The FAT sector list: 109 in the header, then chained extended DIFAT sectors. Each
+        // is a distinct sector of the file, so the claimed count is bounded by the file
+        // before anything is reserved for it.
         let fat_count = u32_at(44) as usize;
+        let mut listed = vec![false; sectors_in_file.saturating_sub(1)];
+        if fat_count > listed.len() {
+            return Err(Error::Truncated);
+        }
         let difat_first = u32_at(68);
         let difat_count = u32_at(72) as usize;
         let mut fat_sectors: Vec<u32> = Vec::new();
         for i in 0..109 {
-            let id = u32_at(76 + i * 4);
-            if id != FREESECT {
-                fat_sectors.push(id);
-            }
+            list_fat_sector(u32_at(76 + i * 4), &mut listed, &mut fat_sectors, fat_count)?;
         }
         if difat_first != ENDOFCHAIN && difat_count == 0 {
             return Err(Error::BadHeader("the container points at DIFAT sectors it says it doesn't have"));
@@ -141,14 +147,9 @@ impl<'a> Compound<'a> {
             let s = Self::sector_of(data, next, sector).ok_or(Error::Truncated)?;
             for i in 0..difat_per_sector {
                 let id = u32::from_le_bytes([s[i * 4], s[i * 4 + 1], s[i * 4 + 2], s[i * 4 + 3]]);
-                if id != FREESECT {
-                    fat_sectors.push(id);
-                }
+                list_fat_sector(id, &mut listed, &mut fat_sectors, fat_count)?;
             }
             next = u32::from_le_bytes([s[difat_per_sector * 4], s[difat_per_sector * 4 + 1], s[difat_per_sector * 4 + 2], s[difat_per_sector * 4 + 3]]);
-        }
-        if fat_sectors.len() > fat_count {
-            return Err(Error::BadHeader("the container lists more FAT sectors than it claims"));
         }
         if fat_sectors.len() != fat_count {
             return Err(Error::BadHeader("the container's FAT sector count doesn't match its DIFAT"));
@@ -162,9 +163,10 @@ impl<'a> Compound<'a> {
             }
         }
 
-        // The directory: sectors chained through the FAT, 128-byte entries in each.
+        // The directory: sectors chained through the FAT, 128-byte entries in each, read no
+        // further than the most entries a directory may hold.
         let mut dir_bytes = Vec::new();
-        read_chain(data, &fat, u32_at(48), sector, &mut dir_bytes, sectors_in_file)?;
+        read_chain(data, &fat, u32_at(48), sector, &mut dir_bytes, sectors_in_file.min(dir_sectors_max(sector)))?;
         let entry_count = dir_bytes.len() / 128;
         if entry_count == 0 || entry_count > MAX_ENTRIES {
             return Err(Error::BadHeader("the container's directory is empty or too large"));
@@ -251,11 +253,15 @@ impl<'a> Compound<'a> {
         }
 
         // The mini stream lives in the root storage's stream, in 64-byte mini sectors.
-        let mut mini_stream = Vec::new();
-        if entries[0].size > 0 {
-            read_chain(data, &fat, entries[0].start, sector, &mut mini_stream, sectors_in_file)?;
-            mini_stream.truncate(entries[0].size as usize);
-        }
+        let mini_stream = if entries[0].size > 0 {
+            let size = usize::try_from(entries[0].size).map_err(|_| Error::StreamTooLarge)?;
+            if size > data.len() {
+                return Err(Error::Truncated);
+            }
+            copy_chain(entries[0].start, size, sector, |id| fat.get(id as usize).copied(), |id| Self::sector_of(data, id, sector))?
+        } else {
+            Vec::new()
+        };
 
         let mut minifat = Vec::new();
         let mut mfb = Vec::new();
@@ -282,41 +288,20 @@ impl<'a> Compound<'a> {
     /// Reads a stream by its full path. Storages have nothing to read.
     pub fn stream(&self, path: &str) -> Result<Vec<u8>, Error> {
         let entry = self.entries.iter().find(|e| e.kind == Kind::Stream && e.path == path).ok_or_else(|| Error::NotFound(path.to_string()))?;
-        if entry.size > MAX_STREAM {
+        if entry.size > MAX_STREAM || entry.size > self.data.len() as u64 {
             return Err(Error::StreamTooLarge);
         }
-        let mut out = Vec::new();
+        let size = entry.size as usize;
         if entry.size < CUTOFF {
             // A mini stream: 64-byte mini sectors chained by the mini-FAT, inside the
             // root storage's stream.
-            let mut next = entry.start;
-            let mut visited = std::collections::HashSet::new();
-            while next != ENDOFCHAIN && next != FREESECT {
-                if !visited.insert(next) || visited.len() > MAX_CHAIN {
-                    return Err(Error::ChainCycle);
-                }
-                let start = (next as usize).checked_mul(64).ok_or(Error::Truncated)?;
-                let bytes = self.mini_stream.get(start..start.checked_add(64).ok_or(Error::Truncated)?).ok_or(Error::Truncated)?;
-                out.extend_from_slice(bytes);
-                next = *self.minifat.get(next as usize).ok_or(Error::Truncated)?;
-            }
+            copy_chain(entry.start, size, 64, |id| self.minifat.get(id as usize).copied(), |id| {
+                let start = (id as usize).checked_mul(64)?;
+                self.mini_stream.get(start..start.checked_add(64)?)
+            })
         } else {
-            let mut visited = std::collections::HashSet::new();
-            let mut next = entry.start;
-            while next != ENDOFCHAIN && next != FREESECT {
-                if !visited.insert(next) || visited.len() > MAX_CHAIN {
-                    return Err(Error::ChainCycle);
-                }
-                let bytes = Self::sector_of(self.data, next, self.sector).ok_or(Error::Truncated)?;
-                out.extend_from_slice(bytes);
-                next = *self.fat.get(next as usize).ok_or(Error::Truncated)?;
-            }
+            copy_chain(entry.start, size, self.sector, |id| self.fat.get(id as usize).copied(), |id| Self::sector_of(self.data, id, self.sector))
         }
-        if out.len() < entry.size as usize {
-            return Err(Error::Truncated);
-        }
-        out.truncate(entry.size as usize);
-        Ok(out)
     }
 }
 
@@ -324,14 +309,66 @@ fn mini_shift(h: &[u8]) -> u16 {
     u16::from_le_bytes([h[32], h[33]])
 }
 
+/// Adds one FAT sector id from the DIFAT (FREESECT slots are unused), refusing an id past
+/// the file's sectors, a sector listed twice, and more sectors than the header claims.
+fn list_fat_sector(id: u32, listed: &mut [bool], fat_sectors: &mut Vec<u32>, fat_count: usize) -> Result<(), Error> {
+    if id == FREESECT {
+        return Ok(());
+    }
+    let seen = listed.get_mut(id as usize).ok_or(Error::Truncated)?;
+    if *seen {
+        return Err(Error::BadHeader("the container lists a FAT sector twice"));
+    }
+    *seen = true;
+    if fat_sectors.len() >= fat_count {
+        return Err(Error::BadHeader("the container lists more FAT sectors than it claims"));
+    }
+    fat_sectors.push(id);
+    Ok(())
+}
+
+/// The most sectors a directory of [`MAX_ENTRIES`] 128-byte entries spans.
+pub(crate) fn dir_sectors_max(sector: usize) -> usize {
+    (MAX_ENTRIES * 128).div_ceil(sector)
+}
+
+/// Copies a stream of `size` bytes from its chain of `unit`-byte sectors: exactly the
+/// sectors the size needs, and of the last only the bytes it declares. A chain that ends
+/// before them is [`Error::Truncated`]; one that goes on past them is refused as well. An
+/// empty stream reads nothing, wherever its chain claims to start.
+pub(crate) fn copy_chain<'d>(first: u32, size: usize, unit: usize, next_of: impl Fn(u32) -> Option<u32>, sector_of: impl Fn(u32) -> Option<&'d [u8]>) -> Result<Vec<u8>, Error> {
+    let mut out = Vec::with_capacity(size);
+    let mut next = first;
+    let mut visited = std::collections::HashSet::new();
+    while out.len() < size {
+        if next == ENDOFCHAIN || next == FREESECT {
+            return Err(Error::Truncated);
+        }
+        if !visited.insert(next) || visited.len() > MAX_CHAIN {
+            return Err(Error::ChainCycle);
+        }
+        let bytes = sector_of(next).ok_or(Error::Truncated)?;
+        let take = (size - out.len()).min(unit);
+        out.extend_from_slice(bytes.get(..take).ok_or(Error::Truncated)?);
+        next = next_of(next).ok_or(Error::Truncated)?;
+    }
+    if size > 0 && next != ENDOFCHAIN && next != FREESECT {
+        return Err(Error::ChainTooLong);
+    }
+    Ok(out)
+}
+
 /// Reads a FAT chain of whole sectors into `out`, cycle-guarded and bounded. An empty
 /// chain starts at ENDOFCHAIN (or FREESECT, for a stream that holds nothing).
-fn read_chain(data: &[u8], fat: &[u32], first: u32, sector: usize, out: &mut Vec<u8>, max_sectors: usize) -> Result<(), Error> {
+pub(crate) fn read_chain(data: &[u8], fat: &[u32], first: u32, sector: usize, out: &mut Vec<u8>, max_sectors: usize) -> Result<(), Error> {
     let mut next = first;
     let mut visited = std::collections::HashSet::new();
     while next != ENDOFCHAIN && next != FREESECT {
-        if !visited.insert(next) || visited.len() > MAX_CHAIN || out.len() / sector >= max_sectors {
+        if !visited.insert(next) || visited.len() > MAX_CHAIN {
             return Err(Error::ChainCycle);
+        }
+        if out.len() / sector >= max_sectors {
+            return Err(Error::ChainTooLong);
         }
         let start = ((next as usize).checked_add(1).ok_or(Error::Truncated)?).checked_mul(sector).ok_or(Error::Truncated)?;
         let bytes = data.get(start..start.checked_add(sector).ok_or(Error::Truncated)?).ok_or(Error::Truncated)?;

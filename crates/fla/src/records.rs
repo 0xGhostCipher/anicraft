@@ -18,9 +18,26 @@ pub struct Tag {
     pub name: String,
 }
 
-/// Scans a stream's bytes for record names, in order.
-pub fn scan_tags(data: &[u8]) -> Vec<Tag> {
-    let mut out = Vec::new();
+/// The most tags one scan keeps: far more than any corpus stream holds (ten at most), so a
+/// stream of nothing but name-shaped bytes can't make the microscope hold millions.
+pub const MAX_TAGS: usize = 1 << 16;
+
+/// A scan's record names, and whether it saw the whole stream.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Scan {
+    pub tags: Vec<Tag>,
+    /// False when the scan stopped at its budget: `tags` are the stream's first ones only.
+    pub complete: bool,
+}
+
+/// Scans a stream's bytes for record names, in order, keeping at most [`MAX_TAGS`].
+pub fn scan_tags(data: &[u8]) -> Scan {
+    scan_tags_max(data, MAX_TAGS)
+}
+
+/// Scans a stream's bytes for record names, in order, keeping at most `max`.
+pub fn scan_tags_max(data: &[u8], max: usize) -> Scan {
+    let mut tags = Vec::new();
     let mut i = 0usize;
     while i + 2 <= data.len() {
         let len = u16::from_le_bytes([data[i], data[i + 1]]) as usize;
@@ -29,14 +46,17 @@ pub fn scan_tags(data: &[u8]) -> Vec<Tag> {
             // A name field starts a record only if it is the stream's usual `C`-prefixed
             // class shape; binary data happens to match occasionally, so require it.
             if name.starts_with('C') && name.chars().nth(1).is_some_and(|c| c.is_ascii_uppercase()) {
-                out.push(Tag { offset: i, name });
+                if tags.len() >= max {
+                    return Scan { tags, complete: false };
+                }
+                tags.push(Tag { offset: i, name });
                 i += 2 + len;
                 continue;
             }
         }
         i += 1;
     }
-    out
+    Scan { tags, complete: true }
 }
 
 /// The 5-byte prologue the library-item streams begin with (`01 FF FF 01 00`).
