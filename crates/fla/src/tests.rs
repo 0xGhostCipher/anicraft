@@ -294,7 +294,7 @@ fn stream_names_with_spaces_and_digits_round_trip() {
 /// A minimal legacy document's `Contents`: the version byte, then the `CDocumentPage`
 /// record — the page's stream name, then the scene's label — all in the observed record
 /// encoding (`ff fe ff`-marked UTF-16 strings).
-fn synthetic_contents() -> Vec<u8> {
+pub(crate) fn synthetic_contents() -> Vec<u8> {
     let utf16 = |s: &str| -> Vec<u8> { s.encode_utf16().flat_map(|c| c.to_le_bytes()).collect() };
     let mut c = vec![0x3F, 0x01, 0x00, 0x00, 0x00];
     c.extend_from_slice(&[0xFF, 0xFF, 0x01, 0x00]); // the record stream's marker
@@ -480,7 +480,7 @@ fn record_body(record: &[u8]) -> Vec<u8> {
 }
 
 /// An item stream of one layer with one keyframe whose raw artwork is `body`.
-fn one_frame_stream(body: &[u8]) -> Vec<u8> {
+pub(crate) fn one_frame_stream(body: &[u8]) -> Vec<u8> {
     let mut w = Ar::new();
     w.page(|w| {
         w.layer("artwork", 0, None, |w| {
@@ -702,16 +702,16 @@ fn a_shape_record_cut_short_anywhere_never_panics_and_never_half_draws() {
 /// Writes an item stream: the `01` byte, then objects the way the format numbers them (classes
 /// and objects share one count from 1; a new class is declared by name, a known one referenced
 /// as `0x8000 | n`, an object written before as `n`).
-struct Ar {
-    out: Vec<u8>,
+pub(crate) struct Ar {
+    pub(crate) out: Vec<u8>,
     classes: Vec<(&'static str, u16)>,
-    count: u16,
+    pub(crate) count: u16,
 }
 
 /// What a keyframe record carries besides its artwork and objects.
 #[derive(Clone, Default)]
-struct FrameSpec {
-    duration: u16,
+pub(crate) struct FrameSpec {
+    pub(crate) duration: u16,
     /// 0 none, 1 classic, 2 shape.
     tween: u8,
     ease: i16,
@@ -733,13 +733,13 @@ struct FrameSpec {
 
 /// A symbol instance as written.
 #[derive(Clone)]
-struct InstSpec {
-    class: &'static str,
+pub(crate) struct InstSpec {
+    pub(crate) class: &'static str,
     item: u16,
     matrix: [i32; 6],
     /// The transformation point placed on the stage, in twips.
     point: (i32, i32),
-    first_frame: u16,
+    pub(crate) first_frame: u16,
     loop_mode: u16,
     /// (style, A mul, A add, R mul, R add, G mul, G add, B mul, B add, percent, tint RGBA)
     color: (u8, [i16; 8], i16, [u8; 4]),
@@ -766,16 +766,16 @@ impl Default for InstSpec {
 }
 
 impl Ar {
-    fn new() -> Ar {
+    pub(crate) fn new() -> Ar {
         Ar { out: vec![0x01], classes: Vec::new(), count: 1 }
     }
-    fn u16(&mut self, v: u16) {
+    pub(crate) fn u16(&mut self, v: u16) {
         self.out.extend_from_slice(&v.to_le_bytes());
     }
-    fn i32(&mut self, v: i32) {
+    pub(crate) fn i32(&mut self, v: i32) {
         self.out.extend_from_slice(&v.to_le_bytes());
     }
-    fn string(&mut self, s: &str) {
+    pub(crate) fn string(&mut self, s: &str) {
         let units: Vec<u16> = s.encode_utf16().collect();
         self.out.extend_from_slice(&[0xFF, 0xFE, 0xFF]);
         if units.len() < 0xFF {
@@ -789,7 +789,7 @@ impl Ar {
         }
     }
     /// An object's tag; returns the object's number.
-    fn tag(&mut self, class: &'static str) -> u16 {
+    pub(crate) fn tag(&mut self, class: &'static str) -> u16 {
         if let Some(&(_, n)) = self.classes.iter().find(|(c, _)| *c == class) {
             self.u16(0x8000 | n);
         } else {
@@ -803,7 +803,7 @@ impl Ar {
         self.count - 1
     }
     /// A `CPic*` object's head, its children, then its base fields.
-    fn object(&mut self, class: &'static str, flag: u8, point: Option<(i32, i32)>, word: u16, kind: u8, children: impl FnOnce(&mut Ar)) -> u16 {
+    pub(crate) fn object(&mut self, class: &'static str, flag: u8, point: Option<(i32, i32)>, word: u16, kind: u8, children: impl FnOnce(&mut Ar)) -> u16 {
         let n = self.tag(class);
         self.out.extend_from_slice(&[0x04, flag]);
         children(self);
@@ -815,14 +815,14 @@ impl Ar {
         self.out.push(kind);
         n
     }
-    fn page(&mut self, layers: impl FnOnce(&mut Ar)) {
+    pub(crate) fn page(&mut self, layers: impl FnOnce(&mut Ar)) {
         self.object("CPicPage", 0, None, 0, 0x07, layers);
         self.out.extend_from_slice(&[0x02, 0x00, 0x01, 0x00, 0, 0, 0, 0]);
         self.i32(0); // no ruler guides
     }
     /// A layer; `parent` is the layer it sits under, written in place (as the first child of a
     /// folder has it).
-    fn layer(&mut self, name: &str, kind: u8, parent: Option<Parent>, frames: impl FnOnce(&mut Ar)) -> u16 {
+    pub(crate) fn layer(&mut self, name: &str, kind: u8, parent: Option<Parent>, frames: impl FnOnce(&mut Ar)) -> u16 {
         let n = self.object("CPicLayer", 0, None, 0, 0x0B, frames);
         self.layer_fields(name, kind, parent);
         n
@@ -845,7 +845,7 @@ impl Ar {
         self.out.extend_from_slice(&[0x01, 0x00]);
     }
     /// A keyframe: its objects, its raw artwork (a shape body), then its fields.
-    fn frame(&mut self, body: &[u8], spec: &FrameSpec, objects: impl FnOnce(&mut Ar)) {
+    pub(crate) fn frame(&mut self, body: &[u8], spec: &FrameSpec, objects: impl FnOnce(&mut Ar)) {
         self.object("CPicFrame", 0, None, 0, 0x03, objects);
         if body.is_empty() {
             self.empty_shape();
@@ -910,7 +910,7 @@ impl Ar {
         }
     }
     /// A shape body without edges: the identity matrix, no styles.
-    fn empty_shape(&mut self) {
+    pub(crate) fn empty_shape(&mut self) {
         for v in [65536, 0, 0, 65536, 0, 0] {
             self.i32(v);
         }
@@ -920,7 +920,7 @@ impl Ar {
         self.u16(0);
         self.out.push(0x00);
     }
-    fn instance(&mut self, spec: &InstSpec) {
+    pub(crate) fn instance(&mut self, spec: &InstSpec) {
         self.object(spec.class, spec.flag, Some(spec.point), 0, 0x13, |_| {});
         for v in spec.matrix {
             self.i32(v);
@@ -954,13 +954,13 @@ impl Ar {
     }
 }
 
-enum Parent {
+pub(crate) enum Parent {
     /// The parent layer, written in place.
     Inline(&'static str, u8),
 }
 
 /// The rectangle's body (from `synthetic_shape_record`).
-fn rectangle_body() -> Vec<u8> {
+pub(crate) fn rectangle_body() -> Vec<u8> {
     record_body(&synthetic_shape_record())
 }
 
@@ -1048,7 +1048,7 @@ fn with_sprite_extras(page: Vec<u8>) -> Vec<u8> {
     out
 }
 
-fn scene(doc: &anicraft_doc::Document) -> &anicraft_doc::Timeline {
+pub(crate) fn scene(doc: &anicraft_doc::Document) -> &anicraft_doc::Timeline {
     &doc.scenes[0].timeline
 }
 

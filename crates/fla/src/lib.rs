@@ -32,6 +32,8 @@ pub mod text;
 #[cfg(test)]
 mod tests;
 #[cfg(test)]
+mod tests_archive;
+#[cfg(test)]
 mod tests_bounds;
 #[cfg(test)]
 mod text_tests;

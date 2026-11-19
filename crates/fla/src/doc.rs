@@ -50,6 +50,10 @@ const MAX_NAME: usize = 64;
 const MAX_FRAME: u32 = 100_000;
 /// Deepest group nesting kept.
 const MAX_GROUP_DEPTH: usize = 32;
+/// Most objects one document's mapping converts. An object can be used more than once (a
+/// group listed twice, a group in a group listed twice, …), each use converted where it is:
+/// the total is capped so a few objects can't stand for exponentially many.
+const MAX_CONVERTED: usize = 1_000_000;
 
 /// A scene as the document lists it: its page stream's name and the scene's label.
 struct Page {
@@ -85,6 +89,8 @@ struct Ctx<'a> {
     faces: &'a mut Faces,
     /// The language frame scripts are written in.
     language: Language,
+    /// Objects the document's mapping may still convert ([`MAX_CONVERTED`]).
+    left: &'a mut usize,
 }
 
 /// Imports a legacy `.fla` into the AniCraft model.
@@ -132,10 +138,11 @@ pub fn import(data: &[u8]) -> Result<(Document, Report), ImportError> {
     }
     let fonts = Fonts::get();
     let mut faces = Faces::new();
+    let mut left = MAX_CONVERTED;
     for (item, &id) in items.iter().zip(&ids) {
         let timeline = match file.stream(&item.stream) {
             Ok(bytes) => {
-                let mut ctx = Ctx { doc: &mut doc, report: &mut report, symbols: &symbols, bitmaps: &bitmaps, sounds: &sounds, fonts, faces: &mut faces, language };
+                let mut ctx = Ctx { doc: &mut doc, report: &mut report, symbols: &symbols, bitmaps: &bitmaps, sounds: &sounds, fonts, faces: &mut faces, language, left: &mut left };
                 library_timeline(&bytes, &item.label, &mut ctx)
             }
             Err(_) => {
@@ -157,7 +164,7 @@ pub fn import(data: &[u8]) -> Result<(Document, Report), ImportError> {
         match file.stream(&page.stream) {
             Ok(bytes) => match archive::parse(&bytes) {
                 Ok(graph) => {
-                    let mut ctx = Ctx { doc: &mut doc, report: &mut report, symbols: &symbols, bitmaps: &bitmaps, sounds: &sounds, fonts, faces: &mut faces, language };
+                    let mut ctx = Ctx { doc: &mut doc, report: &mut report, symbols: &symbols, bitmaps: &bitmaps, sounds: &sounds, fonts, faces: &mut faces, language, left: &mut left };
                     timeline = build_timeline(&graph, &mut ctx);
                 }
                 Err(_) => {
@@ -399,8 +406,9 @@ fn keyframe(graph: &Graph, frame: &archive::FrameRec, start: u32, duration: u32,
             }
         }
     }
+    let mut groups = Vec::new();
     for &e in &frame.elements {
-        element(graph, e, ctx, &mut elements, 0);
+        element(graph, e, ctx, &mut elements, &mut groups);
     }
     k.elements = elements;
     k
@@ -531,8 +539,14 @@ fn curve(anchors: &[[f64; 6]], report: &mut Report) -> Option<Easing> {
     })
 }
 
-/// The AniCraft elements for one decoded object, pushed bottom-first.
-fn element(graph: &Graph, n: usize, ctx: &mut Ctx, out: &mut Vec<Arc<Element>>, depth: usize) {
+/// The AniCraft elements for one decoded object, pushed bottom-first. `groups` are the groups
+/// being converted around it, outermost first.
+fn element(graph: &Graph, n: usize, ctx: &mut Ctx, out: &mut Vec<Arc<Element>>, groups: &mut Vec<usize>) {
+    let Some(left) = ctx.left.checked_sub(1) else {
+        ctx.report.skip("objects past a million in one document (left out)");
+        return;
+    };
+    *ctx.left = left;
     match graph.node(n) {
         Some(Node::Instance(inst)) => {
             if let Some(e) = instance(inst, ctx) {
@@ -565,7 +579,12 @@ fn element(graph: &Graph, n: usize, ctx: &mut Ctx, out: &mut Vec<Arc<Element>>, 
                 }
                 return;
             }
-            if depth >= MAX_GROUP_DEPTH {
+            // A member that is the group itself, or a group around it: a loop, not artwork.
+            if groups.contains(&n) {
+                ctx.report.skip("groups that contain themselves (left out)");
+                return;
+            }
+            if groups.len() >= MAX_GROUP_DEPTH {
                 ctx.report.skip("groups nested more than 32 deep");
                 return;
             }
@@ -575,9 +594,11 @@ fn element(graph: &Graph, n: usize, ctx: &mut Ctx, out: &mut Vec<Arc<Element>>, 
             if let Some(record) = &s.record {
                 push_shapes(record, true, ctx, &mut members);
             }
+            groups.push(n);
             for &m in &s.members {
-                element(graph, m, ctx, &mut members, depth + 1);
+                element(graph, m, ctx, &mut members, groups);
             }
+            groups.pop();
             if !members.is_empty() {
                 let layer = LayerId(ctx.doc.alloc_id());
                 let id = ElementId(ctx.doc.alloc_id());
@@ -721,13 +742,15 @@ pub fn stage(contents: &[u8]) -> Option<Stage> {
     let (left, right, top, bottom) = (i32_at(74)?, i32_at(70)?, i32_at(66)?, i32_at(62)?);
     let fps = i32_at(13)? as f32 / 65536.0;
     let bg = contents.get(at.checked_sub(21)?..at.checked_sub(17)?)?;
-    let (w, h) = ((right - left) / 20, (bottom - top) / 20);
-    let edge = 1..=anicraft_doc::MAX_STAGE_EDGE as i32;
+    // In i64: edges a whole i32 range apart don't overflow.
+    let (w, h) = ((i64::from(right) - i64::from(left)) / 20, (i64::from(bottom) - i64::from(top)) / 20);
+    let edge = 1..=i64::from(anicraft_doc::MAX_STAGE_EDGE);
     if !edge.contains(&w) || !edge.contains(&h) || !(1.0..=120.0).contains(&fps) {
         return None;
     }
+    let (w, h) = (u32::try_from(w).ok()?, u32::try_from(h).ok()?);
     let c = |i: usize| bg.get(i).map_or(1.0, |v| *v as f32 / 255.0);
-    Some(Stage { width: w as u32, height: h as u32, fps, background: Rgba::new(c(0), c(1), c(2), 1.0) })
+    Some(Stage { width: w, height: h, fps, background: Rgba::new(c(0), c(1), c(2), 1.0) })
 }
 
 /// The fallback for a library stream whose timeline doesn't decode: its first `CPicShape`
@@ -784,7 +807,7 @@ fn shapes(bytes: &[u8], report: &mut Report) -> Vec<Element> {
 fn pages(contents: &[u8]) -> Result<Vec<Page>, ImportError> {
     let mut out = Vec::new();
     let mut from = 0usize;
-    while let Some(at) = find(&contents[from..], b"CDocumentPage") {
+    while let Some(at) = contents.get(from..).and_then(|rest| find(rest, b"CDocumentPage")) {
         let at = from + at;
         let Some(name_end) = at.checked_add(b"CDocumentPage".len()) else { break };
         // The page record: a `17` marker and a byte of attributes, then the page's
@@ -817,11 +840,12 @@ fn pages(contents: &[u8]) -> Result<Vec<Page>, ImportError> {
         }
         // The scene label: the marker string right after the stream name.
         let after_name = i;
-        let label = rest.get(after_name..)
+        let (label, end) = rest.get(after_name..)
             .and_then(|tail| (0..tail.len().saturating_sub(4)).find_map(|j| after_marker(tail, j)))
             .ok_or(ImportError::BadStructure("a page record has no scene name"))?;
-        out.push(Page { stream, label: label.clone() });
-        from = name_end + after_name + 4 + 2 * label.len();
+        out.push(Page { stream, label });
+        // On from where the label ends as stored (its UTF-16 units, not its UTF-8 length).
+        from = name_end + after_name + end;
     }
     Ok(out)
 }
@@ -844,17 +868,17 @@ pub fn library_items(contents: &[u8]) -> Vec<LibraryItem> {
     let mut i = 0usize;
     while i + STREAM_NAME_PREFIX.len() + 2 <= contents.len() {
         if contents.get(i..i + 2) == Some(&STREAM_NAME_PREFIX[..]) && contents.get(i + 2) == Some(&0x17)
-            && let Some(name) = marked_string(contents, i + 2, 0x17) {
+            && let Some((name, from)) = marked_string(contents, i + 2, 0x17) {
                 // The label follows within the same record: take the first string ahead.
-                let from = i + 4 + 2 * name.len();
                 let to = (from + 256).min(contents.len());
+                let mut found = false;
                 for j in from..to {
-                    if let Some(label) = after_marker(contents, j) {
-                        // `j` is the marker's last byte; the length, then the UTF-16 units.
-                        let end = j + 2 + 2 * label.encode_utf16().count();
+                    // `j` is the marker's last byte; the length, then the UTF-16 units.
+                    if let Some((label, end)) = after_marker(contents, j) {
                         let id = contents.get(end..end + 4).and_then(|b| b.try_into().ok()).map(u32::from_le_bytes);
                         let kind = contents.get(end + 4).copied();
                         i = end;
+                        found = true;
                         if let (Some(id), Some(kind)) = (id, kind)
                             && (name.starts_with("S ") || name.starts_with("Symbol "))
                         {
@@ -863,6 +887,10 @@ pub fn library_items(contents: &[u8]) -> Vec<LibraryItem> {
                         }
                         break;
                     }
+                }
+                // A name with no label ahead is no entry: on past it.
+                if !found {
+                    i += 1;
                 }
                 continue;
             }
@@ -881,9 +909,9 @@ fn layer_names(bytes: &[u8]) -> Vec<String> {
     while i + LAYER_ANCHOR.len() + 4 <= bytes.len() {
         if bytes[i..i + LAYER_ANCHOR.len()] == LAYER_ANCHOR {
             // The marker's last byte sits two past the anchor's end.
-            if let Some(name) = after_marker(bytes, i + LAYER_ANCHOR.len() + 2) {
+            if let Some((name, end)) = after_marker(bytes, i + LAYER_ANCHOR.len() + 2) {
                 out.push(name);
-                i += LAYER_ANCHOR.len() + 2 + 4 + 2 * out.last().map_or(0, |s: &String| s.len());
+                i = end;
                 continue;
             }
         }
@@ -892,25 +920,29 @@ fn layer_names(bytes: &[u8]) -> Vec<String> {
     out
 }
 
-/// A string behind the `ff fe ff` marker at `at`: a one-byte length, then UTF-16.
-/// `at` points at the marker's first byte; returns the text when it is plausible.
-fn after_marker(data: &[u8], at: usize) -> Option<String> {
+/// A string behind the `ff fe ff` marker whose last byte is at `at`: a one-byte length, then
+/// UTF-16. Returns the text when it is plausible, and where it ends (see [`marked_string`]).
+fn after_marker(data: &[u8], at: usize) -> Option<(String, usize)> {
     marked_string(data, at, 0xFF)
 }
 
 /// A string whose 3rd marker byte is `third` (`ff fe ff` or `01 80 17`): `data[at]` is
-/// the third marker byte, `data[at + 1]` the length, then UTF-16.
-fn marked_string(data: &[u8], at: usize, third: u8) -> Option<String> {
+/// the third marker byte, `data[at + 1]` the length, then UTF-16. Returns the text and the
+/// offset just past its units as stored (not `at` plus the text's UTF-8 length, which differs
+/// outside ASCII).
+fn marked_string(data: &[u8], at: usize, third: u8) -> Option<(String, usize)> {
     if data.get(at) != Some(&third) {
         return None;
     }
-    let len = *data.get(at + 1)? as usize;
-    if len == 0 || len > MAX_NAME || at + 2 + 2 * len > data.len() {
+    let len = *data.get(at.checked_add(1)?)? as usize;
+    if len == 0 || len > MAX_NAME {
         return None;
     }
-    let chars: Vec<u16> = data[at + 2..at + 2 + 2 * len].as_chunks::<2>().0.iter().map(|c| u16::from_le_bytes([c[0], c[1]])).collect();
+    let start = at.checked_add(2)?;
+    let end = start.checked_add(2 * len)?;
+    let chars: Vec<u16> = data.get(start..end)?.as_chunks::<2>().0.iter().map(|c| u16::from_le_bytes(*c)).collect();
     let text = String::from_utf16(&chars).ok()?;
-    (text.chars().all(|c| !c.is_control())).then_some(text)
+    (text.chars().all(|c| !c.is_control())).then_some((text, end))
 }
 
 /// Finds `needle` in `data` (small, bounded scans; the streams are capped by the reader).
