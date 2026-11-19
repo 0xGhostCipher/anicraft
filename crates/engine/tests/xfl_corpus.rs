@@ -373,3 +373,39 @@ fn file_open_names_the_sounds_and_videos_that_did_not_come_across() {
     let got = s.execute("file.open", &json!({"path": corpus().join("video").display().to_string(), "confirm": true})).unwrap();
     assert_eq!(got["named"]["videos AniCraft can't play"], json!(["intro.flv: FLV, On2 VP6, 4.5 s", "gone.mp4: its file is missing, 1.0 s"]));
 }
+
+/// ADR 0009: an import is called by the Animate file it came from, while Save still asks for a
+/// new name, first suggesting an `.anicraft` of the same name beside the original, whether the
+/// XFL folder, the `.xfl` in it or a `.fla` was opened. Saving makes it the `.anicraft` file.
+#[test]
+fn an_import_keeps_its_animate_name_and_save_suggests_one_beside_it() {
+    let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join("xfl-corpus-import-name");
+    std::fs::create_dir_all(&dir).unwrap();
+    let folder = corpus().join("primitives");
+    let fla = dir.join("Walk Cycle.v2.FLA");
+    std::fs::write(&fla, pack::pack(&pack::package(&folder), &pack::VARIANTS[0])).unwrap();
+    let beside_folder = corpus().join("primitives.anicraft");
+    for (opened, suggested) in [(folder.clone(), beside_folder.clone()), (folder.join("primitives.xfl"), beside_folder), (fla.clone(), dir.join("Walk Cycle.v2.anicraft"))] {
+        let mut s = Session::default();
+        let info = s.execute("file.open", &json!({"path": opened.display().to_string()})).unwrap_or_else(|e| panic!("{}: {e}", opened.display()));
+        assert_eq!(s.imported.as_deref(), Some(opened.as_path()), "the document is called by what was opened");
+        assert!(s.path.is_none(), "{}: still untitled, so Save never writes over the Animate file", opened.display());
+        assert!(s.execute("file.save", &json!({})).is_err(), "Save asks for a name");
+        assert_eq!(info["imported"], json!(opened.display().to_string()));
+        assert_eq!(info["save_as"], json!(suggested.display().to_string()), "{}", opened.display());
+        assert_eq!(anicraft_engine::import_save_path(&opened), suggested);
+        // A new document is no longer the import.
+        let mut t = Session::default();
+        t.execute("file.open", &json!({"path": opened.display().to_string()})).unwrap();
+        t.execute("file.new", &json!({"confirm": true})).unwrap();
+        assert!(t.imported.is_none() && t.info()["imported"].is_null());
+    }
+    // Saved, it is the .anicraft document: the import's name and suggestion are gone.
+    let mut s = Session::default();
+    s.execute("file.open", &json!({"path": fla.display().to_string()})).unwrap();
+    let saved = dir.join("Walk Cycle.v2.anicraft");
+    s.execute("file.save", &json!({"path": saved.display().to_string(), "confirm": true})).unwrap();
+    assert_eq!((s.path.as_deref(), s.imported.as_deref()), (Some(saved.as_path()), None));
+    assert!(s.info()["save_as"].is_null());
+    assert!(fla.is_file(), "the Animate file is untouched");
+}

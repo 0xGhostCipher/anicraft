@@ -183,7 +183,7 @@ ActionScript 1.0 and 2.0, and scripts placed on instances. See [Interactivity](i
 ### Files, Test Movie and publishing
 
 * AniCraft saves `.anicraft` documents, an open, documented format. It **opens** `.fla`, `.xfl`
-  and XFL folders, as new, untitled documents, but can't save back to them. See
+  and XFL folders, as new documents named after the file, but can't save back to them. See
   [Opening Animate files](opening-animate-files.md).
 * There is **no SWF** export. For the web, **Export HTML Canvas** writes one page that plays the
   movie, buttons and scripts in any browser. Video (with your own ffmpeg), GIF, animated PNG and

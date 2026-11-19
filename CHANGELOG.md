@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+* **An imported Animate file keeps its name** (ADR 0009 note): a `.fla`, `.xfl` or XFL folder
+  opens with its own name on its tab and in the window title instead of "Untitled", marked as
+  imported (a dim "Imported" on the tab, "(imported)" in the title, where it came from in the
+  tooltip). Saving still never writes over it: Save asks for a new name, suggesting an
+  `.anicraft` of the same name beside the original, and from then on the tab shows that file.
+  Opening the same Animate file again shows its tab. Save dialogs now open in the suggested
+  file's folder.
+
 * **Themes of your own** (#340, ADR 0117, M8): a theme is a small JSON file that names colours
   for the interface's roles, kept in `themes` in the settings folder (`data/themes` in a
   portable copy).

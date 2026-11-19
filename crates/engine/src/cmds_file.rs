@@ -174,6 +174,20 @@ fn new_sample(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({"frames": s.frame_count()}))
 }
 
+/// Where Save first suggests keeping a document imported from `source` (ADR 0009): an
+/// `.anicraft` file of the same name beside the Animate file, so `walk.fla` suggests
+/// `walk.anicraft` in its folder. An XFL document is a folder: whether the folder or the `.xfl`
+/// file in it was opened, the suggestion goes beside the folder, never inside it.
+pub fn import_save_path(source: &std::path::Path) -> PathBuf {
+    let xfl_file = source.extension().is_some_and(|e| e.eq_ignore_ascii_case("xfl"))
+        && source.parent().is_some_and(|d| crate::vfs::is_file(&d.join("DOMDocument.xml")));
+    let package = if xfl_file { source.parent().unwrap_or(source) } else { source };
+    // A folder's whole name ("walk.v2" stays "walk.v2"); a file's without its extension.
+    let name = if crate::vfs::is_dir(package) { package.file_name() } else { package.file_stem() };
+    let name = name.map_or_else(|| "animation".to_string(), |n| n.to_string_lossy().into_owned());
+    package.with_file_name(format!("{name}.anicraft"))
+}
+
 /// Whether `path` is an Animate document: a `.fla` archive, an `.xfl` file or an XFL folder.
 pub fn is_animate(path: &std::path::Path) -> bool {
     let ext = path.extension().and_then(|e| e.to_str()).map(str::to_ascii_lowercase);
@@ -185,8 +199,9 @@ pub(crate) fn open(s: &mut Session, p: &Value) -> Result<Value> {
     let unsaved = opt_bool(p, "unsaved")?.unwrap_or(false);
     let untitled = opt_bool(p, "untitled")?.unwrap_or(false);
     if is_animate(&path) {
-        // Imported, not adopted: the document is untitled, so Save asks for a new .anicraft
-        // name and never writes over the Animate file.
+        // Imported, not adopted: the document has no file name, so Save asks for a new
+        // .anicraft name and never writes over the Animate file. It is still called by the
+        // Animate file's name, and Save suggests one beside it (ADR 0009).
         let fla = path.extension().is_some_and(|e| e.eq_ignore_ascii_case("fla")) && crate::vfs::is_file(&path);
         let imported = if fla {
             // Through `vfs`, so an archive the browser handed over opens too (ADR 0036).
@@ -204,10 +219,11 @@ pub(crate) fn open(s: &mut Session, p: &Value) -> Result<Value> {
         // as it was in Animate (ADR 0042).
         let merged = crate::merge::merge_document(&mut doc);
         s.replace_document(doc, None);
+        s.imported = Some(path.clone());
         // Open Recent reopens the Animate file (ADR 0059).
         s.recent.add(&path);
+        // `imported` and `save_as` come with the session's info.
         let mut info = s.info();
-        info["imported"] = json!(path.display().to_string());
         info["report"] = json!(report.summary());
         info["skipped"] = json!(report.skipped);
         info["kept"] = json!(report.kept);
@@ -235,6 +251,8 @@ fn save(s: &mut Session, p: &Value) -> Result<Value> {
     };
     format::save(&s.doc, &path)?;
     s.path = Some(path.clone());
+    // Saved: the document is the .anicraft file now, not the import.
+    s.imported = None;
     s.mark_saved();
     s.recent.add(&path);
     Ok(json!({"saved": path.display().to_string()}))
