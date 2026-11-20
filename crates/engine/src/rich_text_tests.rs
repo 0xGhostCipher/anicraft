@@ -227,3 +227,47 @@ fn every_export_draws_each_colour_and_svg_keeps_the_link() {
     let html = anicraft_render::html::to_html(&s.doc, &anicraft_render::html::HtmlOptions::default()).unwrap().html;
     assert!(html.contains("\"pp\":"), "field pieces");
 }
+
+#[test]
+fn svg_links_are_sanitized_and_round_trip_without_changing_the_drawing() {
+    // Exercise the export boundary without installed fonts or text shaping.
+    let mut doc = anicraft_doc::Document::default();
+    doc.stage.width = 32;
+    doc.stage.height = 24;
+    let mut s = Session::new(doc);
+    run(&mut s, "draw.rect", json!({"x": 4, "y": 4, "w": 12, "h": 8, "fill": "#336699", "stroke": null}));
+    let expected = anicraft_render::render_frame(&s.doc, 0, 1.0).unwrap().to_rgba8();
+    assert!(expected.as_chunks::<4>().0.iter().any(|p| p == &[0x33, 0x66, 0x99, 0xff]), "the fixture draws a coloured rectangle");
+    let mut dl = anicraft_doc::evaluate(&s.doc, 0);
+    assert_eq!(dl.items.len(), 1);
+    for (index, (url, href)) in [
+        (" \thttps://example.org/?a=1&b=\"<>'\r\n\u{7f}ok ", Some("https://example.org/?a=1&b=\"<>'ok")),
+        ("java\tscript:alert(1)", None),
+        ("vb\rscript:msgbox(1)", None),
+        ("da\nta:text/plain,hello", None),
+    ]
+    .into_iter()
+    .enumerate() {
+        dl.links = vec![(0, url.into())];
+        let svg = anicraft_render::svg::to_svg(&dl, &s.doc.stage);
+        let root = anicraft_xml::parse(svg.as_bytes()).unwrap();
+        let anchors: Vec<_> = root.children.iter().filter(|el| el.name == "a").collect();
+        assert_eq!(anchors.len(), usize::from(href.is_some()), "{url:?}: {svg}");
+        assert_eq!(anchors.first().and_then(|el| el.attr("href")), href, "decoded href for {url:?}");
+        if let Some(anchor) = anchors.first() {
+            assert!(anchor.child("path").is_some(), "the anchor wraps the artwork");
+        }
+
+        // Use the real file-import command rather than duplicating its document mapping.
+        let path = std::env::temp_dir().join(format!("anicraft-svg-link-roundtrip-{}-{index}.svg", std::process::id()));
+        std::fs::write(&path, svg.as_bytes()).unwrap();
+        let mut back = anicraft_doc::Document::default();
+        back.stage = s.doc.stage;
+        let mut imported = Session::new(back);
+        let result = imported.execute("file.import", &json!({"path": path.display().to_string(), "x": 0, "y": 0}));
+        std::fs::remove_file(&path).unwrap();
+        result.unwrap_or_else(|e| panic!("file.import for {url:?}: {e}"));
+        let actual = anicraft_render::render_frame(&imported.doc, 0, 1.0).unwrap().to_rgba8();
+        assert_eq!(actual, expected, "link handling must preserve rendered geometry for {url:?}");
+    }
+}
