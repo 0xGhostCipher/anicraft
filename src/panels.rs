@@ -102,6 +102,10 @@ pub fn tools(app: &mut App, ui: &mut egui::Ui, flow: ToolFlow) {
 fn tool_items(app: &mut App, ui: &mut egui::Ui, area: Rect, flow: ToolFlow) {
     for tool in Tool::ALL {
         let (rect, resp) = ui.allocate_exact_size(vec2(TOOL_BUTTON, TOOL_BUTTON), Sense::click());
+        #[cfg(test)]
+        if tool == Tool::Hand {
+            ui.ctx().data_mut(|data| data.insert_temp(egui::Id::new("test_hand_tool_rect"), rect));
+        }
         let active = app.tool == tool;
         // The active tool sits on a lighter gray block with a white icon; the rest are a
         // step dimmer, so the one in hand stands out without colour.
@@ -129,6 +133,10 @@ fn tool_items(app: &mut App, ui: &mut egui::Ui, area: Rect, flow: ToolFlow) {
 {}", crate::i18n::t(tool.hint())));
         if resp.clicked() {
             app.tool = tool;
+        }
+        // #457: the Hand tool's double-click uses the same fit as View > Fit in Window.
+        if tool == Tool::Hand && resp.double_clicked() {
+            app.view.fit = true;
         }
         // Animate: double-clicking the Eraser erases everything on the stage (it asks first).
         if tool == Tool::Eraser && resp.double_clicked() {
@@ -1318,6 +1326,8 @@ fn selection_props(app: &mut App, ui: &mut egui::Ui, e: &anicraft_engine::doc::E
             } else if kind == SymbolKind::MovieClip {
                 ui.label(text(Type::Caption, trn!("Plays its {n}-frame timeline on a loop from when it appears.", "Plays its {n}-frame timeline on a loop from when it appears.", frames)));
             }
+            // What a data table drives of this instance (ADR 0118).
+            crate::data_ui::instance_section(app, ui, e.id);
         }
         if let ElementKind::Text(t) = &e.kind {
             ui.add_space(4.0);
@@ -3465,6 +3475,60 @@ pub(crate) fn library(app: &mut App, ui: &mut egui::Ui) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn double_clicking_the_hand_tool_fits_the_stage_but_a_single_click_only_selects_it() {
+        for flow in [ToolFlow::Column, ToolFlow::Row, ToolFlow::Grid] {
+            for zoom in [0.1, 8.0] {
+                let ctx = egui::Context::default();
+                let mut app = App::with_context(&ctx, anicraft_engine::Session::default(), Some(std::path::PathBuf::from("unused.png")));
+                app.view.fit = false;
+                app.view.fitted = None;
+                app.view.zoom = zoom;
+                app.view.pan = vec2(120.0, -80.0);
+                let state = app.s.state;
+                let mut time = 0.0;
+                let mut draw = |app: &mut App, events| {
+                    time += 0.05;
+                    let input = egui::RawInput {
+                        screen_rect: Some(Rect::from_min_size(egui::Pos2::ZERO, vec2(1600.0, 1400.0))),
+                        time: Some(time),
+                        events,
+                        ..Default::default()
+                    };
+                    ctx.run_ui(input, |ui| tools(app, ui, flow)).textures_delta.clear();
+                };
+                draw(&mut app, Vec::new());
+                let rect = ctx.data(|data| data.get_temp::<Rect>(egui::Id::new("test_hand_tool_rect"))).expect("Hand tool drawn");
+                let at = rect.center();
+                let event = |pressed| vec![
+                    egui::Event::PointerMoved(at),
+                    egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE },
+                ];
+                draw(&mut app, event(true));
+                draw(&mut app, event(false));
+                assert_eq!(app.tool, Tool::Hand);
+                assert!(!app.view.fit, "a single click must not fit the view");
+                assert_eq!(app.view.zoom, zoom);
+                assert_eq!(app.view.pan, vec2(120.0, -80.0));
+                draw(&mut app, event(true));
+                draw(&mut app, event(false));
+                assert!(app.view.fit, "double-click must request Fit in Window ({flow:?})");
+                for _ in 0..3 {
+                    let input = egui::RawInput {
+                        screen_rect: Some(Rect::from_min_size(egui::Pos2::ZERO, vec2(1600.0, 1400.0))),
+                        ..Default::default()
+                    };
+                    ctx.run_ui(input, |ui| app.frame(ui)).textures_delta.clear();
+                }
+                assert_eq!(app.view.pan, egui::Vec2::ZERO);
+                let canvas = app.stage_cache.canvas;
+                let size = vec2(app.s.doc.stage.width as f32, app.s.doc.stage.height as f32);
+                assert!(size.x * app.view.zoom <= canvas.width() && size.y * app.view.zoom <= canvas.height());
+                assert_eq!(app.s.state, state, "fitting is view state, not a document edit");
+            }
+        }
+    }
 
     /// #252: the Pencil and the Line tool never fill, whatever the fill swatch says, so their
     /// Properties show no Fill row; the Pen and the shape tools still fill.

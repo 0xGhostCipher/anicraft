@@ -2,6 +2,106 @@
 
 ## Unreleased
 
+* **Fixes and hardening from the community** (M8). Thank you to everyone named here.
+  * **Double-click the Hand tool to fit the stage in the window**, as in Animate; a single click
+    still only selects the tool (#457, Wilder Ccasa).
+  * **A new oval has eight points**, one every 45°, as Animate draws it (#459, NetterSilver).
+  * **Bending an oval's edge with the Selection tool keeps its ends smooth**: the curves beside
+    the one you drag turn with it, as when a handle is dragged (#460, NetterSilver).
+  * **Animate documents**, each learned from files Animate saved (rcoenen): shape hints come
+    across (Animate writes them as `morphHintsList`, which the importer didn't read); text that
+    leaves `lineSpacing` out gets Animate's 2 px between its lines, not 0; and a dashed stroke
+    that doesn't name its gap gets Animate's 6 px, not 3.
+  * **Security: an assistant can't choose the program that makes or reads video.** Over `serve`
+    and `mcp` (the live bridge too), Export Video, Import Video and every other command refuse
+    an `ffmpeg` param: set
+    `ANICRAFT_FFMPEG` yourself. `exec` and `run` keep it. A request line over 64 MiB is answered
+    with an error instead of growing without bound (Dylan M. Taylor).
+  * **Security: XFL folders.** A reference that climbs out of the package with backslashes
+    (`..\x.xml`) is no longer read on Windows (Agapenor); only regular files are read, and never
+    more than the size cap, however large a file claims to be (Dylan M. Taylor).
+  * **Security: hostile documents stay bounded.** A file whose keyframes sit past frame 100,000
+    opens with them trimmed to the limit commands already keep (Agapenor). A library whose
+    symbols double at every level (2^32 shapes from 32 symbols) no longer hangs the stage or
+    runs out of memory: one frame, or one bounds query, visits at most a million elements and
+    draws what it reached (reported by Agapenor).
+  * **Never crash:** a scene index or SVG frame number at the top of its range is an error, not
+    an overflow; a rotation tween between huge or non-finite angles no longer hangs; `--fps` and
+    `--scale` refuse `NaN`, infinities and numbers too large instead of quietly using the
+    default (Mex, NetterSilver).
+  * **Files:** brush sets, filter presets and swatch files saved with a byte-order mark by
+    Windows editors import. A document that somehow holds a number that isn't finite still
+    saves to a file that opens again: such a number is written as 0, and a ruined transform as
+    no transform, where before it made the file unreadable (Mex, NetterSilver).
+  * **Small things put right:** a colour such as `#+1+2+3` is no longer read as a colour; a
+    script's Set Property values are clamped whenever a document loads; an object with a zero
+    x scale keeps its direction when taken apart and put back; guide headings such as "Foo",
+    "Foo", "Foo-1" get three different links (NetterSilver, Mex).
+  * **Building on Windows:** the web build and the signing script work from a folder with
+    square brackets in its name; `i18n-extract.ps1` gives back the caller's
+    `ANICRAFT_I18N_OUT`; `guide-shots.ps1` takes the document tabs picture too (Mex).
+* **From outside contributors** (M8; thank you).
+  * **Trace Bitmap and Convert to Bitmap** (by NetterSilver, #489; fixes #463). **Modify ›
+    Bitmap › Trace Bitmap…** turns a placed bitmap into filled raw shapes, one per area of
+    colour, with Animate's colour threshold, minimum area, curve fit and corner threshold. The
+    shapes are lines and quadratic curves that share their edges, so they tile without gaps and
+    merge with raw shapes they touch. **Modify › Convert to Bitmap** draws the selection into a
+    new Library bitmap and puts it in the selection's place. Both are one undo step, and
+    `modify.trace_bitmap` and `modify.convert_to_bitmap` for scripts. A trace is bounded: a
+    bitmap of up to 4096 × 4096 pixels, at most 20,000 shapes, and a picture that is all
+    speckle at a low threshold is refused in a sentence instead of using gigabytes of memory.
+    A 2048 × 2048 photo-like image traces in about 0.2 s, a 4096 × 4096 one in about 0.9 s.
+  * **Selection dots follow a gradient's detail** (by Untoldent, #404, for #295). The stipple on
+    a selected gradient fill now shows narrow bands, hard stops and a small radial centre in
+    their own contrasting colour instead of blending across them, within a fixed budget of work
+    per frame, so a screen-sized gradient costs about a fifth more than before
+    (`docs/performance.md`).
+  * **Hebrew letters draw, and `iw` means Hebrew** (by Hagai Baram, #486; ADR 0040). Builds with
+    craft-fonts embed Noto Sans Hebrew as a fallback face, so Hebrew in layer, symbol and file
+    names no longer shows as empty boxes; the legacy language code `iw` (`iw_IL`) is read as
+    `he`. The interface is not offered in Hebrew yet: right-to-left layout waits for egui, and
+    `i18n::is_rtl_code` is ready for it.
+
+* **Data-driven animation** (#416, #417, #418, ADR 0118, M6): keep the numbers behind an
+  animation in the document and let them drive it.
+  * **Data tables in the Library.** **File › Import › Import Data Table…** reads CSV, TSV or
+    JSON: the first line names the columns, cells that aren't numbers become gaps, and columns
+    with no numbers are left out (the status bar says which). A table is looked up by row
+    number, a row per frame, or by a **key column** such as an age or a time. **View Table**
+    shows every row and column. Tables are saved in the `.anicraft` file.
+  * **Bind to Data** (Modify › Data, or the Data section of a symbol instance's Properties): a
+    column drives the instance's **X**, **Y**, **Scale X**, **Scale Y**, **Rotation**, **Alpha**
+    or **the frame a graphic symbol shows**, over a span of frames. Set the frames, the rows or
+    keys the span runs between (backwards too), a scale and an offset, and **Linear** or
+    **Step** between rows; the stage follows as you change them. The stage, Test Movie and
+    every export that draws frames show the same thing.
+  * **Import Again** replaces a table's values from a revised file, and everything bound to it
+    follows with no keyframes to redo.
+  * **Bake to Keyframes** writes what the bindings show as ordinary keyframes; every frame
+    looks as it did. Use it before Lottie export, which writes keys.
+  * Headless: `data.import_table`, `data.set_table`, `data.list`, `data.get`, `data.set_cell`,
+    `data.set_key`, `data.remove`, `data.bind`, `data.unbind`, `data.bindings` and `data.bake`,
+    over the CLI and MCP; plug-ins may use all but reading a file.
+  * Not yet: bindings don't follow copy, paste or duplicate; cells aren't edited in the viewer;
+    baking inside a motion tween.
+
+* **Import Video** (#369, ADR 0116, M5): **File › Import › Import Video…** brings in MP4, MOV,
+  WebM and any other video the ffmpeg on your computer reads, for reference and rotoscoping.
+  * **Frames in the document**: the video's frames become bitmaps on a new layer from the
+    playhead, one keyframe per frame at the document's frame rate, kept together in a Library
+    folder, with the video's sound on a layer of its own in time with them. Choose a frame
+    step (2 animates on twos), the largest size, and where to start and how much to take.
+  * **Reference layer for tracing**: a locked guide layer right under the layer you are on shows
+    the video beneath what you draw as you scrub and play. The video stays a file, adds nothing to the document
+    and is never in the movie or an export. Fade it with the layer's opacity; relink a moved
+    file or remove the video in Layer Properties.
+  * **Told up front**: before anything starts, the window says how many pictures of what size
+    will come in and how much memory they take, and where a long video is cut short (2000
+    pictures or 1 GB at a time) with what to change. A progress window with **Cancel**;
+    cancelling leaves the document exactly as it was, and the whole import is one undo step.
+  * AniCraft still holds no video codec: your own ffmpeg does the decoding (the one Export
+    Video uses). Without ffmpeg, the window says how to install it.
+  * Headless: `file.import_video`, `file.video_info`, `layer.set_video`.
 * **Themes of your own** (#340, ADR 0117, M8): a theme is a small JSON file that names colours
   for the interface's roles, kept in `themes` in the settings folder (`data/themes` in a
   portable copy).
@@ -382,6 +482,7 @@
 * **Floating windows open below the menu bar**: no dialog (the Custom Ease window among them) can
   cover File, Edit and View any more.
 * **Security: safer reads and temp files.** Import to Library checks an image's size (256 MiB) before reading it, and saves, audio exports and the video soundtrack write their temporary files under unguessable names, created exclusively.
+
 * **Saved commands (command macros)** (ADR 0097, M6).
   * In the **History** panel, **Ctrl+click** steps (Shift+click a range) and choose **Save As
     Command…**: the steps come back at the end of the **Commands** menu, to run on whatever is

@@ -39,12 +39,12 @@ pub const PSEUDO: &str = "pseudo";
 /// Languages the interface can be drawn in today: written left to right, in scripts the bundled
 /// faces cover and egui lays out a letter at a time (Latin, Greek, Cyrillic). A catalog for any
 /// other locale is embedded but not offered (docs/localisation.md › Scripts and direction).
-/// Georgian is not listed here: its face is not bundled, so [`ready_codes`] adds it only when
-/// the build embedded Noto Sans Georgian from craft-fonts. Hebrew (`he`) embeds Noto Sans Hebrew
-/// when available, but remains excluded from [`ready_codes`] until egui supports bidi text layout.
+/// A regional variant (`es-mx`) is ready when its language is. Georgian is not listed here: its
+/// face is not bundled, so [`ready_codes`] adds it only when the build embedded Noto Sans
+/// Georgian from craft-fonts. Hebrew (`he`) is not offered at all yet: the build may embed Noto
+/// Sans Hebrew so Hebrew names draw, but the interface needs bidi layout in egui first.
 pub const READY: &[&str] = &[
-    "az", "bg", "bs", "ca", "cs", "da", "de", "el", "es", "et", "fi", "fr", "gl", "hr", "hu", "id", "it", "kk", "lt", "lv", "nb", "nl", "pl", "pt",
-    "pt-br", "ro", "ru", "sk", "sl", "sq", "sr", "sr-latn", "sv", "tr", "uk",
+    "az", "bg", "bs", "ca", "cs", "da", "de", "el", "es", "et", "fi", "fr", "gl", "hr", "hu", "id", "it", "kk", "lt", "lv", "nb", "nl", "pl", "pt", "pt-br", "ro", "ru", "sk", "sl", "sq", "sr", "sr-latn", "sv", "tr", "uk",
 ];
 
 /// [`READY`] plus the languages whose script needs a craft-fonts face this build embedded.
@@ -60,9 +60,11 @@ fn ready_with(georgian_face: bool) -> Vec<&'static str> {
     codes
 }
 
-/// Whether `code` names a right-to-left interface language (`ar`, `ckb`, `dv`, `fa`, `he`, `ps`,
-/// `sd`, `ug`, `ur`, `yi`, and legacy `iw` tags normalized via `normalize_code`), honoring any
-/// explicit ISO 15924 script subtag before applying language defaults.
+/// Whether `code` names a language written right to left (`ar`, `ckb`, `dv`, `fa`, `he`, `ps`,
+/// `sd`, `ug`, `ur`, `yi`, and the legacy `iw`). A script subtag (ISO 15924, in its RFC 5646
+/// place after the language and any extended-language subtags) decides before the language's
+/// default does: `ku-Arab` is, `sd-Deva` is not. Nothing lays out right to left yet (ADR 0040):
+/// this is the one place that will answer the question when egui can.
 #[cfg_attr(not(test), allow(dead_code))]
 pub fn is_rtl_code(code: &str) -> bool {
     let normalized = Languages::normalize_code(code.split(['.', '@']).next().unwrap_or(code));
@@ -78,7 +80,7 @@ pub fn is_rtl_code(code: &str) -> bool {
     matches!(base, "ar" | "ckb" | "dv" | "fa" | "he" | "ps" | "sd" | "ug" | "ur" | "yi")
 }
 
-/// Whether the active interface language uses right-to-left script direction.
+/// Whether the interface language in use is written right to left.
 #[cfg_attr(not(test), allow(dead_code))]
 pub fn is_rtl() -> bool {
     is_rtl_code(code())
@@ -99,8 +101,7 @@ struct Language {
 /// The last subtag is a region (`br`, `419`): the locale falls back to its base language.
 fn regional_base(code: &str) -> Option<&str> {
     let (base, region) = code.rsplit_once('-')?;
-    let is_region =
-        (region.len() == 2 && region.chars().all(|c| c.is_ascii_alphabetic())) || (region.len() == 3 && region.chars().all(|c| c.is_ascii_digit()));
+    let is_region = (region.len() == 2 && region.chars().all(|c| c.is_ascii_alphabetic())) || (region.len() == 3 && region.chars().all(|c| c.is_ascii_digit()));
     is_region.then_some(base)
 }
 
@@ -160,6 +161,8 @@ impl Languages {
         self.list.get(i).or(self.list.first()).unwrap_or(&ENGLISH_LANGUAGE)
     }
 
+    /// A code as catalogs are keyed: lower case, `-` between subtags, and Hebrew's legacy `iw`
+    /// (still what Java and some systems report) as `he`.
     fn normalize_code(code: &str) -> String {
         let code = code.trim().to_ascii_lowercase().replace('_', "-");
         if code == "iw" {
@@ -295,13 +298,7 @@ pub fn known(pref: &str) -> bool {
 /// pseudo-locale is listed in debug builds and while it is in use.
 pub fn offered() -> Vec<(&'static str, &'static str)> {
     let now = current();
-    LANGUAGES
-        .list
-        .iter()
-        .enumerate()
-        .filter(|(i, l)| !matches!(l.kind, Kind::Pseudo) || cfg!(debug_assertions) || *i == now)
-        .map(|(_, l)| (l.code.as_str(), l.name.as_str()))
-        .collect()
+    LANGUAGES.list.iter().enumerate().filter(|(i, l)| !matches!(l.kind, Kind::Pseudo) || cfg!(debug_assertions) || *i == now).map(|(_, l)| (l.code.as_str(), l.name.as_str())).collect()
 }
 
 /// The name of the language [`AUTO`] picks on this computer, for the picker's first entry.
@@ -357,11 +354,7 @@ impl Languages {
     fn count<'a>(&'a self, i: usize, one: &'static str, other: &'static str, n: u64) -> &'a str {
         match self.get(i).kind {
             Kind::English => {
-                if n == 1 {
-                    one
-                } else {
-                    other
-                }
+                if n == 1 { one } else { other }
             }
             Kind::Pseudo => pseudo_static(if n == 1 { one } else { other }),
             Kind::Catalog(_) => self.plural(i, one, other, n),

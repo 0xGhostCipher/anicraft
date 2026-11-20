@@ -119,7 +119,7 @@ shaping. So:
 |---|---|
 | Latin, Greek, Cyrillic | Offered when a catalog exists. |
 | Georgian | Offered when a catalog exists and the build embedded a valid Noto Sans Georgian from craft-fonts (via `CRAFT_FONTS_DIR` or the nearby checkout `build.rs` discovers); hidden only when it did not (`i18n::ready_codes`). |
-| Hebrew | Not offered yet: embeds `NotoSansHebrew-Regular.ttf` (`Hebr`, via `CRAFT_FONTS_DIR` or the nearby checkout `build.rs` discovers) and prepares legacy `iw` -> `he` normalization plus `i18n::is_rtl()` / `i18n::is_rtl_code()`, while `he` remains out of `i18n::ready_codes()` until egui supports bidi text layout and mirrored widgets. |
+| Hebrew | Not offered yet: right to left needs bidi in egui's text layout, and mirrored widgets. Prepared so far: builds with craft-fonts embed Noto Sans Hebrew (`Hebr`) as a fallback face, so Hebrew letters in names draw instead of empty boxes (still in typing order, not yet right to left); the legacy code `iw` is read as `he` (`iw_IL` from Java and older systems); and `i18n::is_rtl_code` answers which codes are right to left, script subtag first. |
 | Chinese, Japanese, Korean | Draw correctly, but need a font the app doesn't bundle (a craft-fonts face), then a `READY` entry. |
 | Arabic, Persian, Urdu, Kurdish, Dhivehi | Not offered: right to left needs bidi and shaping in egui's text layout, and mirrored widgets. We follow upstream egui rather than fork it. |
 | Devanagari, Bengali, Tamil, Telugu, Thai, Lao | Not offered: they need shaping. |

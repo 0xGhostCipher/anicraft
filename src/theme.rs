@@ -882,7 +882,8 @@ pub fn georgian_font() -> Option<&'static [u8]> {
 }
 
 /// Noto Sans Hebrew (craft-fonts `Hebr`) when this build embedded a face that parses and covers
-/// the Hebrew letters (Alef..Tav). Offered and loaded under the same guard as [`georgian_font`].
+/// the Hebrew letters (Alef..Tav), loaded under the same guard as [`georgian_font`]. It draws Hebrew
+/// letters in names; the interface is not offered in Hebrew yet (`i18n::READY`).
 pub fn hebrew_font() -> Option<&'static [u8]> {
     static FACE: std::sync::OnceLock<Option<&'static [u8]>> = std::sync::OnceLock::new();
     *FACE.get_or_init(|| craft_fonts::HEBREW_FONT.filter(|b| covers_range(b, '\u{05D0}'..='\u{05EA}')))

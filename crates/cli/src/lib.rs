@@ -89,6 +89,13 @@ impl Args {
     pub fn num<T: std::str::FromStr>(&self, k: &str) -> Result<Option<T>, String> {
         self.flag(k).map(|v| v.parse::<T>().map_err(|_| format!("--{k} expects a number, got '{v}'"))).transpose()
     }
+    fn float(&self, k: &str) -> Result<Option<f32>, String> {
+        let value = self.num::<f32>(k)?;
+        if value.is_some_and(|v| !v.is_finite()) {
+            return Err(format!("--{k} expects a finite number"));
+        }
+        Ok(value)
+    }
 }
 
 /// Opens a session from a path or `--sample`.
@@ -210,7 +217,7 @@ pub fn run(argv: &[String]) -> Result<String, String> {
             let mut s = session(&a, Some(src.ok_or("render needs a file or --sample")?))?;
             let out = a.flag("out").ok_or("render needs --out <file.png>")?;
             let mut p = json!({"path": out, "frame": one_based(&a, "frame")?.unwrap_or(0)});
-            if let Some(sc) = a.num::<f32>("scale")? {
+            if let Some(sc) = a.float("scale")? {
                 p["scale"] = json!(sc);
             }
             exec(&mut s, "file.export_png", &p).map(|v| v.to_string())
@@ -225,7 +232,7 @@ pub fn run(argv: &[String]) -> Result<String, String> {
             if let Some(t) = one_based(&a, "to")? {
                 p["to"] = json!(t);
             }
-            if let Some(sc) = a.num::<f32>("scale")? {
+            if let Some(sc) = a.float("scale")? {
                 p["scale"] = json!(sc);
             }
             exec(&mut s, "file.export_png_sequence", &p).map(|v| v.to_string())
@@ -242,7 +249,7 @@ pub fn run(argv: &[String]) -> Result<String, String> {
             if let Some(t) = one_based(&a, "to")? {
                 p["to"] = json!(t);
             }
-            if let Some(sc) = a.num::<f32>("scale")? {
+            if let Some(sc) = a.float("scale")? {
                 p["scale"] = json!(sc);
             }
             if a.flag("overwrite").is_some_and(|v| v == "yes" || v == "true") {
@@ -274,7 +281,7 @@ pub fn run(argv: &[String]) -> Result<String, String> {
                     p[k] = json!(v);
                 }
             }
-            if let Some(v) = a.num::<f32>("fps")? {
+            if let Some(v) = a.float("fps")? {
                 p["fps"] = json!(v);
             }
             exec(&mut s, "file.new", &p)?;
@@ -580,6 +587,50 @@ pub fn bench(a: &Args) -> Result<String, String> {
     }
 }
 
+/// Longest request line `serve` and `mcp` read (64 MiB: far above any real command, base64 images included).
+pub(crate) const MAX_LINE: usize = 64 << 20;
+
+/// One input line, read with a bound.
+pub(crate) enum Line {
+    Eof,
+    Text(String),
+    TooLong,
+}
+
+/// Reads the next line, never holding more than `max` bytes of it; an overlong line is skipped to its end.
+pub(crate) fn read_line<R: BufRead>(input: &mut R, max: usize) -> std::io::Result<Line> {
+    let mut buf = Vec::new();
+    let n = std::io::Read::take(&mut *input, max as u64 + 1).read_until(b'\n', &mut buf)?;
+    if n == 0 {
+        return Ok(Line::Eof);
+    }
+    if buf.len() > max && buf.last() != Some(&b'\n') {
+        loop {
+            let mut skip = Vec::new();
+            let k = std::io::Read::take(&mut *input, 1 << 20).read_until(b'\n', &mut skip)?;
+            if k == 0 || skip.last() == Some(&b'\n') {
+                return Ok(Line::TooLong);
+            }
+        }
+    }
+    while matches!(buf.last(), Some(b'\n' | b'\r')) {
+        buf.pop();
+    }
+    String::from_utf8(buf).map(Line::Text).map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
+}
+
+/// Over `serve` and `mcp` a caller may not name the program a command runs (ADR 0004 spirit: an
+/// assistant must not start arbitrary executables); the person sets `ANICRAFT_FFMPEG` instead.
+/// Direct CLI use (`exec`, `run`) keeps the `ffmpeg` parameter. Every command that takes one
+/// means the same by it (Export Video, Import Video, video info, relinking a layer's video), so
+/// the parameter is refused by name: a new command that runs ffmpeg is covered when it is added.
+pub(crate) fn refuse_remote_ffmpeg(_cmd: &str, params: &Value) -> Result<(), String> {
+    if params.get("ffmpeg").is_some_and(|v| !v.is_null()) {
+        return Err("the ffmpeg parameter is not accepted here: set the ANICRAFT_FFMPEG environment variable to choose the program".into());
+    }
+    Ok(())
+}
+
 /// Answers one JSON request.
 pub fn handle_request(s: &mut Session, line: &str) -> Value {
     // Windows shells often prefix piped UTF-8 with a byte-order mark.
@@ -595,7 +646,7 @@ pub fn handle_request(s: &mut Session, line: &str) -> Value {
     let params = req.get("params").cloned().unwrap_or_else(|| json!({}));
     let result = match cmd {
         "commands" => Ok(Value::Array(commands().iter().map(|c| c.to_json()).collect())),
-        _ => s.execute(cmd, &params).map_err(|e| e.to_string()),
+        _ => refuse_remote_ffmpeg(cmd, &params).and_then(|()| s.execute(cmd, &params).map_err(|e| e.to_string())),
     };
     match result {
         Ok(v) => json!({"id": id, "ok": true, "result": v, "revision": s.revision, "frame": s.frame}),
@@ -607,8 +658,17 @@ pub fn handle_request(s: &mut Session, line: &str) -> Value {
 pub fn serve<R: BufRead, W: Write>(s: &mut Session, input: R, out: &mut W) -> std::io::Result<()> {
     writeln!(out, "{}", json!({"ready": true, "app": "AniCraft", "version": env!("CARGO_PKG_VERSION")}))?;
     out.flush()?;
-    for line in input.lines() {
-        let line = line?;
+    let mut input = input;
+    loop {
+        let line = match read_line(&mut input, MAX_LINE)? {
+            Line::Eof => break,
+            Line::TooLong => {
+                writeln!(out, "{}", json!({"id": null, "ok": false, "error": "request line too long"}))?;
+                out.flush()?;
+                continue;
+            }
+            Line::Text(l) => l,
+        };
         if line.trim().is_empty() {
             continue;
         }
@@ -627,6 +687,29 @@ pub fn serve<R: BufRead, W: Write>(s: &mut Session, input: R, out: &mut W) -> st
 mod tests {
     use super::*;
 
+    #[test]
+    fn float_flags_reject_nonfinite_values_without_changing_numeric_parsing() {
+        for key in ["fps", "scale"] {
+            let flag = format!("--{key}");
+            for value in ["NaN", "inf", "+inf", "-inf", "1e40", "-1e40"] {
+                let args = Args::parse(&[flag.clone(), value.into()]).unwrap();
+                assert_eq!(args.float(key).unwrap_err(), format!("--{key} expects a finite number"));
+            }
+            for (value, expected) in [("0", 0.0), ("-1", -1.0), ("1.25", 1.25), ("1e2", 100.0)] {
+                let args = Args::parse(&[flag.clone(), value.into()]).unwrap();
+                assert_eq!(args.float(key).unwrap(), Some(expected));
+            }
+            let bad = Args::parse(&[flag.clone(), "oops".into()]).unwrap();
+            assert_eq!(bad.float(key).unwrap_err(), format!("--{key} expects a number, got 'oops'"));
+            assert_eq!(Args::parse(&[]).unwrap().float(key).unwrap(), None);
+            assert!(Args::parse(&[flag]).is_err());
+        }
+        let integer = Args::parse(&["--frame".into(), "12".into()]).unwrap();
+        assert_eq!(integer.num::<u32>("frame").unwrap(), Some(12));
+        let bad_integer = Args::parse(&["--frame".into(), "NaN".into()]).unwrap();
+        assert_eq!(bad_integer.num::<u32>("frame").unwrap_err(), "--frame expects a number, got 'NaN'");
+    }
+
     /// #226: `info`, `render` and the other subcommands take an Animate document as File › Open
     /// does (an import, untitled), not only `.anicraft` files.
     #[test]
@@ -636,6 +719,33 @@ mod tests {
         assert!(s.path.is_none() && !s.doc.timeline(0).layers.is_empty());
         let info = run(&["info".to_string(), xfl.display().to_string()]).unwrap();
         assert!(info.contains("\"layers\""), "{info}");
+    }
+
+    #[test]
+    fn serve_refuses_ffmpeg_path_but_exec_keeps_it() {
+        let mut s = Session::default();
+        let r = handle_request(&mut s, r#"{"cmd":"file.export_video","params":{"path":"a.mp4","ffmpeg":"/bin/sh"}}"#);
+        assert_eq!(r["ok"], false);
+        assert!(r["error"].as_str().unwrap().contains("ANICRAFT_FFMPEG"));
+        // Every command that runs ffmpeg takes the same parameter, and none may be given it here.
+        let takes_it: Vec<&str> = commands().iter().filter(|c| c.params.contains("ffmpeg?")).map(|c| c.id).collect();
+        assert!(takes_it.contains(&"file.export_video") && takes_it.contains(&"file.import_video"), "{takes_it:?}");
+        for id in takes_it {
+            let r = handle_request(&mut s, &json!({"cmd": id, "params": {"path": "a.mp4", "ffmpeg": "/bin/sh"}}).to_string());
+            assert!(r["error"].as_str().is_some_and(|e| e.contains("ANICRAFT_FFMPEG")), "{id}: {r}");
+        }
+        // Direct CLI use is not filtered: the command runs and fails on the missing program, not on the parameter.
+        let e = exec(&mut s, "file.export_video", &json!({"path": "a.mp4", "ffmpeg": "/nonexistent/anicraft-ffmpeg"})).unwrap_err();
+        assert!(!e.contains("ANICRAFT_FFMPEG environment variable"), "{e}");
+    }
+
+    #[test]
+    fn long_lines_are_bounded() {
+        let mut input = &b"abcdefghij\nok\r\nxy"[..];
+        assert!(matches!(read_line(&mut input, 4).unwrap(), Line::TooLong));
+        assert!(matches!(read_line(&mut input, 4).unwrap(), Line::Text(t) if t == "ok"));
+        assert!(matches!(read_line(&mut input, 4).unwrap(), Line::Text(t) if t == "xy"));
+        assert!(matches!(read_line(&mut input, 4).unwrap(), Line::Eof));
     }
 
     #[test]

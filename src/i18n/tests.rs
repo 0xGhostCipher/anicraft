@@ -43,10 +43,7 @@ fn shell_sources() -> Vec<(String, String)> {
 /// A file without its `#[cfg(test)] mod … {` block at the end (tests aren't interface).
 fn without_tests(src: &str) -> String {
     let lines: Vec<&str> = src.lines().collect();
-    let cut = lines.windows(2).position(|w| {
-        w.first().is_some_and(|l| l.trim() == "#[cfg(test)]")
-            && w.get(1).is_some_and(|l| l.trim_start().starts_with("mod ") && l.trim_end().ends_with('{'))
-    });
+    let cut = lines.windows(2).position(|w| w.first().is_some_and(|l| l.trim() == "#[cfg(test)]") && w.get(1).is_some_and(|l| l.trim_start().starts_with("mod ") && l.trim_end().ends_with('{')));
     match cut {
         Some(n) => lines.get(..n).unwrap_or_default().join("\n"),
         None => src.to_string(),
@@ -56,38 +53,10 @@ fn without_tests(src: &str) -> String {
 /// Code before a literal, on its line, that makes it something other than interface text:
 /// logs and console output, ids and keys, commands and their parameters, attributes.
 const NOT_UI: &[&str] = &[
-    "eprintln!(",
-    "println!(",
-    "print!(",
-    "panic!(",
-    "assert",
-    "unreachable!(",
-    "Id::new(",
-    "id_salt(",
-    "persistent_id(",
-    "json!(",
-    "execute(",
-    "perform(",
-    "invoke(",
-    ".run(",
-    "find_command(",
-    "#[",
-    "env!(",
-    "include_str!(",
-    "include_bytes!(",
-    "concat!(",
-    "var(",
-    "contains(",
-    "starts_with(",
-    "ends_with(",
-    "strip_prefix(",
-    "strip_suffix(",
-    "matches!(",
-    "== ",
-    "!= ",
+    "eprintln!(", "println!(", "print!(", "panic!(", "assert", "unreachable!(", "Id::new(", "id_salt(", "persistent_id(", "json!(", "execute(", "perform(", "invoke(", ".run(", "find_command(", "#[", "env!(", "include_str!(", "include_bytes!(", "concat!(", "var(",
+    "contains(", "starts_with(", "ends_with(", "strip_prefix(", "strip_suffix(", "matches!(", "== ", "!= ",
     // The start-up log (`startup::line`): English, like console messages, for bug reports.
-    "line(&",
-    "write(&format!(",
+    "line(&", "write(&format!(",
 ];
 
 /// Whether a prose literal outside the macros is allowed: not interface text by its context,
@@ -277,18 +246,13 @@ fn extract() {
     let only = std::env::var("ANICRAFT_I18N_LOCALE").ok().map(|l| l.to_ascii_lowercase());
     let mut missing_in: Option<Catalog> = None;
     if let Some(locales) = &checkout {
-        let mut codes: Vec<String> = std::fs::read_dir(locales)
-            .map(|r| r.flatten().filter(|e| e.path().is_dir()).map(|e| e.file_name().to_string_lossy().into_owned()).collect())
-            .unwrap_or_default();
+        let mut codes: Vec<String> = std::fs::read_dir(locales).map(|r| r.flatten().filter(|e| e.path().is_dir()).map(|e| e.file_name().to_string_lossy().into_owned()).collect()).unwrap_or_default();
         codes.sort();
         println!("locale     translated        stale  (of {} AniCraft strings; READY = offered once it has anicraft.tsv)", keys.len());
         for code in &codes {
             let (cat, own) = disk_catalog(locales, code);
             let n = keys.iter().filter(|k| translated(&cat, k)).count();
-            let stale = own
-                .iter()
-                .filter(|r| !r.context.starts_with('@') && !keys.contains(&Key::Text { context: r.context.clone(), source: r.source.clone() }))
-                .count();
+            let stale = own.iter().filter(|r| !r.context.starts_with('@') && !keys.contains(&Key::Text { context: r.context.clone(), source: r.source.clone() })).count();
             let ready = if super::ready(code, READY) { "READY" } else { "" };
             println!("{code:<10} {n:>5} ({:>3} %)  {stale:>8}  {ready}", n * 100 / keys.len().max(1));
             if only.as_deref() == Some(code.as_str()) {
@@ -326,18 +290,10 @@ const DE_COMMON: &str = "@id\tlanguage.name\tDeutsch\n\tSave\tSpeichern\n\tOpen\
 const DE_APP: &str = "\tOpen\tDatei öffnen\n\tSaved {path}\t{path} gespeichert\n@id\tedit.undo\tRückgängig\n";
 const PT_COMMON: &str = "@id\tlanguage.name\tPortuguês\n\tSave\tGuardar\n\tOpen\tAbrir\n";
 const PT_BR_APP: &str = "@id\tlanguage.name\tPortuguês (Brasil)\n\tSave\tSalvar\n@plural\t{n} frame|{n} frames\t{n} quadro|{n} quadros\n";
-const RU_APP: &str =
-    "@id\tlanguage.name\tРусский\n@plural\t{n} frame|{n} frames\t{n} кадр|{n} кадра|{n} кадров\n@plural\t{n} layer|{n} layers\t{n} слой|{n} слоя\n";
+const RU_APP: &str = "@id\tlanguage.name\tРусский\n@plural\t{n} frame|{n} frames\t{n} кадр|{n} кадра|{n} кадров\n@plural\t{n} layer|{n} layers\t{n} слой|{n} слоя\n";
 
 fn fixture() -> Languages {
-    let embedded = [
-        ("de", DE_COMMON, DE_APP),
-        ("pt", PT_COMMON, ""),
-        ("pt-BR", "", PT_BR_APP),
-        ("ru", "", RU_APP),
-        ("ar", "\tSave\tحفظ\n", "\tOpen\tفتح\n"),
-        ("fr", "\tSave\tEnregistrer\n", ""),
-    ];
+    let embedded = [("de", DE_COMMON, DE_APP), ("pt", PT_COMMON, ""), ("pt-BR", "", PT_BR_APP), ("ru", "", RU_APP), ("ar", "\tSave\tحفظ\n", "\tOpen\tفتح\n"), ("fr", "\tSave\tEnregistrer\n", "")];
     let (l, problems) = Languages::new(&embedded, READY);
     assert!(problems.is_empty(), "{problems:?}");
     l
@@ -386,21 +342,20 @@ fn georgian_is_offered_only_when_its_face_is_embedded() {
 }
 
 #[test]
-fn hebrew_is_offered_only_when_its_face_is_embedded() {
+fn hebrew_is_not_offered_yet_but_its_face_draws_hebrew_names() {
     let he = [("he", "", "@id\tlanguage.name\tעברית\n")];
-    // Hebrew stays out of `ready_codes()` until egui supports bidi text layout, even when its font is embedded.
-    assert!(!ready_codes().contains(&"he"), "Hebrew must remain outside ready_codes until bidi layout exists");
-    assert!(!Languages::new(&he, &ready_with(false)).0.list.iter().any(|l| l.code == "he"));
-    assert!(!Languages::new(&he, &ready_with(true)).0.list.iter().any(|l| l.code == "he"));
-    // Explicitly enabling "he" in a test still loads the Hebrew catalog cleanly.
-    assert!(Languages::new(&he, &["he"]).0.list.iter().any(|l| l.code == "he"));
-    if std::env::var("CRAFT_FONTS_REQUIRED").is_ok_and(|v| v == "1") {
-        assert!(
-            crate::theme::hebrew_font().is_some(),
-            "CRAFT_FONTS_REQUIRED=1 but this build embeds no valid NotoSansHebrew-Regular.ttf (craft-fonts `Hebr`)"
-        );
+    // Right to left needs bidi layout in egui (ADR 0040): with or without a face, not offered.
+    assert!(!ready_codes().contains(&"he"));
+    for georgian_face in [false, true] {
+        assert!(!Languages::new(&he, &ready_with(georgian_face)).0.list.iter().any(|l| l.code == "he"));
     }
-    let Some(face) = crate::theme::hebrew_font() else {
+    // The catalog itself loads cleanly once the code is ready.
+    assert!(Languages::new(&he, &["he"]).0.list.iter().any(|l| l.code == "he"));
+    let face = crate::theme::hebrew_font();
+    if std::env::var("CRAFT_FONTS_REQUIRED").is_ok_and(|v| v == "1") {
+        assert!(face.is_some(), "CRAFT_FONTS_REQUIRED=1 but this build embeds no valid NotoSansHebrew-Regular.ttf (craft-fonts `Hebr`)");
+    }
+    let Some(face) = face else {
         println!("hebrew face test: skipped, this build embeds no Hebrew face");
         return;
     };
@@ -408,31 +363,29 @@ fn hebrew_is_offered_only_when_its_face_is_embedded() {
     let fonts = anicraft_engine::text::Fonts::from_faces([face.to_vec()]);
     let laid = fonts.layout(&letters, &anicraft_engine::text::Style::default()).expect("layout");
     assert_eq!(laid.missing, 0, "the face lacks some of U+05D0..U+05EA");
+    // ... and through the Proportional family install_fonts builds (see the Georgian test).
     let ctx = egui::Context::default();
     crate::theme::install_fonts(&ctx, None, None);
     ctx.run_ui(egui::RawInput::default(), |_| {}).textures_delta.clear();
     let prop = egui::FontId::proportional(14.0);
     assert!(ctx.fonts_mut(|f| f.has_glyphs(&prop, &letters)), "Proportional lacks Hebrew letters");
+    // Georgian still draws with the Hebrew face behind it in the chain.
+    if crate::theme::georgian_font().is_some() {
+        let georgian: String = ('\u{10D0}'..='\u{10FA}').collect();
+        assert!(ctx.fonts_mut(|f| f.has_glyphs(&prop, &georgian)), "Proportional lost Georgian letters");
+    }
     println!("hebrew face test: ran, {} letters covered", letters.chars().count());
 }
 
 #[test]
-fn rtl_helper_recognizes_hebrew_and_legacy_iw() {
-    assert!(is_rtl_code("he"));
-    assert!(is_rtl_code("he-IL"));
-    assert!(is_rtl_code("he-Hebr-IL"));
-    assert!(is_rtl_code("he-x-test"));
-    assert!(is_rtl_code("iw"));
-    assert!(is_rtl_code("iw_IL"));
-    assert!(is_rtl_code("ar"));
-    assert!(is_rtl_code("ku-Arab-IQ"));
-    assert!(!is_rtl_code("ku-Latn-TR"));
-    assert!(!is_rtl_code("sd-Deva-IN"));
-    assert!(!is_rtl_code("en-x-arab"));
-    assert!(!is_rtl_code("x-Arab"));
-    assert!(!is_rtl_code("x-Hebr"));
-    assert!(!is_rtl_code("en"));
-    assert!(!is_rtl_code("ka"));
+fn right_to_left_codes_are_recognised_by_language_and_script() {
+    for rtl in ["he", "he-IL", "he-Hebr-IL", "he-x-test", "iw", "iw_IL", "iw_IL.UTF-8", "ar", "fa-IR", "ku-Arab-IQ", "zh-yue-Arab"] {
+        assert!(is_rtl_code(rtl), "{rtl}");
+    }
+    for ltr in ["en", "ka", "ku-Latn-TR", "sd-Deva-IN", "en-x-arab", "x-Arab", "x-Hebr", "", "-", "pseudo"] {
+        assert!(!is_rtl_code(ltr), "{ltr}");
+    }
+    // No right-to-left language is offered, so the interface never is.
     assert!(!is_rtl());
 }
 
@@ -531,6 +484,8 @@ fn legacy_iw_locale_tags_normalize_to_hebrew() {
     for pref in ["he", "HE", "iw", "IW"] {
         assert_eq!(code(pref, None), "he", "{pref}");
     }
+    // Only the whole first subtag is the legacy code: `iwx` is some other language.
+    assert_eq!(code(AUTO, Some("iwx-IL")), "en");
 }
 
 #[test]
@@ -609,9 +564,7 @@ fn strings_in(v: &serde_json::Value, out: &mut BTreeSet<String>) {
         serde_json::Value::Object(o) => {
             for (k, x) in o {
                 match x {
-                    serde_json::Value::String(s)
-                        if matches!(k.as_str(), "name" | "text" | "label") && s.chars().filter(char::is_ascii_alphabetic).count() >= 3 =>
-                    {
+                    serde_json::Value::String(s) if matches!(k.as_str(), "name" | "text" | "label") && s.chars().filter(char::is_ascii_alphabetic).count() >= 3 => {
                         out.insert(s.clone());
                     }
                     _ => strings_in(x, out),
@@ -779,38 +732,7 @@ fn every_control_can_be_used_in_the_pseudo_locale() {
             a.run("element.set_color_effect", serde_json::json!({"style": style}));
         }));
     }
-    for panel in [
-        "sound",
-        "camera",
-        "springbones",
-        "shapebones",
-        "shapeweights",
-        "warp",
-        "motion",
-        "motionpins",
-        "actions",
-        "script",
-        "prefs",
-        "envelope",
-        "audiokeys",
-        "lipsync",
-        "onionmenu",
-        "editmultiple",
-        "edittransform",
-        "onionsymbol",
-        "find",
-        "explorer",
-        "publish",
-        "publishreport",
-        "publishanim",
-        "start",
-        "testmovie",
-        "testmovieinside",
-        "templates",
-        "savetemplate",
-        "brushlibrary",
-        "brushcurve",
-    ] {
+    for panel in ["sound", "camera", "springbones", "shapebones", "shapeweights", "warp", "motion", "motionpins", "actions", "script", "prefs", "envelope", "audiokeys", "lipsync", "onionmenu", "editmultiple", "edittransform", "onionsymbol", "find", "explorer", "publish", "publishreport", "publishanim", "start", "testmovie", "testmovieinside", "templates", "savetemplate", "brushlibrary", "brushcurve"] {
         found.extend(click_everything(panel, |a, _| a.open_panel(Some(panel))));
     }
     // Test Movie in a window of its own (ADR 0062; egui stands in for the window system here).
@@ -818,14 +740,7 @@ fn every_control_can_be_used_in_the_pseudo_locale() {
         ctx.set_embed_viewports(false);
         a.open_panel(Some("testmovie"));
     }));
-    for tool in [
-        crate::app::Tool::Brush,
-        crate::app::Tool::PaintBrush,
-        crate::app::Tool::Eraser,
-        crate::app::Tool::PaintBucket,
-        crate::app::Tool::Pencil,
-        crate::app::Tool::Width,
-    ] {
+    for tool in [crate::app::Tool::Brush, crate::app::Tool::PaintBrush, crate::app::Tool::Eraser, crate::app::Tool::PaintBucket, crate::app::Tool::Pencil, crate::app::Tool::Width] {
         found.extend(click_everything(&format!("{tool:?}"), |a, _| a.tool = tool));
     }
     assert!(found.is_empty(), "{} things in plain English after using the controls:\n{}", found.len(), found.join("\n"));
@@ -846,39 +761,11 @@ fn status_lines_for_every_result_are_translated() {
     });
     let bare = json!({});
     let ids = [
-        "file.new",
-        "file.open",
-        "file.recover",
-        "file.discard_recovery",
-        "file.save",
-        "file.save_as",
-        "file.import",
-        "file.import_to_library",
-        "file.export_audio",
-        "file.export_sprite_sheet",
-        "file.export_html",
-        "file.export_lottie",
-        "file.export_png",
-        "file.export_gif",
-        "file.export_apng",
-        "file.export_webp",
-        "sound.delete",
-        "edit.undo",
-        "edit.redo",
-        "edit.delete",
-        "layer.delete",
-        "draw.erase_all",
-        "scene.delete",
-        "scene.new",
-        "timeline.clear_keyframe",
-        "timeline.copy_frames",
-        "timeline.cut_frames",
-        "timeline.paste_frames",
-        "timeline.remove_frame",
-        "plugin.run",
-        "plugin.install",
-        "plugin.remove",
-        "plugin.reload",
+        "file.new", "file.open", "file.recover", "file.discard_recovery", "file.save", "file.save_as", "file.import", "file.import_to_library",
+        "file.export_audio", "file.export_sprite_sheet", "file.export_html", "file.export_lottie", "file.export_png", "file.export_gif", "file.export_apng", "file.export_webp",
+        "sound.delete", "edit.undo", "edit.redo", "edit.delete", "layer.delete", "draw.erase_all", "scene.delete", "scene.new",
+        "timeline.clear_keyframe", "timeline.copy_frames", "timeline.cut_frames", "timeline.paste_frames", "timeline.remove_frame",
+        "plugin.run", "plugin.install", "plugin.remove", "plugin.reload",
     ];
     let mut plain = Vec::new();
     for id in ids {
@@ -909,15 +796,9 @@ fn edit_multiple_frames_status_lines_are_translated() {
             _ => {}
         }
     }
-    assert!(
-        plain.is_empty(),
-        "status lines in plain English:
-{}",
-        plain.join(
-            "
-"
-        )
-    );
+    assert!(plain.is_empty(), "status lines in plain English:
+{}", plain.join("
+"));
 }
 
 #[test]
@@ -1013,21 +894,7 @@ fn screen_reader_names_are_translated_too() {
     // the source guideline can't see: ones passed through variables or built at run time).
     use crate::app::Tool;
     let mut found = untranslated_names("default", |_, _| {});
-    for tool in [
-        Tool::Rect,
-        Tool::Star,
-        Tool::Text,
-        Tool::Pencil,
-        Tool::Brush,
-        Tool::Eraser,
-        Tool::PaintBucket,
-        Tool::Eyedropper,
-        Tool::Pen,
-        Tool::Camera,
-        Tool::Bone,
-        Tool::Bind,
-        Tool::Warp,
-    ] {
+    for tool in [Tool::Rect, Tool::Star, Tool::Text, Tool::Pencil, Tool::Brush, Tool::Eraser, Tool::PaintBucket, Tool::Eyedropper, Tool::Pen, Tool::Camera, Tool::Bone, Tool::Bind, Tool::Warp] {
         found.extend(untranslated_names(&format!("{tool:?} tool"), |a, _| a.tool = tool));
     }
     // Selections and states that change what Properties, the timeline and the dialogs show.
@@ -1060,42 +927,7 @@ fn screen_reader_names_are_translated_too() {
     found.extend(untranslated_names("library item", |a, _| {
         a.library_sel = a.s.doc.library.first().map(|s| crate::app::LibraryItem::Symbol(s.id));
     }));
-    for panel in [
-        "start",
-        "drop",
-        "droplibrary",
-        "select",
-        "motion",
-        "motionspan",
-        "motionpath",
-        "motionedit",
-        "camera",
-        "sound",
-        "prefs",
-        "shortcuts",
-        "palette",
-        "about",
-        "files",
-        "licenses",
-        "confirm",
-        "recovery",
-        "frames",
-        "filters",
-        "plugins",
-        "actions",
-        "script",
-        "scriptproblems",
-        "testmovie",
-        "testmovieinside",
-        "testscript",
-        "exporthtml",
-        "envelope",
-        "audiokeys",
-        "lipsync",
-        "templates",
-        "savetemplate",
-        "droptimeline",
-    ] {
+    for panel in ["start", "drop", "droplibrary", "select", "motion", "motionspan", "motionpath", "motionedit", "camera", "sound", "prefs", "shortcuts", "palette", "about", "files", "licenses", "confirm", "recovery", "frames", "filters", "plugins", "actions", "script", "scriptproblems", "testmovie", "testmovieinside", "testscript", "exporthtml", "envelope", "audiokeys", "lipsync", "templates", "savetemplate", "droptimeline"] {
         found.extend(untranslated_names(panel, |a, _| a.open_panel(Some(panel))));
     }
     assert!(found.is_empty(), "{} screen-reader names not translated in the pseudo-locale:\n{}", found.len(), found.join("\n"));

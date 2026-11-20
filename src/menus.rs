@@ -422,13 +422,17 @@ fn enabled(app: &App, id: &str) -> bool {
     match id {
         "edit.undo" => app.s.can_undo(),
         "edit.redo" => app.s.can_redo(),
-        "edit.delete" | "edit.duplicate" | "modify.convert_to_symbol" | "modify.break_apart" | "arrange.bring_to_front" | "arrange.send_to_back" => !app.s.selection.is_empty(),
+        "edit.delete" | "edit.duplicate" | "modify.convert_to_symbol" | "modify.convert_to_bitmap" | "modify.break_apart" | "arrange.bring_to_front" | "arrange.send_to_back" => !app.s.selection.is_empty(),
         // Modify › Shape (ADR 0109): what the selection has for them.
+        "modify.trace_bitmap" => crate::trace_dialog::has_bitmap(app),
         "modify.lines_to_fills" => selected_shape(app, |sh| sh.stroke.is_some()),
         "modify.expand_fill" => selected_shape(app, |sh| sh.fill.is_some()),
         "modify.soften_fill_edges" => selected_shape(app, |sh| sh.fill.as_ref().is_some_and(|f| !matches!(f, anicraft_engine::doc::Paint::Bitmap { .. }))),
         // Convert Audio to Keyframes and Auto Lip-Sync read a sound on this timeline (ADR 0114).
         "sound.to_keyframes" | "sound.lip_sync" => app.s.timeline().layers.iter().any(|l| l.has_sounds()),
+        // Data bindings (ADR 0118): one instance and a table to bind; bindings to remove or bake.
+        "data.bind" => crate::data_ui::can_bind(app),
+        "data.unbind" | "data.bake" => crate::data_ui::has_bindings(app),
         "layer.delete" => app.s.timeline().layers.len() > 1,
         "scene.delete" => app.s.doc.scenes.len() > 1,
         // Ctrl+E opens the selected instance, or goes back to the document (ADR 0045).

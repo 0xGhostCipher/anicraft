@@ -48,6 +48,8 @@ pub mod cmds_plugin;
 mod cmds_scene;
 pub mod cmds_sound;
 pub mod cmds_audio_keys;
+pub mod cmds_data;
+pub mod data_import;
 pub mod cmds_text;
 mod cmds_timeline;
 mod cmds_view;
@@ -68,12 +70,15 @@ pub mod recovery;
 pub mod render_service;
 pub mod selection;
 pub mod snap;
+pub mod trace;
 pub mod transfer;
 pub mod params;
 pub mod plugin_export;
 pub mod player;
 pub mod publish;
 pub mod vfs;
+pub mod video;
+mod cmds_video;
 
 use anicraft_doc::{DisplayList, Document, Element, ElementId, ElementKind, Keyframe, Layer, LayerId, LayerKind, evaluate_scene};
 #[cfg(test)]
@@ -187,6 +192,7 @@ pub fn commands() -> Vec<CommandSpec> {
     v.extend(cmds_erase::specs());
     v.extend(cmds_paint::specs());
     v.extend(cmds_swatch::specs());
+    v.extend(cmds_data::specs());
     v.extend(cmds_text::specs());
     v.extend(cmds_width::specs());
     v.extend(cmds_stroke::specs());
@@ -194,6 +200,7 @@ pub fn commands() -> Vec<CommandSpec> {
     v.extend(cmds_plugin::specs());
     v.extend(cmds_sound::specs());
     v.extend(cmds_audio_keys::specs());
+    v.extend(cmds_video::specs());
     v.extend(cmds_actions::specs());
     v.extend(cmds_script::specs());
     v.extend(cmds_macro::specs());
@@ -239,7 +246,7 @@ pub use cmds_layer::LAYER_COLORS;
 const GROUP_REFUSES: &[&str] = &["timeline.", "layer.", "camera.", "bone.", "motion.", "tween.", "frames.", "sound.place", "sound.to_keyframes", "sound.lip_sync", "script.set", "script.clear"];
 
 /// Last addressable frame (0-based); about 70 minutes at 24 fps.
-pub const MAX_FRAME: u32 = 100_000;
+pub const MAX_FRAME: u32 = anicraft_doc::MAX_FRAME;
 
 /// The index of the topmost item of `dl` under `p` (stage space) that `ok` accepts (given its
 /// index). A bounding-box test rejects almost every item before any curve is flattened;
@@ -248,6 +255,10 @@ pub(crate) fn pick_index(dl: &DisplayList, p: Vec2, slop: f32, ok: impl Fn(usize
     for (i, item) in dl.items.iter().enumerate().rev() {
         let hw = item.stroke.as_ref().map_or(0.0, |s| s.reach() * item.transform.mean_scale());
         let bounds = item.path.bounds().transformed(&item.transform).inflate(hw + slop);
+        // Nothing to hit: an item with no paint (a reference video's placeholder, ADR 0116).
+        if item.fill.is_none() && item.stroke.is_none() {
+            continue;
+        }
         if !bounds.contains(p) || !ok(i, item) {
             continue;
         }
@@ -444,6 +455,9 @@ pub struct Session {
     picture_cache: RefCell<Option<(u64, Arc<editing::StagePicture>)>>,
     /// A publish this session runs: its Cancel and frame count, which exports check (ADR 0060).
     pub job: Option<Arc<publish::Control>>,
+    /// An import the editor prepared on another thread (ADR 0116): `file.import_video` asked
+    /// for the same thing takes it instead of decoding again. Never in the document.
+    pub staged_video: Option<video::Prepared>,
     /// Files this session's publishes wrote: publishing again replaces them without asking.
     pub published: std::collections::BTreeSet<PathBuf>,
     /// The files opened and saved last, and pinned favourites (ADR 0059). They belong to the
@@ -581,6 +595,7 @@ impl Session {
             hit_area: None,
             picture_cache: RefCell::new(None),
             job: None,
+            staged_video: None,
             published: std::collections::BTreeSet::new(),
             recent: cmds_recent::RecentFiles::default(),
             brushes: brush_library::BrushLibrary::default(),
@@ -1404,6 +1419,8 @@ mod tests_sound;
 #[cfg(test)]
 mod tests_audio_keys;
 #[cfg(test)]
+mod video_tests;
+#[cfg(test)]
 mod hint_tests;
 #[cfg(test)]
 mod tests_actions;
@@ -1441,6 +1458,8 @@ mod rawpoints_tests;
 mod editing_tests;
 #[cfg(test)]
 mod brush_tests;
+#[cfg(test)]
+mod ellipse_tests;
 #[cfg(test)]
 mod brush_library_tests;
 #[cfg(test)]

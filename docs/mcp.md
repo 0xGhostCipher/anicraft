@@ -84,6 +84,9 @@ unlike `anicraft_run_script` a failing step leaves the document as it was. `macr
   before confirming.
 * Commands read and write files with your permissions, at the paths the assistant gives (open,
   save, import, export), as with the CLI. Only connect clients you trust with those files.
+* An assistant can't choose the program that makes or reads video: over `mcp` and `serve`, every
+  command refuses an `ffmpeg` param (Export Video, Import Video and the rest). Set `ANICRAFT_FFMPEG` yourself, or have ffmpeg on the PATH. (`exec`
+  and `run`, which you type, keep the param.)
 * A failing command comes back as a tool result marked as an error, so the assistant can read
   the message and try again; it never stops the server.
 * Live (`--bridge`): an edit whose answer was lost (AniCraft closed mid-call) is never sent again,
