@@ -174,11 +174,54 @@ const MAX_BITMAPS: usize = 10_000;
 pub(crate) const MAX_BITMAP_PIXELS: u64 = 256 * 1024 * 1024;
 const MAX_SOUNDS: usize = 10_000;
 const MAX_VIDEOS: usize = 10_000;
-/// `data` as a WAV, Ogg Vorbis or MP3 file, when it starts like one and the decoders read all
-/// of it; `None` otherwise. Copies the data only when it starts like one.
+/// `data` as a WAV, Ogg Vorbis or MP3 file, when it starts like one, its container is complete
+/// ([`complete_container`]) and the decoders read it; `None` otherwise. Copies the data only
+/// when it passes the container check. This decides between such a file and raw PCM of the
+/// same length, so it is stricter than ordinary import, whose decoders forgive a damaged file.
 fn encoded_sound(data: &[u8], name: &str) -> Option<anicraft_doc::Sound> {
-    anicraft_doc::audio::Format::sniff(data)?;
+    let format = anicraft_doc::audio::Format::sniff(data)?;
+    if !complete_container(data, format) {
+        return None;
+    }
     anicraft_doc::Sound::from_data(anicraft_doc::SoundId(0), name, data.to_vec()).ok()
+}
+
+/// Whether `data` holds a whole file of `format`, as its own structure says: a WAV whose RIFF
+/// size and chunks (with a `data` chunk) all fit within it, so no declared length is cut
+/// short; an Ogg stream whose pages run exactly to its end, the last one ending the stream.
+/// MP3 frames carry no length of the whole, so an MP3 is one the decoder reads.
+pub(crate) fn complete_container(data: &[u8], format: anicraft_doc::audio::Format) -> bool {
+    let u32_at = |at: usize| data.get(at..at + 4).and_then(|b| b.try_into().ok()).map(u32::from_le_bytes);
+    match format {
+        anicraft_doc::audio::Format::Wav => {
+            let Some(riff) = u32_at(4).and_then(|n| usize::try_from(n).ok()).and_then(|n| n.checked_add(8)) else { return false };
+            if data.get(8..12) != Some(b"WAVE".as_slice()) || riff > data.len() {
+                return false;
+            }
+            let (mut at, mut found_data) = (12, false);
+            while at < riff {
+                let (Some(id), Some(n)) = (data.get(at..at + 4), u32_at(at + 4).and_then(|n| usize::try_from(n).ok())) else { return false };
+                let Some(end) = (at + 8).checked_add(n).filter(|&end| end <= riff) else { return false };
+                found_data |= id == b"data";
+                at = end + (n & 1);
+            }
+            found_data
+        }
+        anicraft_doc::audio::Format::Vorbis => {
+            let (mut at, mut last_flags) = (0, None);
+            while at < data.len() {
+                let (true, Some(&flags), Some(&segments)) = (data.get(at..at + 4) == Some(b"OggS".as_slice()), data.get(at + 5), data.get(at + 26)) else {
+                    return false;
+                };
+                let table = at + 27;
+                let Some(lacing) = data.get(table..table + usize::from(segments)) else { return false };
+                at = table + lacing.len() + lacing.iter().map(|&l| usize::from(l)).sum::<usize>();
+                last_flags = Some(flags);
+            }
+            at == data.len() && last_flags.is_some_and(|f| f & 0x04 != 0)
+        }
+        anicraft_doc::audio::Format::Mp3 => true,
+    }
 }
 
 /// Names the format of sound data that didn't decode, and why when it is a kind AniCraft reads:

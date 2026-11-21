@@ -1135,6 +1135,57 @@ fn a_wav_or_ogg_or_mp3_data_file_of_the_raw_pcm_length_is_read_as_that_file() {
 }
 
 #[test]
+fn a_damaged_wav_of_the_raw_pcm_length_stays_raw_pcm() {
+    // An 8 kHz mono WAV of four samples whose data chunk claims 1,000,000 bytes: its decoder
+    // would read the four (it forgives the overstated length), but the file isn't whole, so it
+    // is the item's 44.1 kHz PCM, a sample for every two bytes.
+    let mut wav = anicraft_doc::audio::wav::encode(8000, 1, &[0.25; 4], anicraft_doc::audio::wav::Bits::Int16);
+    let samples = wav.len() / 2;
+    let data_at = wav.windows(4).position(|w| w == b"data").unwrap() + 4;
+    wav[data_at..data_at + 4].copy_from_slice(&1_000_000u32.to_le_bytes());
+    assert!(anicraft_doc::Sound::from_data(anicraft_doc::SoundId(0), "w", wav.clone()).is_ok(), "the decoder forgives it");
+    let doc = format!(r#"<DOMDocument width="200" height="100"><media><DOMSoundItem name="tone" soundDataHRef="M 1 1.dat" format="44kHz 16bit Mono" sampleCount="{samples}"/></media></DOMDocument>"#);
+    let files: HashMap<String, Vec<u8>> = HashMap::from([("DOMDocument.xml".to_string(), doc.into_bytes()), ("bin/M 1 1.dat".to_string(), wav)]);
+    let read = |p: &str| -> Result<Option<Vec<u8>>, XflError> { Ok(files.get(p).cloned()) };
+    let (doc, report) = import_with(&read).unwrap();
+    let sounds: Vec<_> = doc.sounds.iter().map(|s| (s.format, s.rate, s.channels, s.frames)).collect();
+    assert_eq!(sounds, [(anicraft_doc::SoundFormat::Wav, 44_100, 1, samples as u64)], "the item's PCM, not the cut-short WAV");
+    assert!(report.skipped.is_empty(), "{:?}", report.skipped);
+}
+
+#[test]
+fn only_whole_containers_win_over_raw_pcm() {
+    use crate::import::complete_container;
+    use anicraft_doc::audio::Format;
+    let whole = anicraft_doc::audio::wav::encode(8000, 1, &[0.25; 4], anicraft_doc::audio::wav::Bits::Int16);
+    assert!(complete_container(&whole, Format::Wav));
+    assert!(!complete_container(&whole[..whole.len() - 1], Format::Wav), "cut short");
+    let mut no_data = whole.clone();
+    let at = no_data.windows(4).position(|w| w == b"data").unwrap();
+    no_data[at..at + 4].copy_from_slice(b"junk");
+    assert!(!complete_container(&no_data, Format::Wav), "no data chunk");
+    let mut riff_over = whole.clone();
+    riff_over[4..8].copy_from_slice(&u32::MAX.to_le_bytes());
+    assert!(!complete_container(&riff_over, Format::Wav), "a RIFF size past the file");
+    // Ogg pages (header, lacing, body), the container only: whole when they run exactly to the
+    // end and the last one ends the stream.
+    let page = |flags: u8, body: &[u8]| -> Vec<u8> {
+        let mut p = b"OggS".to_vec();
+        p.extend_from_slice(&[0, flags]);
+        p.extend_from_slice(&[0; 20]);
+        p.push(1);
+        p.push(body.len() as u8);
+        p.extend_from_slice(body);
+        p
+    };
+    let stream = [page(0x02, b"head"), page(0x04, b"tail")].concat();
+    assert!(complete_container(&stream, Format::Vorbis));
+    assert!(!complete_container(&stream[..stream.len() - 1], Format::Vorbis), "cut short");
+    assert!(!complete_container(&[page(0x02, b"head"), page(0x00, b"more")].concat(), Format::Vorbis), "never ends the stream");
+    assert!(!complete_container(&[stream.clone(), b"xx".to_vec()].concat(), Format::Vorbis), "bytes after the last page");
+}
+
+#[test]
 fn raw_pcm_that_starts_like_a_sound_file_stays_raw_pcm() {
     // Raw PCM whose first samples spell a WAV, Ogg, ID3 or MPEG frame signature: the decoders
     // don't read it as such a file, so it is the item's PCM.
