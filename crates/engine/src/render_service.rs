@@ -22,6 +22,7 @@ use anicraft_render::{RenderStats, View, render};
 use rayon::prelude::*;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::hash::{Hash, Hasher};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex, PoisonError};
 use std::thread::JoinHandle;
 use web_time::Instant;
@@ -434,6 +435,9 @@ struct Shared {
     raster: Mutex<RasterSlot>,
     wake: Condvar,
     cache: Mutex<FrameCache>,
+    /// Counts [`RenderService::forget_pictures`] calls: a batch the worker took before one of
+    /// them is of a document no longer shown, and its pictures are dropped, not cached.
+    forgets: AtomicU64,
     notify: Option<Box<dyn Fn() + Send + Sync>>,
 }
 
@@ -454,7 +458,7 @@ impl RenderService {
     /// Starts the worker. `notify` runs on the worker after each finished batch (the UI passes
     /// "request a repaint"). If no thread can be spawned, requests render synchronously.
     pub fn new(cache_bytes: usize, notify: Option<Box<dyn Fn() + Send + Sync>>) -> RenderService {
-        let shared = Arc::new(Shared { queue: Mutex::new(Queue::default()), raster: Mutex::new(RasterSlot::default()), wake: Condvar::new(), cache: Mutex::new(FrameCache::new(cache_bytes)), notify });
+        let shared = Arc::new(Shared { queue: Mutex::new(Queue::default()), raster: Mutex::new(RasterSlot::default()), wake: Condvar::new(), cache: Mutex::new(FrameCache::new(cache_bytes)), forgets: AtomicU64::new(0), notify });
         let s = shared.clone();
         let worker = std::thread::Builder::new().name("anicraft-render".into()).spawn(move || worker_loop(&s)).ok();
         RenderService { shared, worker }
@@ -607,9 +611,20 @@ impl RenderService {
         !q.busy.is_empty() || !q.urgent.is_empty() || !q.prefetch.is_empty()
     }
 
-    /// Forgets every finished picture, in memory and on the GPU: an editor showing another
-    /// document calls it, so the one put aside keeps no pictures (ADR 0112).
+    /// Forgets every picture, in memory and on the GPU: an editor showing another document
+    /// calls it, so the one put aside keeps no pictures (ADR 0112). That includes the ones still
+    /// to come: queued jobs are dropped, and a batch the worker is drawing is thrown away when
+    /// it finishes, instead of landing in the cache after it was emptied.
     pub fn forget_pictures(&self) {
+        {
+            let mut q = self.queue();
+            q.urgent.clear();
+            q.prefetch.clear();
+            // Under the queue's lock, where the worker reads it as it takes a batch; and before
+            // the cache is emptied, so a batch that still sees the old count is cached before
+            // the emptying, never after.
+            self.shared.forgets.fetch_add(1, Ordering::SeqCst);
+        }
         self.cache().clear();
     }
 
@@ -650,7 +665,7 @@ impl Drop for RenderService {
 fn worker_loop(s: &Shared) {
     loop {
         // Take a whole batch: urgent first, topped up with prefetch work.
-        let jobs: Vec<FrameJob> = {
+        let (jobs, forgets): (Vec<FrameJob>, u64) = {
             let mut q = s.queue.lock().unwrap_or_else(PoisonError::into_inner);
             loop {
                 if q.shutdown {
@@ -665,7 +680,7 @@ fn worker_loop(s: &Shared) {
                     for j in &batch {
                         q.busy.insert(j.key);
                     }
-                    break batch;
+                    break (batch, s.forgets.load(Ordering::SeqCst));
                 }
                 q = s.wake.wait(q).unwrap_or_else(PoisonError::into_inner);
             }
@@ -678,8 +693,11 @@ fn worker_loop(s: &Shared) {
         let imgs = render_batch_by(&todo, &slot);
         {
             let mut cache = s.cache.lock().unwrap_or_else(PoisonError::into_inner);
-            for img in imgs {
-                cache.insert(Arc::new(img));
+            // Pictures asked for before `forget_pictures` show a document put aside since.
+            if s.forgets.load(Ordering::SeqCst) == forgets {
+                for img in imgs {
+                    cache.insert(Arc::new(img));
+                }
             }
         }
         {
@@ -703,6 +721,42 @@ mod tests {
     fn job(doc: &Document, state: u64, frame: u32) -> FrameJob {
         let view = View { transform: Affine::scale(0.25, 0.25), width: 320, height: 180, background: Some(doc.stage.background) };
         make_job(state, doc, frame, view, None)
+    }
+
+    /// ADR 0112: the document put aside keeps no pictures, also when the worker was still
+    /// drawing some, or had some queued, as the other document was shown. (They used to land
+    /// in the cache after it was emptied and stay until something evicted them.)
+    #[test]
+    fn pictures_still_being_drawn_are_forgotten_too() {
+        use std::sync::mpsc::channel;
+        let doc = sample::demo();
+        let svc = RenderService::new(64 << 20, None);
+        // A stand-in rasterizer that says when it starts a picture and waits to be let go.
+        let (started, starts) = channel::<()>();
+        let (go, gate) = channel::<()>();
+        let (started, gate) = (Mutex::new(started), Mutex::new(gate));
+        let held: Rasterizer = Arc::new(move |_: &DisplayList, v: &View| {
+            let _ = started.lock().unwrap_or_else(PoisonError::into_inner).send(());
+            let _ = gate.lock().unwrap_or_else(PoisonError::into_inner).recv();
+            Ok((Raster::Premul8(vec![0; v.width as usize * v.height as usize * 4]), RenderStats::default()))
+        });
+        svc.set_rasterizer(Some(held));
+        let view = View { transform: Affine::scale(0.25, 0.25), width: 32, height: 18, background: None };
+        let (drawing, queued) = (svc.job(1, &doc, 3, view, None), svc.job(1, &doc, 4, view, None));
+        assert!(svc.request(drawing.clone()).is_none());
+        starts.recv().unwrap(); // the worker is drawing the first picture
+        svc.prefetch(vec![queued.clone()]);
+        svc.forget_pictures();
+        // Let the worker finish whatever it still draws; nothing more is started.
+        drop(go);
+        while svc.busy() {
+            std::thread::yield_now();
+        }
+        assert_eq!(svc.cache_stats().0, 0, "the picture that was being drawn is not kept");
+        assert!(starts.try_recv().is_err(), "and the queued one is never drawn");
+        // The service still draws what is asked for afterwards.
+        assert!(svc.request(queued.clone()).is_none());
+        assert!(svc.wait_for(queued.key, 60_000).is_some());
     }
 
     #[test]
