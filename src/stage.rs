@@ -765,7 +765,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
             Drag::BindMarquee { start, cur } => crate::bind_tool::drag_end(app, start, cur, shift, command),
             Drag::BindPaint { .. } => crate::bind_tool::paint_end(app),
             Drag::Pencil => crate::pathtools::commit_pencil(app, xf),
-            Drag::Brush => crate::brushtool::commit(app, xf),
+            Drag::Brush => crate::brushtool::commit(app, ui.ctx(), xf),
             Drag::Eraser => crate::erasertool::commit(app, xf),
             // Raw shapes merge where they landed, in the drag's step (ADR 0051).
             Drag::MultiMove { .. } | Drag::MultiTransform { .. } => crate::onion::drag_end(app),
@@ -820,7 +820,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                 Tool::Brush if !panning => {
                     // A click paints a dab.
                     crate::brushtool::start(app, to_v(sp), pressure, now);
-                    crate::brushtool::commit(app, xf);
+                    crate::brushtool::commit(app, ui.ctx(), xf);
                 }
                 Tool::Eraser if !panning => {
                     if app.eraser.faucet {
@@ -1383,6 +1383,8 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
     crate::widthtool::draw_overlay(app, &painter, xf, pointer.filter(|p| canvas.contains(*p)));
     crate::gradient_tool::draw_overlay(app, &painter, xf, pointer.filter(|p| canvas.contains(*p) && !panning));
     crate::shape_envelope::draw_overlay(app, &painter, xf, pointer.filter(|p| canvas.contains(*p) && !panning));
+    // Strokes on their way into the document (ADR 0129), under the one in hand.
+    crate::ink::draw(app, &painter, xf);
     crate::brushtool::draw_overlay(app, &painter, xf, pointer.filter(|p| canvas.contains(*p) && !panning && !paused));
     crate::erasertool::draw_overlay(app, &painter, xf, pointer.filter(|p| canvas.contains(*p) && !panning && !paused));
     // After this frame's edits, so a drag on the path shows where it is now.
@@ -2621,16 +2623,33 @@ fn exclude_overlying_artwork(fills: &mut Vec<Rect>, above: &[anicraft_engine::do
 
 /// Remove areas covered by `occluders` from a collection of rectangles.
 /// Each overlapping rectangle may produce up to four smaller rectangles.
+///
+/// Both lists are rows of runs, thousands of each for a long brush stroke, so a span is only
+/// compared with the occluders in its own rows: they are looked up by their top edge. Comparing
+/// every span with every occluder took seconds a frame on such a stroke (#519).
 fn subtract_spans(spans: &mut Vec<Rect>, occluders: &[Rect]) {
     let mut remaining = Vec::new();
     let mut pieces = Vec::new();
     let mut next = Vec::new();
+    // The occluders by top edge (their order among equals kept), and the tallest of them: one
+    // that reaches down into a span starts less than that above the span's top.
+    let mut by_top: Vec<usize> = (0..occluders.len()).collect();
+    let top_of = |i: usize| occluders.get(i).map_or(f32::INFINITY, |o| o.top());
+    by_top.sort_by(|&a, &b| top_of(a).total_cmp(&top_of(b)));
+    let tallest = occluders.iter().fold(0.0f32, |h, o| h.max(o.height()));
+    let mut rows: Vec<usize> = Vec::new();
 
     for span in spans.drain(..) {
         pieces.clear();
         pieces.push(span);
+        let from = by_top.partition_point(|&i| top_of(i) <= span.top() - tallest);
+        let to = by_top.partition_point(|&i| top_of(i) < span.bottom());
+        rows.clear();
+        rows.extend(by_top.get(from..to).unwrap_or(&[]));
+        // In the order they were given, so the pieces come out as they always did.
+        rows.sort_unstable();
 
-        for &occluder in occluders {
+        for &occluder in rows.iter().filter_map(|&i| occluders.get(i)) {
             // Skip occluders that cannot touch the original span.
             let overlap = span.intersect(occluder);
             if overlap.width() <= 0.0 || overlap.height() <= 0.0 {
@@ -2772,6 +2791,34 @@ mod pattern_tests {
             smooth: true,
             warp: None,
         }
+    }
+
+    /// #519: occluders are looked up by row instead of each being tried against every span.
+    /// What is left is the same as trying them all: every point of a span is kept exactly when
+    /// no occluder covers it, whatever the occluders' heights and order.
+    #[test]
+    fn spans_lose_exactly_what_the_occluders_in_their_rows_cover() {
+        // A fixed scatter: rows of runs, and occluders one row to many rows tall, unsorted.
+        let n = |i: u32, k: u32, m: u32| (i.wrapping_mul(2_654_435_761).wrapping_add(k.wrapping_mul(40_503)) >> 7) % m;
+        let spans: Vec<Rect> = (0..300).map(|i| Rect::from_min_size(pos2(n(i, 1, 180) as f32, (n(i, 2, 50) * 4) as f32), vec2(4.0 + n(i, 3, 40) as f32, 4.0))).collect();
+        let occluders: Vec<Rect> = (0..400).map(|i| Rect::from_min_size(pos2(n(i, 4, 190) as f32 + 0.5, n(i, 5, 200) as f32 + 0.25), vec2(1.0 + n(i, 6, 25) as f32, if i % 7 == 0 { 30.0 } else { 1.0 }))).collect();
+        let mut left = spans.clone();
+        subtract_spans(&mut left, &occluders);
+        let inside = |rects: &[Rect], p: Pos2| rects.iter().any(|r| r.contains(p));
+        let mut kept = 0;
+        for y in 0..420 {
+            for x in 0..460 {
+                let p = pos2(x as f32 * 0.5 + 0.13, y as f32 * 0.5 + 0.11);
+                let want = inside(&spans, p) && !inside(&occluders, p);
+                assert_eq!(inside(&left, p), want, "at {p:?}");
+                kept += usize::from(want);
+            }
+        }
+        assert!(kept > 1000, "the scatter leaves something to compare: {kept}");
+        // Nothing to take away leaves the spans as they were.
+        let mut same = spans.clone();
+        subtract_spans(&mut same, &[]);
+        assert_eq!(same, spans);
     }
 
     /// A thin opaque foreground shape must hide the selection
