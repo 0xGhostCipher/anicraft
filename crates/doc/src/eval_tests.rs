@@ -835,7 +835,7 @@ fn keep_area_off_is_bit_exact_with_a_tween_that_never_had_it_and_files_stay_smal
 
 /// A chain of symbols, each holding two instances of the next and the last one a square: 2^depth
 /// squares from `depth` symbols, with no cycle anywhere and no nesting deeper than the cap.
-fn doubling_doc(depth: u64) -> Document {
+pub(crate) fn doubling_doc(depth: u64) -> Document {
     let mut d = Document::default();
     let instance = |id: u64, symbol: u64, x: f32| Element {
         id: ElementId(id),
@@ -877,4 +877,64 @@ fn symbols_that_double_at_each_level_stay_within_the_allowance() {
     let bounds = hostile.timeline(0).layers[0].keyframes[0].elements[0].bounds(&hostile);
     assert!(!bounds.is_empty(), "what was reached still counts");
     assert!(started.elapsed() < std::time::Duration::from_secs(30), "{:?}", started.elapsed());
+}
+
+/// ADR 0128: a frame that ran out of work says so, and one that did not, does not.
+#[test]
+fn a_frame_cut_short_by_the_allowance_says_artwork_is_left_out() {
+    let small = evaluate(&doubling_doc(11), 0);
+    assert!(!small.left_out);
+    let cut = evaluate(&doubling_doc(31), 0);
+    assert!(cut.left_out);
+    // Whoever composes lists (onion skin, the hit overlay) keeps the mark.
+    let mut both = small.clone();
+    both.append(cut);
+    assert!(both.left_out);
+    assert!(evaluate_scene(&doubling_doc(31), 0, 0).left_out && evaluate_scene_camera(&doubling_doc(31), 0, 0).left_out);
+}
+
+/// ADR 0128: what takes more work is counted as more, so nesting can multiply none of it past
+/// the allowance: layers with nothing on them, an outline of many commands, a symbol far into
+/// a long library.
+#[test]
+fn layers_long_outlines_and_long_libraries_count_as_work() {
+    let plain = evaluate(&doubling_doc(31), 0).items.len();
+    // 200 empty layers in every symbol: each visit of a symbol looks at all of them.
+    let mut layered = doubling_doc(31);
+    for sym in &mut layered.library {
+        let tl = &mut Arc::make_mut(sym).timeline;
+        for i in 0..200 {
+            tl.layers.push(Arc::new(Layer::new(LayerId(9000 + i), "empty")));
+        }
+    }
+    let dl = evaluate(&layered, 0);
+    assert!(dl.left_out && dl.items.len() * 20 < plain, "{} of {plain}", dl.items.len());
+    assert!(!layered.timeline(0).layers[0].keyframes[0].elements[0].bounds(&layered).is_empty());
+    // The one shape at the bottom has an outline of several units of work.
+    let mut heavy = doubling_doc(31);
+    let last = heavy.library.len() - 1;
+    let mut path = Path::new();
+    path.move_to(Vec2::ZERO);
+    for i in 0..(8 * crate::eval::PATH_COMMANDS_PER_UNIT) {
+        path.line_to(Vec2::new(i as f32, (i % 7) as f32));
+    }
+    let shape = Arc::make_mut(&mut Arc::make_mut(&mut Arc::make_mut(&mut Arc::make_mut(&mut heavy.library[last]).timeline.layers[0]).keyframes[0]).elements[0]);
+    shape.kind = ElementKind::Shape(Shape::filled(path, Paint::Solid(Rgba::BLACK)));
+    let dl = evaluate(&heavy, 0);
+    assert!(dl.left_out && dl.items.len() * 2 < plain, "{} of {plain}", dl.items.len());
+    // The same symbols behind several thousand others: every lookup walks past them.
+    let mut far = doubling_doc(31);
+    let mut library: Vec<Arc<Symbol>> = (0..8 * crate::eval::LIBRARY_ENTRIES_PER_UNIT as u64).map(|i| Arc::new(Symbol { id: SymbolId(1_000_000 + i), name: String::new(), kind: SymbolKind::Graphic, linkage: None, scale_grid_kept: None, scale_grid: None, timeline: Timeline::default() })).collect();
+    library.append(&mut far.library);
+    far.library = library;
+    let dl = evaluate(&far, 0);
+    assert!(dl.left_out && dl.items.len() * 2 < plain, "{} of {plain}", dl.items.len());
+    // A library that long is no cost to a scene of ordinary size.
+    let mut modest = doubling_doc(11);
+    let mut library = far.library.clone();
+    library.truncate(8 * crate::eval::LIBRARY_ENTRIES_PER_UNIT);
+    library.append(&mut modest.library);
+    modest.library = library;
+    let dl = evaluate(&modest, 0);
+    assert!(!dl.left_out && dl.items.len() == 1 << 10);
 }

@@ -13,21 +13,74 @@ use std::sync::Arc;
 /// Symbols nested deeper than this are not drawn (guards cyclic libraries).
 pub const MAX_SYMBOL_DEPTH: usize = 32;
 
-/// Most elements one evaluation (or one bounds query) visits, nested symbols and groups
-/// included. The depth cap alone leaves a symbol holding two instances of the next, 32 deep,
+/// The work one evaluation (or one bounds query) may do, nested symbols and groups included
+/// (ADR 0128). The depth cap alone leaves a symbol holding two instances of the next, 32 deep,
 /// to expand 2^32 times, which no file may make AniCraft do: past the allowance the rest is
 /// left out, so a hostile or damaged document draws in part instead of hanging or running
-/// out of memory. Real scenes stay far below it (the heaviest benchmark has 50,000 shapes).
+/// out of memory, and the result says so ([`DisplayList::left_out`]). Real scenes stay far
+/// below it (the heaviest benchmark has 50,000 shapes).
+///
+/// A unit is one element or one layer visited. A shape costs one more for every
+/// [`PATH_COMMANDS_PER_UNIT`] commands of its outline, and finding a symbol one more for every
+/// [`LIBRARY_ENTRIES_PER_UNIT`] library entries passed, so neither a huge outline nor a huge
+/// library, repeated by nesting, multiplies the work past what the allowance stands for.
 pub const MAX_EVAL_ELEMENTS: u32 = 1_000_000;
 
-/// Takes one visit from `work`; `false` once the allowance is spent.
-pub(crate) fn spend(work: &Cell<u32>) -> bool {
-    match work.get().checked_sub(1) {
-        Some(left) => {
-            work.set(left);
-            true
+/// A shape's outline costs one unit of work for each this many path commands.
+pub const PATH_COMMANDS_PER_UNIT: usize = 256;
+
+/// Finding a symbol costs one unit of work for each this many library entries looked at.
+pub const LIBRARY_ENTRIES_PER_UNIT: usize = 1024;
+
+/// An allowance of work (see [`MAX_EVAL_ELEMENTS`]) shared by everything one query visits, that
+/// remembers whether it ran out.
+pub(crate) struct Work {
+    left: Cell<u32>,
+    ran_out: Cell<bool>,
+}
+
+impl Work {
+    pub(crate) fn new(units: u32) -> Work {
+        Work { left: Cell::new(units), ran_out: Cell::new(false) }
+    }
+
+    /// Takes `units`; `false` once the allowance is spent (and from then on).
+    pub(crate) fn spend(&self, units: u32) -> bool {
+        match self.left.get().checked_sub(units) {
+            Some(left) if !self.ran_out.get() => {
+                self.left.set(left);
+                true
+            }
+            _ => {
+                self.left.set(0);
+                self.ran_out.set(true);
+                false
+            }
         }
-        None => false,
+    }
+
+    /// Something was left out because the allowance was spent.
+    pub(crate) fn ran_out(&self) -> bool {
+        self.ran_out.get()
+    }
+
+    /// Takes what visiting `el` costs.
+    pub(crate) fn visit(&self, el: &Element) -> bool {
+        let outline = match &el.kind {
+            ElementKind::Shape(s) => s.path.cmds.len() / PATH_COMMANDS_PER_UNIT,
+            _ => 0,
+        };
+        self.spend(u32::try_from(outline).unwrap_or(u32::MAX).saturating_add(1))
+    }
+
+    /// The library symbol `id`, paid for by how far into the library it is.
+    pub(crate) fn symbol<'d>(&self, doc: &'d Document, id: SymbolId) -> Option<&'d crate::Symbol> {
+        let at = doc.library.iter().position(|s| s.id == id);
+        let passed = at.unwrap_or(doc.library.len()) / LIBRARY_ENTRIES_PER_UNIT;
+        if passed > 0 && !self.spend(u32::try_from(passed).unwrap_or(u32::MAX)) {
+            return None;
+        }
+        at.and_then(|i| doc.library.get(i)).map(|s| &**s)
     }
 }
 
@@ -87,6 +140,10 @@ pub struct DisplayList {
     /// Links on text (ADR 0085): `(item, url)` for each item drawing characters that link
     /// somewhere, in item order. Sparse: most lists have none.
     pub links: Vec<(u32, Arc<str>)>,
+    /// The frame's allowance of work ([`MAX_EVAL_ELEMENTS`]) ran out, so artwork is missing
+    /// from this list: whoever shows or exports it says so instead of passing it off as the
+    /// whole frame (ADR 0128).
+    pub left_out: bool,
 }
 
 /// A group that fades as one (see [`DisplayList::groups`]).
@@ -160,6 +217,7 @@ impl DisplayList {
             self.set_clip_mode(base + i as u32, m);
         }
         self.groups.extend(other.groups.into_iter().map(|g| Group { parent: gshift(g.parent), alpha: g.alpha, blend: g.blend, filters: g.filters, clip: shift(g.clip) }));
+        self.left_out |= other.left_out;
         let ibase = self.items.len() as u32;
         self.links.extend(other.links.into_iter().map(|(i, u)| (i + ibase, u)));
         self.items.extend(other.items.into_iter().map(|mut i| {
@@ -182,8 +240,9 @@ pub fn evaluate(doc: &Document, frame: u32) -> DisplayList {
 /// applied: what the stage shows while editing (and what picking and bounds use).
 pub fn evaluate_scene(doc: &Document, scene: usize, frame: u32) -> DisplayList {
     let mut out = DisplayList::default();
-    let work = Cell::new(MAX_EVAL_ELEMENTS);
+    let work = Work::new(MAX_EVAL_ELEMENTS);
     eval_timeline(doc, doc.timeline(scene), frame, &Ctx::top(Affine::IDENTITY, &work), &mut out, None);
+    out.left_out = work.ran_out();
     out
 }
 
@@ -192,8 +251,9 @@ pub fn evaluate_scene(doc: &Document, scene: usize, frame: u32) -> DisplayList {
 /// top-level ones, as a scene's are in [`evaluate_scene`].
 pub fn evaluate_timeline(doc: &Document, tl: &Timeline, frame: u32) -> DisplayList {
     let mut out = DisplayList::default();
-    let work = Cell::new(MAX_EVAL_ELEMENTS);
+    let work = Work::new(MAX_EVAL_ELEMENTS);
     eval_timeline(doc, tl, frame, &Ctx::top(Affine::IDENTITY, &work), &mut out, None);
+    out.left_out = work.ran_out();
     out
 }
 
@@ -203,8 +263,9 @@ pub fn evaluate_timeline(doc: &Document, tl: &Timeline, frame: u32) -> DisplayLi
 /// skin or Edit Multiple Frames composes its frames (ADR 0051).
 pub fn evaluate_timeline_at(doc: &Document, tl: &Timeline, frame: u32, xf: Affine) -> DisplayList {
     let mut out = DisplayList::default();
-    let work = Cell::new(MAX_EVAL_ELEMENTS);
+    let work = Work::new(MAX_EVAL_ELEMENTS);
     eval_timeline(doc, tl, frame, &Ctx::top(xf, &work), &mut out, None);
+    out.left_out = work.ran_out();
     out
 }
 
@@ -214,8 +275,9 @@ pub fn evaluate_timeline_at(doc: &Document, tl: &Timeline, frame: u32, xf: Affin
 pub fn evaluate_scene_camera(doc: &Document, scene: usize, frame: u32) -> DisplayList {
     let tl = doc.timeline(scene);
     let mut out = DisplayList::default();
-    let work = Cell::new(MAX_EVAL_ELEMENTS);
+    let work = Work::new(MAX_EVAL_ELEMENTS);
     eval_timeline(doc, tl, frame, &Ctx::through(tl.camera_at(frame, &doc.stage), &work), &mut out, None);
+    out.left_out = work.ran_out();
     out
 }
 
@@ -224,22 +286,26 @@ pub fn evaluate_scene_camera(doc: &Document, scene: usize, frame: u32) -> Displa
 /// through the scene's camera.
 pub fn evaluate_player(doc: &Document, state: &PlayerState) -> DisplayList {
     let mut out = DisplayList::default();
-    let work = Cell::new(MAX_EVAL_ELEMENTS);
+    let work = Work::new(MAX_EVAL_ELEMENTS);
     let play = Play { state, path: Vec::new() };
     let tl = doc.timeline(state.scene);
     eval_timeline(doc, tl, state.root.frame, &Ctx::through(tl.camera_at(state.root.frame, &doc.stage), &work), &mut out, Some(&play));
+    out.left_out = work.ran_out();
     out
 }
 
 /// A symbol's timeline at `frame`, drawn at `xf` (stage space): a button's hit area, or a movie
 /// clip's artwork, as the player sees it when `play` is given.
-pub(crate) fn evaluate_symbol(doc: &Document, tl: &Timeline, frame: u32, xf: Affine, play: Option<&Play<'_>>) -> DisplayList {
+///
+/// `work` is the caller's allowance, so a player step that looks at many instances pays for
+/// all of them from one.
+pub(crate) fn evaluate_symbol(doc: &Document, tl: &Timeline, frame: u32, xf: Affine, play: Option<&Play<'_>>, work: &Work) -> DisplayList {
     let mut out = DisplayList::default();
-    let work = Cell::new(MAX_EVAL_ELEMENTS);
-    let mut cx = Ctx::top(xf, &work);
+    let mut cx = Ctx::top(xf, work);
     cx.depth = 1;
     cx.stage = false;
     eval_timeline(doc, tl, frame, &cx, &mut out, play);
+    out.left_out = work.ran_out();
     out
 }
 
@@ -602,9 +668,9 @@ fn interpolate(a: &Element, b: &Element, pr: Progress, morph: bool, hints: &[(an
 /// What a timeline is evaluated inside of.
 #[derive(Clone, Copy)]
 struct Ctx<'a> {
-    /// The evaluation's allowance of element visits ([`MAX_EVAL_ELEMENTS`]), shared by everything
-    /// nested in it.
-    work: &'a Cell<u32>,
+    /// The evaluation's allowance of work ([`MAX_EVAL_ELEMENTS`]), shared by everything nested
+    /// in it.
+    work: &'a Work,
     /// Local → stage transform and colour effect of the enclosing instance.
     xf: Affine,
     color: ColorTransform,
@@ -632,12 +698,12 @@ struct Ctx<'a> {
 }
 
 impl<'a> Ctx<'a> {
-    fn top(xf: Affine, work: &'a Cell<u32>) -> Ctx<'a> {
+    fn top(xf: Affine, work: &'a Work) -> Ctx<'a> {
         Ctx { work, xf, color: ColorTransform::IDENTITY, depth: 0, root: None, outline: None, stage: true, clip: None, masks: None, guide: false, group: None, camera: None, slice: None }
     }
 
     /// A main timeline seen through `camera`: its tint colours everything.
-    fn through(camera: Option<Camera>, work: &'a Cell<u32>) -> Ctx<'a> {
+    fn through(camera: Option<Camera>, work: &'a Work) -> Ctx<'a> {
         let mut cx = Ctx::top(Affine::IDENTITY, work);
         cx.stage = false;
         if let Some(c) = camera {
@@ -777,6 +843,11 @@ fn eval_timeline(doc: &Document, tl: &Timeline, frame: u32, cx: &Ctx<'_>, out: &
     for k in 0..n {
         let index = sorted.as_ref().map_or(n - 1 - k, |o| o.get(k).copied().unwrap_or(n));
         let Some(layer) = tl.layers.get(index) else { continue };
+        // A layer looked at counts as an element does, so a timeline of empty layers, repeated
+        // by nesting, is bounded too.
+        if !cx.work.spend(1) {
+            return;
+        }
         // Guide artwork is listed (marked, for editing) but never drawn; inside mask artwork
         // it plays no part at all.
         let is_guide = layer.kind == LayerKind::Guide;
@@ -872,8 +943,9 @@ struct LayerCtx<'a> {
 }
 
 fn eval_element(doc: &Document, cx: &Ctx<'_>, lc: &LayerCtx<'_>, el: &Element, out: &mut DisplayList, play: Option<&Play<'_>>) {
-    // Every element drawn counts, however deep: see MAX_EVAL_ELEMENTS.
-    if !spend(cx.work) {
+    // Every element drawn counts, however deep, and a shape by the size of its outline: see
+    // MAX_EVAL_ELEMENTS.
+    if !cx.work.visit(el) {
         return;
     }
     let LayerCtx { layer, frame, kf_start, clip, masks, guide, outline: layer_outline, xf: layer_xf } = *lc;
@@ -1002,7 +1074,7 @@ fn eval_element(doc: &Document, cx: &Ctx<'_>, lc: &LayerCtx<'_>, el: &Element, o
             }
         }
         ElementKind::Symbol { symbol, loop_mode, first_frame, blend, filters, .. } => {
-            let Some(sym) = doc.symbol(*symbol) else { return };
+            let Some(sym) = cx.work.symbol(doc, *symbol) else { return };
             let len = sym.timeline.frame_count();
             let local = match (sym.kind, &child) {
                 // A graphic keeps step with this timeline: loop mode and first frame apply.
@@ -1149,7 +1221,7 @@ fn sliced_shape(s: &Shape, own: &Affine, sl: &Slicing) -> (Arc<Path>, Affine, Op
 
 #[cfg(test)]
 #[path = "eval_tests.rs"]
-mod tests;
+pub(crate) mod tests;
 
 #[cfg(test)]
 #[path = "pivot_tests.rs"]

@@ -1113,18 +1113,18 @@ impl Element {
     }
     /// Local-space bounds (control-point bounds for shapes, `None` for symbols).
     pub fn local_bounds(&self, doc: &Document) -> Rect {
-        element_bounds(doc, self, &Affine::IDENTITY, 0, &std::cell::Cell::new(MAX_EVAL_ELEMENTS))
+        element_bounds(doc, self, &Affine::IDENTITY, 0, &eval::Work::new(MAX_EVAL_ELEMENTS))
     }
     /// Bounds in the parent's space.
     pub fn bounds(&self, doc: &Document) -> Rect {
-        element_bounds(doc, self, &self.transform, 0, &std::cell::Cell::new(MAX_EVAL_ELEMENTS))
+        element_bounds(doc, self, &self.transform, 0, &eval::Work::new(MAX_EVAL_ELEMENTS))
     }
 }
 
-/// `work` is the query's allowance of element visits ([`MAX_EVAL_ELEMENTS`]): past it the rest
-/// adds nothing, as in evaluation.
-fn element_bounds(doc: &Document, el: &Element, xf: &Affine, depth: usize, work: &std::cell::Cell<u32>) -> Rect {
-    if depth > MAX_SYMBOL_DEPTH || !eval::spend(work) {
+/// `work` is the query's allowance ([`MAX_EVAL_ELEMENTS`]): past it the rest adds nothing, as in
+/// evaluation. A shape pays for the outline measured here, and a symbol for each of its layers.
+fn element_bounds(doc: &Document, el: &Element, xf: &Affine, depth: usize, work: &eval::Work) -> Rect {
+    if depth > MAX_SYMBOL_DEPTH || !work.visit(el) {
         return Rect::EMPTY;
     }
     match &el.kind {
@@ -1142,9 +1142,12 @@ fn element_bounds(doc: &Document, el: &Element, xf: &Affine, depth: usize, work:
             r
         }
         ElementKind::Symbol { symbol, .. } => {
-            let Some(sym) = doc.symbol(*symbol) else { return Rect::EMPTY };
+            let Some(sym) = work.symbol(doc, *symbol) else { return Rect::EMPTY };
             let mut r = Rect::EMPTY;
             for layer in &sym.timeline.layers {
+                if !work.spend(1) {
+                    return r;
+                }
                 if let Some(kf) = layer.keyframes.first() {
                     for child in &kf.elements {
                         let m = xf.mul(&child.transform);
