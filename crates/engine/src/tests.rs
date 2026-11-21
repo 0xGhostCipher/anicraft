@@ -2840,3 +2840,36 @@ fn exports_of_a_frame_too_large_to_draw_say_artwork_was_left_out() {
     }
     std::fs::remove_dir_all(&dir).unwrap();
 }
+
+/// P-011: two raw fills side by side, their outlines joined along the edge they share, on a
+/// shape tween that follows a motion guide. A guide places every element by its own origin, so
+/// the stroke runs used to leave the fills and cross them. Each run rides with the fill it
+/// edges, the same number of runs on both keys or not; the shared edge goes with the lower fill.
+#[test]
+fn guided_shape_tweens_keep_each_raw_outline_on_its_fill() {
+    let mut s = Session::default();
+    for (x, fill) in [(100, "#e63946"), (180, "#457b9d")] {
+        run(&mut s, "draw.rect", json!({"x": x, "y": 240, "w": 80, "h": 80, "fill": fill, "stroke": "#000000", "stroke_width": 4, "object": false}));
+    }
+    let art = s.active_layer().unwrap().id;
+    run(&mut s, "timeline.goto", json!({"frame": 20}));
+    run(&mut s, "timeline.insert_keyframe", json!({}));
+    run(&mut s, "edit.select_all", json!({}));
+    run(&mut s, "element.translate", json!({"dx": 440, "dy": 0}));
+    run(&mut s, "timeline.goto", json!({"frame": 0}));
+    run(&mut s, "timeline.create_shape_tween", json!({}));
+    run(&mut s, "layer.add_motion_guide", json!({"layer": art.0}));
+    for (a, b) in [((140, 280), (400, 80)), ((400, 80), (660, 280))] {
+        run(&mut s, "draw.line", json!({"x0": a.0, "y0": a.1, "x1": b.0, "y1": b.1, "object": false}));
+    }
+    let length = |segs: &[(Vec2, Vec2)]| segs.iter().map(|(a, b)| a.distance(*b)).sum::<f32>();
+    let on_art = |list: &anicraft_doc::DisplayList| (outline_segments(list.items.iter().filter(|i| i.layer == art && i.fill.is_some())), outline_segments(list.items.iter().filter(|i| i.layer == art && i.stroke.is_some())));
+    let drawn = length(&on_art(&anicraft_doc::evaluate_scene(&s.doc, s.scene, 0)).1);
+    assert!(drawn > 500.0, "seven sides of 80: {drawn}");
+    for frame in [3, 5, 10, 15, 18] {
+        let (fill, stroke) = on_art(&anicraft_doc::evaluate_scene(&s.doc, s.scene, frame));
+        let stray = stroke.iter().flat_map(|&(a, b)| (0..=8).map(move |k| a.lerp(b, k as f32 / 8.0))).map(|p| distance_to(&fill, p)).fold(0.0, f32::max);
+        assert!(stray < 0.5, "frame {frame}: a stroke is {stray} off the fills' outlines");
+        assert!((length(&stroke) - drawn).abs() < 1.0, "frame {frame}: every run is still drawn: {} of {drawn}", length(&stroke));
+    }
+}

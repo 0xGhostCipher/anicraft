@@ -381,7 +381,10 @@ pub(crate) fn evaluate_tweened<'a>(layer: &'a Layer, frame: u32, guide: Option<&
     let morph = tween.kind == TweenKind::Shape;
     let path = guide.map(|g| (g, tween.orient));
     let runs = |els: &[Arc<Element>]| els.iter().filter(|e| raw_stroke(e).is_some()).count();
-    if morph && runs(&kf.elements) != runs(&next.elements) {
+    // Along a motion guide the runs are joined even when both keys have as many: a guide places
+    // each element by its own origin, so runs left to pair one by one would each take their own
+    // way along it and leave the fill they edge.
+    if morph && (runs(&kf.elements) != runs(&next.elements) || (path.is_some() && runs(&kf.elements) > 0)) {
         return Some((kf.start, Cow::Owned(morph_raw_strokes(kf, next, t, path))));
     }
     let pairs = if morph && !kf.hints.is_empty() { crate::hints::hint_pairs(kf, next) } else { Vec::new() };
@@ -439,9 +442,20 @@ fn raw_stroke(e: &Element) -> Option<&Stroke> {
 }
 
 /// The raw fill of `els` that `path` (in `xf` space) edges: the one whose edge is within two
-/// snaps of a point on `path`, or that contains it, or the one whose origin is nearest `xf`'s.
+/// snaps of the middle of `path`, or that contains it, or the one whose origin is nearest `xf`'s.
+/// The middle, not an end: a run ends at a corner, where the runs of the fill next door end
+/// too, so an end says nothing about whose edge the run is. An edge two fills share (their
+/// outlines joined there) goes with the lower of the two, the first in the stack.
 fn fill_of(els: &[Arc<Element>], path: &Path, xf: &Affine) -> Option<usize> {
-    if let Some(p) = path.flatten(xf, 0.25).into_iter().next().and_then(|pl| pl.points.get(pl.points.len() / 2).copied())
+    let middle = |pl: anicraft_geom::Polyline| {
+        let k = pl.points.len() / 2;
+        match (pl.points.get(k.wrapping_sub(1)), pl.points.get(k)) {
+            (Some(a), Some(b)) => Some(a.lerp(*b, 0.5)),
+            (None, b) => b.copied(),
+            (a, None) => a.copied(),
+        }
+    };
+    if let Some(p) = path.flatten(xf, 0.25).into_iter().next().and_then(middle)
         && let Some((k, _)) = els.iter().enumerate().find(|(_, e)| {
             matches!(&e.kind, ElementKind::Shape(s) if s.merge && s.fill.is_some() && (s.path.contains(p, &e.transform, s.fill_rule) || s.path.distance_to_edge(p, &e.transform) <= 2.0 * anicraft_geom::planar::SNAP))
         })
