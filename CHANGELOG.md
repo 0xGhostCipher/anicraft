@@ -2,6 +2,36 @@
 
 ## Unreleased
 
+* **Documents too large to draw, shape-tween outlines on a guide, and small fixes from outside**
+  (M8, backlog P-002, P-011 and P-012; ADR 0128).
+  * **Security: no nesting of symbols hangs AniCraft.** The allowance of work one frame has
+    (a million elements) now also counts the layers looked at, the size of each outline and
+    how far into a long library a symbol is, so a file can multiply none of them by nesting.
+    **Test Movie** has an allowance for each step: it used to look at every element of up to
+    10,000 instances after every change, and give every button a whole frame's allowance at
+    every move of the pointer (ideas from Agapenor's #13).
+  * **A frame with artwork left out says so.** The status bar tells you once ("This frame
+    holds more artwork than AniCraft draws at once…"), Test Movie's Output panel says why a
+    step stopped, and the commands that write frames (PNG, SVG, sequences, sprite sheet, GIF,
+    animated PNG and WebP, video) add `"left_out": true` and a `"warning"` to their result
+    instead of passing a partial picture off as the whole one. `anicraft-cli info` and the MCP
+    `anicraft_render` caption say it too.
+  * **Shape tweens along a motion guide keep their outlines** (jayzed80, #238). A raw shape's
+    line pieces used to follow the guide one by one and cross the fill. Each piece now rides
+    with the fill it edges, also when both keyframes have as many pieces; an edge two fills
+    share goes with the lower fill. Outlines are no longer joined through a point where three
+    or more lines meet, dashed and variable-width outlines keep their pieces, and a piece
+    selected on a keyframe stays selected through the tween.
+  * **Colours:** the Eyedropper's result names the colour it picked with its opacity
+    (`#rrggbbaa`); `Rgba::to_hex_alpha` is the hex form that reads back as the same colour,
+    and `to_hex` stays six digits for the exporters (NetterSilver, #233).
+  * **Never crash:** the length of a vector with components past 1.8e19 is no longer infinite,
+    so its direction is no longer lost (NetterSilver, #142; taken only out of range, so drawing
+    costs the same); a private-use language tag such as `x-Arab` is not read as right-to-left
+    (Hagai Baram, #486).
+  * **Tests:** SVG path numbers past `f32` are refused (NetterSilver, #130); linked artwork
+    survives SVG export and re-import with its link sanitised (FredApps, #500).
+
 * **Reliability fixes from the November principal-engineer review** (M8,
   `docs/reviews/2026-11-principal-review.md`).
   * **Save is flushed to the disk** before the new file replaces the old one, as the
