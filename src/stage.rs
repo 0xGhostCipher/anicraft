@@ -240,7 +240,7 @@ fn note_left_out(app: &mut App) {
     }
     let cut = app.s.display_list().left_out;
     if cut && !app.left_out_said {
-        app.status_err(tr!("This frame holds more artwork than AniCraft draws at once, so some of it is left out. Nothing is lost: look for symbols nested many times over."));
+        app.status_err(tr!("Some artwork on this frame is left out: it holds more than AniCraft draws at once. Nothing is lost. Look for symbols nested many times over."));
     }
     app.left_out_said = cut;
 }

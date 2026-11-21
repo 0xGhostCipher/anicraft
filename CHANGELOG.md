@@ -10,8 +10,8 @@
     **Test Movie** has an allowance for each step: it used to look at every element of up to
     10,000 instances after every change, and give every button a whole frame's allowance at
     every move of the pointer (ideas from Agapenor's #13).
-  * **A frame with artwork left out says so.** The status bar tells you once ("This frame
-    holds more artwork than AniCraft draws at once…"), Test Movie's Output panel says why a
+  * **A frame with artwork left out says so.** The status bar tells you once ("Some artwork
+    on this frame is left out…"), Test Movie's Output panel says why a
     step stopped, and the commands that write frames (PNG, SVG, sequences, sprite sheet, GIF,
     animated PNG and WebP, video) add `"left_out": true` and a `"warning"` to their result
     instead of passing a partial picture off as the whole one. `anicraft-cli info` and the MCP

@@ -76,8 +76,8 @@ than four full passes in one step is one no machine plays in time.
 are appended (onion skins, the hit-area overlay). It is a plain field of the result:
 `evaluate` stays a pure function of the document and the frame.
 
-* **The stage** says once, in the status bar, as an error that stays: "This frame holds more
-  artwork than AniCraft draws at once, so some of it is left out. Nothing is lost: look for
+* **The stage** says once, in the status bar, as an error that stays: "Some artwork on this
+  frame is left out: it holds more than AniCraft draws at once. Nothing is lost. Look for
   symbols nested many times over." It says it again only after a frame that was whole. The
   check is skipped while playing, where it would cost an evaluation every frame; the frame
   playback stops on is checked.
