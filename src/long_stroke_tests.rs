@@ -177,6 +177,14 @@ fn edits_wait_for_the_strokes_drawn_before_them() {
     rig.frame("a key", vec![Event::Key { key: egui::Key::F13, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::NONE }]);
     assert!(rig.app.ink.is_empty());
     assert_eq!(rig.shapes(), 1);
+    // Only a few strokes wait at once: one more paints the oldest first.
+    let mut rig = blank();
+    for _ in 0..10 {
+        rig.brush(scribble(450));
+        assert!(rig.app.ink.len() <= 8, "{} waiting", rig.app.ink.len());
+    }
+    rig.until_painted();
+    assert_eq!(rig.shapes(), 10, "every stroke was painted");
     // Leaving the document: it takes its strokes with it.
     let mut rig = blank();
     rig.brush(scribble(3000));
