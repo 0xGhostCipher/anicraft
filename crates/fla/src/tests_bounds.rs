@@ -226,6 +226,18 @@ fn the_tag_scan_stops_at_its_budget_and_says_so() {
     assert!(dumped.iter().all(|s| s.tags_complete));
 }
 
+#[test]
+fn the_dump_shares_one_tag_budget_across_streams() {
+    // Two streams of three-quarters of the budget each: the first is whole, the second keeps
+    // what is left and says it stopped early.
+    let three_quarters = records::MAX_TAGS / 4 * 3;
+    let flood = tags(&vec!["CPicShape"; three_quarters]);
+    let dumped = super::dump(&write(&[("S 1 1", flood.clone()), ("S 2 2", flood)])).unwrap();
+    let get = |path: &str| dumped.iter().find(|s| s.path == path).map(|s| (s.tags.len(), s.tags_complete)).unwrap();
+    assert_eq!(get("S 1 1"), (three_quarters, true));
+    assert_eq!(get("S 2 2"), (records::MAX_TAGS - three_quarters, false));
+}
+
 // The shape rebuild before its indexes, kept here as the oracle the indexed one must match
 // exactly: one style's fill segments gathered by scanning every edge, and each chain step's
 // next segment found by scanning its vertex's list from the start.

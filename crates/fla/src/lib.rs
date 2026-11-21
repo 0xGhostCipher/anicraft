@@ -57,7 +57,8 @@ pub struct StreamDump {
     pub head: String,
     /// The record tags the scanner found, in order.
     pub tags: Vec<(usize, String)>,
-    /// False when the scan stopped at [`records::MAX_TAGS`]: `tags` are the first ones only.
+    /// False when the scan stopped at [`records::MAX_TAGS`], which all of a file's streams
+    /// share: `tags` are the first ones only.
     pub tags_complete: bool,
 }
 
@@ -65,12 +66,16 @@ pub struct StreamDump {
 pub fn dump(data: &[u8]) -> Result<Vec<StreamDump>, cfb::Error> {
     let file = cfb::Compound::new(data)?;
     let mut out = Vec::new();
+    // One tag budget for the whole file: several directory entries may share one chain, so a
+    // budget per stream would let a small file hold millions of tags.
+    let mut tags_left = records::MAX_TAGS;
     for entry in file.entries() {
         if entry.kind != cfb::Kind::Stream {
             continue;
         }
         let bytes = file.stream(&entry.path)?;
-        let scan = records::scan_tags(&bytes);
+        let scan = records::scan_tags_max(&bytes, tags_left);
+        tags_left = tags_left.saturating_sub(scan.tags.len());
         out.push(StreamDump {
             path: entry.path.clone(),
             size: entry.size,
