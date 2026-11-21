@@ -2743,3 +2743,38 @@ fn a_motion_guide_with_sharp_corners_is_followed_to_its_end() {
         prev = p;
     }
 }
+
+/// ADR 0128: a frame cut short by its allowance of work is still written, and every command
+/// that writes it says so; a whole frame's results are as they always were. (The symbols hold
+/// thousands of empty layers, so the allowance goes on looking at them and little is drawn.)
+#[test]
+fn exports_of_a_frame_too_large_to_draw_say_artwork_was_left_out() {
+    let dir = std::env::temp_dir().join(format!("anicraft-left-out-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut large = anicraft_doc::sample::doubling(31);
+    for sym in &mut large.library {
+        let tl = &mut std::sync::Arc::make_mut(sym).timeline;
+        for i in 0..5_000 {
+            tl.layers.push(std::sync::Arc::new(anicraft_doc::Layer::new(anicraft_doc::LayerId(9_000 + i), "empty")));
+        }
+    }
+    for (doc, cut) in [(large, true), (anicraft_doc::sample::doubling(6), false)] {
+        let mut s = Session::new(doc);
+        let at = |name: &str| dir.join(format!("{cut}-{name}")).display().to_string();
+        let results = [
+            s.info(),
+            run(&mut s, "file.export_png", json!({"path": at("f.png"), "scale": 0.1})),
+            run(&mut s, "file.export_svg", json!({"path": at("f.svg")})),
+            run(&mut s, "file.export_png_sequence", json!({"dir": at("png"), "scale": 0.1})),
+            run(&mut s, "file.export_svg_sequence", json!({"dir": at("svg")})),
+            run(&mut s, "file.export_sprite_sheet", json!({"path": at("sheet.png"), "scale": 0.1})),
+            run(&mut s, "file.export_gif", json!({"path": at("f.gif"), "scale": 0.1})),
+            run(&mut s, "file.export_apng", json!({"path": at("a.png"), "scale": 0.1})),
+        ];
+        for v in &results {
+            assert_eq!(v.get("left_out").and_then(Value::as_bool).unwrap_or(false), cut, "{v}");
+            assert_eq!(v.get("warning").is_some(), cut, "{v}");
+        }
+    }
+    std::fs::remove_dir_all(&dir).unwrap();
+}

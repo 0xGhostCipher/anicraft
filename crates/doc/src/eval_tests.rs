@@ -833,32 +833,9 @@ fn keep_area_off_is_bit_exact_with_a_tween_that_never_had_it_and_files_stay_smal
     assert!(back.scenes[0].timeline.layers[0].keyframes[0].tween.as_ref().unwrap().keep_area);
 }
 
-/// A chain of symbols, each holding two instances of the next and the last one a square: 2^depth
-/// squares from `depth` symbols, with no cycle anywhere and no nesting deeper than the cap.
-pub(crate) fn doubling_doc(depth: u64) -> Document {
-    let mut d = Document::default();
-    let instance = |id: u64, symbol: u64, x: f32| Element {
-        id: ElementId(id),
-        name: String::new(),
-        transform: Affine::translate(x, 0.0),
-        color: ColorEffect::default(),
-        kind: ElementKind::Symbol { symbol: SymbolId(symbol), loop_mode: Default::default(), first_frame: 0, blend: Default::default(), filters: Vec::new(), events: Vec::new(), pivot: None },
-    };
-    for level in 0..depth {
-        let mut layer = Layer::new(LayerId(1000 + level), "l");
-        layer.keyframes = vec![Arc::new(Keyframe::new(0, 1))];
-        if level + 1 == depth {
-            push(&mut layer, 0, shape_el(5000, 0.0));
-        } else {
-            push(&mut layer, 0, instance(2000 + level, 101 + level, 0.0));
-            push(&mut layer, 0, instance(3000 + level, 101 + level, 1.0));
-        }
-        let timeline = Timeline { layers: vec![Arc::new(layer)] };
-        d.library.push(Arc::new(Symbol { id: SymbolId(100 + level), name: format!("s{level}"), kind: SymbolKind::Graphic, linkage: None, scale_grid_kept: None, scale_grid: None, timeline }));
-    }
-    layer0(&mut d).keyframes = vec![Arc::new(Keyframe::new(0, 1))];
-    push(layer0(&mut d), 0, instance(1, 100, 0.0));
-    d
+/// [`crate::sample::doubling`]: 2^(depth - 1) squares from `depth` symbols.
+pub(crate) fn doubling_doc(depth: u32) -> Document {
+    crate::sample::doubling(depth)
 }
 
 /// #13: the depth cap alone lets symbols that double at each level expand without end. One
