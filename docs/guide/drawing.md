@@ -402,6 +402,9 @@ a few curves, not hundreds of points. In merged drawing the new fill joins the d
 merges with a fill of the same colour that it touches and cuts into others, as any fill does.
 A drawing object keeps its own fill and gets the outline as a second object above it.
 
+The same action is a button at the top of a shape's properties. With no line selected
+the button is unavailable, and a fill on its own stays as it is.
+
 **Expand Fill…** moves the edge of each selected fill out or in by a **Distance** in pixels.
 **Expand** grows the fill and rounds its corners, as if you had drawn round it with a round
 brush; **Inset** shrinks it and keeps the corners sharp. Holes get smaller as the fill grows,

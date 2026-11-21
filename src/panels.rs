@@ -1096,6 +1096,13 @@ fn selection_props(app: &mut App, ui: &mut egui::Ui, e: &anicraft_engine::doc::E
         ui.label(text(Type::Caption, tr!("Posed by its bone: drag it with the Selection tool. Colour effect, blending and filters apply on every pose of the armature.")));
         return;
     }
+    // At the top of a shape's properties (#530): the same command as Modify › Shape ›
+    // Convert Lines to Fills. A selection with no line leaves the button unavailable, so a
+    // click changes nothing and says nothing.
+    if matches!(e.kind, ElementKind::Shape(_)) {
+        lines_to_fills_button(app, ui);
+        ui.add_space(4.0);
+    }
     if let ElementKind::Symbol { symbol, events, .. } = &e.kind
         && app.s.doc.symbol(*symbol).is_some_and(|x| x.kind != SymbolKind::Graphic)
     {
@@ -1438,6 +1445,27 @@ fn selection_props(app: &mut App, ui: &mut egui::Ui, e: &anicraft_engine::doc::E
                 }
             }
         });
+    }
+}
+
+/// Convert Lines to Fills, drawn at the top of a shape's properties (#530). It dispatches
+/// `modify.lines_to_fills`. With no line selected the button is unavailable: a click does not
+/// run the command, so a fill on its own stays as it is and no error is reported.
+fn lines_to_fills_button(app: &mut App, ui: &mut egui::Ui) {
+    let has_line = app.s.selected_elements().iter().any(|(_, el)| matches!(&el.kind, ElementKind::Shape(sh) if sh.stroke.is_some()));
+    let label = anicraft_engine::find_command("modify.lines_to_fills").map(|c| crate::i18n::t_cmd(c.id, c.label)).unwrap_or_else(|| tr!("Convert Lines to Fills"));
+    let resp = ui.add_enabled(has_line, egui::Button::new(label));
+    let resp = if has_line {
+        resp.on_hover_text(tr!("Turns each selected line into a fill of its outline, in the line's colour, and keeps a fill the shape already has"))
+    } else {
+        resp.on_disabled_hover_text(tr!("Select a line to turn it into a fill. A fill on its own stays as it is"))
+    };
+    if has_line
+        && resp.clicked()
+        && let Some(v) = app.run("modify.lines_to_fills", json!({}))
+    {
+        let n = v["converted"].as_u64().unwrap_or(1);
+        app.status_ok(trn!("Turned {n} line into a fill. {undo} to undo.", "Turned {n} lines into fills. {undo} to undo.", n, undo = app.undo_key()));
     }
 }
 
@@ -3956,5 +3984,85 @@ mod tests {
         frames(&ctx, &mut app);
         let t = transform(&app);
         assert!((t.m[0] - 1.0).abs() < 1e-4 && (t.m[3] - m.m[3]).abs() < 1e-3, "still mirrored as dragged: {t:?}");
+    }
+
+    /// #530: the button at the top of a shape's properties turns a selected line into a fill
+    /// of that line, and leaves a fill that has no line as it is (no error, no undo step).
+    #[test]
+    fn the_shape_properties_button_turns_a_line_into_a_fill_and_leaves_a_fill_alone() {
+        use egui::accesskit::{Action, ActionRequest, Node, Role, TreeId};
+        use egui::{Event, Modifiers};
+
+        let ctx = egui::Context::default();
+        ctx.enable_accesskit();
+        let mut app = App::with_context(&ctx, Session::default(), Some(std::path::PathBuf::from("unused.png")));
+        let input = |events: Vec<Event>| egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1600.0, 1200.0))),
+            events,
+            ..Default::default()
+        };
+        let frame = |ctx: &egui::Context, app: &mut App, extra: Vec<Event>| -> Vec<(egui::accesskit::NodeId, Node)> {
+            let mut events = vec![Event::ModifiersChanged(Modifiers::NONE)];
+            events.extend(extra);
+            let mut out = ctx.run_ui(input(events), |ui| app.frame(ui));
+            out.textures_delta.clear();
+            out.platform_output.accesskit_update.map(|u| u.nodes).unwrap_or_default()
+        };
+        let settle = |ctx: &egui::Context, app: &mut App| {
+            let mut nodes = Vec::new();
+            for _ in 0..4 {
+                nodes = frame(ctx, app, Vec::new());
+            }
+            nodes
+        };
+        let button = |nodes: &[(egui::accesskit::NodeId, Node)]| {
+            nodes.iter().find(|(_, n)| n.role() == Role::Button && n.label() == Some("Convert Lines to Fills")).map(|(id, n)| {
+                (*id, n.is_disabled(), n.supports_action(Action::Click) && n.supports_action(Action::Focus))
+            })
+        };
+        // The first shape's stroke, fill, and the size of its path on the stage.
+        let measured = |app: &App| {
+            let shown = app.s.visible_elements();
+            let e = shown.iter().find(|e| matches!(e.kind, ElementKind::Shape(_))).expect("a shape");
+            match &e.kind {
+                ElementKind::Shape(sh) => {
+                    let b = sh.path.bounds().transformed(&e.transform);
+                    (sh.stroke.is_some(), sh.fill.is_some(), b.width(), b.height())
+                }
+                _ => (false, false, 0.0, 0.0),
+            }
+        };
+
+        app.run("draw.line", json!({"x0": 40.0, "y0": 80.0, "x1": 240.0, "y1": 80.0, "stroke": "#112233", "stroke_width": 8, "cap": "none"})).expect("a line");
+        let nodes = settle(&ctx, &mut app);
+        let (id, disabled, pressable) = button(&nodes).expect("a shape's properties offer Convert Lines to Fills");
+        assert!(!disabled, "a selected line can be turned into a fill");
+        assert!(pressable, "reachable from the keyboard");
+        let (had_stroke, had_fill, w0, h0) = measured(&app);
+        assert!(had_stroke && !had_fill && h0 < w0, "a line, wider than it is tall: {w0} by {h0}");
+        let steps = app.s.history().undo_len();
+        let press = Event::AccessKitActionRequest(ActionRequest { action: Action::Click, target_tree: TreeId::ROOT, target_node: id, data: None });
+        frame(&ctx, &mut app, vec![press]);
+        settle(&ctx, &mut app);
+        let (stroke, fill, w1, h1) = measured(&app);
+        assert!(!stroke && fill, "the line is a fill");
+        assert!(h1 > h0 && w1 + 0.5 >= w0, "the fill covers a band around the line: {w0}×{h0} → {w1}×{h1}");
+        assert_eq!(app.s.history().undo_len(), steps + 1, "one undo step");
+        assert!(app.status.as_ref().is_some_and(|s| !s.error && s.text.contains("fill")), "the change is announced: {:?}", app.status.as_ref().map(|s| s.text.clone()));
+
+        // A fill on its own: the button stays, unavailable, and pressing it changes nothing.
+        app.run("edit.delete", json!({})).expect("removed");
+        app.run("draw.rect", json!({"x": 30.0, "y": 40.0, "w": 80.0, "h": 50.0, "fill": "#cc3333", "stroke": null})).expect("a fill");
+        let nodes = settle(&ctx, &mut app);
+        let (id, disabled, _) = button(&nodes).expect("a fill's properties still offer the button");
+        assert!(disabled, "a fill with no line cannot run it");
+        let doc = app.s.doc.clone();
+        let steps = app.s.history().undo_len();
+        let press = Event::AccessKitActionRequest(ActionRequest { action: Action::Click, target_tree: TreeId::ROOT, target_node: id, data: None });
+        frame(&ctx, &mut app, vec![press]);
+        settle(&ctx, &mut app);
+        assert_eq!(app.s.doc, doc, "the fill is unchanged");
+        assert_eq!(app.s.history().undo_len(), steps, "no undo step");
+        assert!(!app.status.as_ref().is_some_and(|s| s.error), "a fill is not reported as an error: {:?}", app.status.as_ref().map(|s| s.text.clone()));
     }
 }
