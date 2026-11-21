@@ -5398,6 +5398,70 @@ mod pointer_tests {
         assert_eq!((icon, arrowheads), (CursorIcon::Move, 0), "inside the box: move");
     }
 
+    /// #117: a symbol instance that is skewed still answers Free Transform on the stage. Its
+    /// box is the slanted one its artwork has, the handles are on that box's corners, and a
+    /// drag from a corner scales it, one from just outside a corner turns it, and one on an
+    /// edge skews it further: each changes the instance, and each is one undo step.
+    #[test]
+    fn free_transform_handles_work_on_a_skewed_symbol() {
+        let (mut app, ctx, at) = scene();
+        app.run("edit.select_all", json!({}));
+        app.run("edit.delete", json!({}));
+        app.run("draw.rect", json!({"x": 300, "y": 200, "w": 200, "h": 100, "fill": "#3366ff", "stroke": null, "object": true}));
+        app.run("modify.convert_to_symbol", json!({"name": "Slanted"}));
+        // Slant it: the top slides right of the bottom.
+        app.run("modify.transform", json!({"a": 1, "b": 0, "c": -0.6, "d": 1, "e": 150, "f": 0}));
+        app.tool = Tool::Transform;
+        let mut t = 2.0;
+        let mut frame = |app: &mut App, events: Vec<Event>| {
+            t += 0.05;
+            run_frame(&ctx, app, t, events);
+        };
+        frame(&mut app, Vec::new());
+        let instance = |app: &App| app.s.selected_elements().first().map(|(_, e)| e.transform).expect("the instance is selected");
+        let box_of = |app: &App| crate::xform::frame(app).expect("a selection has a box");
+        let slanted = box_of(&app);
+        let [tl, tr, br, bl] = slanted.corners();
+        assert!((tl.x - bl.x).abs() > 30.0 && (tl.y - tr.y).abs() < 1.0, "the box slants with the instance: {tl:?} {tr:?} {br:?} {bl:?}");
+        let mut drag = |app: &mut App, from: Vec2, to: Vec2| {
+            let (a, b) = (at(from.x, from.y), at(to.x, to.y));
+            frame(app, vec![Event::PointerMoved(a)]);
+            frame(app, vec![button(a, true)]);
+            for i in 1..=5 {
+                frame(app, vec![Event::PointerMoved(a + (b - a) * (i as f32 / 5.0))]);
+            }
+            frame(app, vec![button(b, false)]);
+            frame(app, Vec::new());
+        };
+        let steps = |app: &App| app.s.history().undo_len();
+        // The bottom right corner, pulled away from the box: larger, and still as slanted.
+        let (before, undo) = (instance(&app).decompose(), steps(&app));
+        let out = (br - tl).normalized() * 60.0;
+        drag(&mut app, br, br + out);
+        let after = instance(&app).decompose();
+        assert!(after.sx > before.sx * 1.1 && after.sy > before.sy * 1.1, "scaled from the corner handle: {before:?} to {after:?}");
+        assert_eq!(steps(&app), undo + 1, "one undo step");
+        let now = box_of(&app);
+        assert!(now.corners()[0].distance(tl) < 1.0, "the opposite corner stays where it was");
+        // Just outside the top right corner: a turn.
+        let (before, undo) = (instance(&app).decompose(), steps(&app));
+        let [_, tr, _, _] = now.corners();
+        let outside = tr + (tr - now.handle(0, 0)).normalized() * (14.0 / app.view.zoom);
+        drag(&mut app, outside, outside + Vec2::new(40.0, 120.0));
+        let after = instance(&app).decompose();
+        assert!((after.rotation - before.rotation).abs().to_degrees() > 5.0, "turned from outside the corner: {before:?} to {after:?}");
+        assert_eq!(steps(&app), undo + 1);
+        // The top edge between its handles, slid along itself: more slant, the bottom edge kept.
+        let now = box_of(&app);
+        let (undo, bottom) = (steps(&app), now.handle(0, 1));
+        let on_edge = now.handle(-1, -1).lerp(now.handle(0, -1), 0.5);
+        let along = (now.handle(1, -1) - now.handle(-1, -1)).normalized() * 50.0;
+        drag(&mut app, on_edge, on_edge + along);
+        let skewed = box_of(&app);
+        assert!(skewed.handle(0, -1).distance(now.handle(0, -1)) > 20.0 && skewed.handle(0, 1).distance(bottom) < 1.0, "the top edge slid, the bottom stayed");
+        assert_eq!(steps(&app), undo + 1);
+    }
+
     /// A double-click: press, release, `gap` seconds, press, release (each its own frame).
     fn double_click(gap: f64) -> App {
         let (mut app, ctx, at) = scene();
