@@ -47,6 +47,10 @@ USAGE:
   anicraft-cli bench [--layers N] [--shapes N] [--frames N]   performance probe (use --release)
   anicraft-cli bench --check yes         the default scenario against the budgets in
                                          docs/performance.md; fails when one is missed
+  anicraft-cli bench --stroke <samples>  one long Brush stroke: painting it, picking it, moving
+                                         it and the merge when it is deselected (ADR 0129)
+  anicraft-cli bench --stroke-file <file.anicraft>
+                                         the same steps on a document's own artwork
   anicraft-cli serve [file|--sample] [--automation-read-root <folder> --automation-write-root <folder>]
                                          JSON-lines on stdin/stdout:
         {\"id\":1,\"cmd\":\"draw.rect\",\"params\":{\"x\":10,\"y\":10,\"w\":50,\"h\":50}}

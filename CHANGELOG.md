@@ -2,6 +2,26 @@
 
 ## Unreleased
 
+* **A long Brush stroke no longer freezes the window** (M8, ADR 0129, #519, backlog P-003).
+  * A stroke drawn for a long time, over itself again and again, took longer to turn into a
+    shape the longer it was, and a part of it selected over the rest cost seconds on every
+    frame. The outline's tracing is now bounded however long the stroke is (a fast scribble of
+    60 000 samples: 1.5 s before, 0.4 s now, of which the trace is at most 0.3 s), and the
+    selection's stipple is cut row by row (seconds a frame before, a few milliseconds now).
+  * In the editor a long stroke's outline is traced off the window's thread: the stroke stays
+    on the stage as you drew it, you can go on painting at once, and it becomes a shape, in
+    one undo step, a moment later. Anything else you do waits for it first, so strokes and
+    edits always happen in the order you made them.
+  * `anicraft-cli bench --stroke <samples>` measures a long stroke (painting, picking, moving,
+    the merge on deselect), and `bench --stroke-file <file>` a document's own artwork.
+  * Not yet: the Subselection tool, the Paint Bucket and the shape tools' snapping are still
+    slow on a single shape of ten thousand points and more.
+* **Free Transform on a skewed symbol** (M8, #117, backlog P-005): scaling from a corner,
+  turning from outside it and skewing from an edge are now covered end to end by a test on a
+  slanted instance (the fix itself came with ADR 0111). The guide says what a handle scales
+  from (#193). Rotation on Windows and FreeBSD (#479) could not be reproduced on Windows 10
+  and stays open.
+
 * **Reliability fixes from the November principal-engineer review** (M8,
   `docs/reviews/2026-11-principal-review.md`).
   * **Save is flushed to the disk** before the new file replaces the old one, as the

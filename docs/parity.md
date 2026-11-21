@@ -99,7 +99,7 @@ not this table, says what matters most.
 |---|---|---|
 | Selection | **partial** | Raw shapes, objects, marquee, bend an edge, move a corner ([ADR 0041](adr/0041-selection-tool-on-raw-drawings.md), [ADR 0044](adr/0044-selection-across-layers.md)). Missing: a marquee that takes instances and objects it only touches ([#522](https://github.com/storytold/anicraft/issues/522)), Hide Edges ([#298](https://github.com/storytold/anicraft/issues/298)) (P-017). |
 | Subselection | **done** | [ADR 0042](adr/0042-subselection-and-merging-everywhere.md), [ADR 0045](adr/0045-raw-points-and-raw-shapes-inside-symbols.md). |
-| Free Transform | **partial** | Scale, skew, rotate, the transformation point, a box that turns with the object ([ADR 0111](adr/0111-the-transformation-point-a-turning-box-and-layer-opacity.md)), Envelope ([ADR 0080](adr/0080-drawing-parity-leftovers.md)). Missing: Distort. Open bugs: rotation on Windows and FreeBSD ([#479](https://github.com/storytold/anicraft/issues/479)), handles on a skewed symbol ([#117](https://github.com/storytold/anicraft/issues/117)) (P-005). |
+| Free Transform | **partial** | Scale, skew, rotate, the transformation point, a box that turns with the object ([ADR 0111](adr/0111-the-transformation-point-a-turning-box-and-layer-opacity.md)), Envelope ([ADR 0080](adr/0080-drawing-parity-leftovers.md)). Missing: Distort. Open bug: rotation on Windows and FreeBSD ([#479](https://github.com/storytold/anicraft/issues/479)), not reproduced on Windows 10 (P-005). |
 | Gradient Transform | **done** | Gradient and bitmap fills, Lock Fill. |
 | Lasso | **missing** | P-018 ([#515](https://github.com/storytold/anicraft/issues/515)). |
 | Polygon (lasso) | **missing** | P-018. |
