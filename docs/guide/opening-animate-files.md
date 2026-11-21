@@ -142,7 +142,8 @@ any other Animate file, untitled, so saving asks for a new `.anicraft` name.
   and frame rate.
 * **Frame scripts** are kept exactly as written, but don't run in Test Movie.
 * **Not yet**: filters, movie clip component settings and bitmap fills are left out, and dashed
-  or dotted strokes are drawn solid. The report names each of them.
+  or dotted strokes are drawn solid. An instance with filters also loses its blend mode and is
+  drawn as Normal. The report names each of them.
 
 ## Old, damaged and unusual files
 
