@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+* **Reliability pass on the tests** (M8, roadmap P-056).
+  * **Fixed: a document put aside could keep pictures.** Showing another document (a new tab,
+    New, Open) empties the stage's picture cache, but pictures the render thread was still
+    drawing, or had queued, landed in it afterwards and stayed until something evicted them.
+    They are now dropped, and queued ones are never drawn. This was the flaky test
+    `a_document_that_is_not_shown_keeps_no_pictures`, and the only test that failed in
+    repeated runs of the whole suite (once in 8 runs before the fix, none in 11 after).
+  * **The test suite takes less than half the time**: 141 s of test time on 4 threads against
+    305 s. The command fuzz (`panic_hunt_every_command`) was 268 s in one test, four fifths of
+    the suite; it is now one test per starting document, 17 of them, that the runner spreads
+    over its threads. It does the same work.
+  * Tests that wait for another thread (a save, a freed port, a GPU start) give it a minute
+    instead of two seconds before failing; none of them asserts a time.
+
 * **The roadmap is now a guideline, with a parity matrix** (M8, ADR 0125). Docs only.
   `docs/parity.md` compares AniCraft with the reference app feature by feature (done, partial,
   missing, won't do), checked against the code and the guide. `docs/roadmap.md` replaces the

@@ -34,7 +34,7 @@ an ADR. *Lane* names the part of the code an item mostly touches. Two items in *
 lanes** with no entry under *Needs* can be built and merged in parallel; two in the **same
 lane** are better done one after the other, because they meet in the same files. The ids are
 stable: an item keeps its id when the order changes, a new item takes the next free number
-wherever it is placed (P-056 is in the first tier), and a finished item leaves the table for
+wherever it is placed (P-056 was in the first tier), and a finished item leaves the table for
 the changelog.
 
 ## Backlog
@@ -59,7 +59,6 @@ the changelog.
 | P-014 | Pen pressure on every desktop: Linux Wayland (outside PR [#320](https://github.com/storytold/anicraft/issues/320)), reports from tablets ([#290](https://github.com/storytold/anicraft/issues/290)) | Tools | M | a tablet to test with | platform |
 | P-015 | Verified by hand on real machines: the Mac checklist of [ADR 0062](adr/0062-test-movie-window-and-macos-document-opening.md), a hybrid-GPU laptop, passes with Narrator, VoiceOver and Orca ([ADR 0064](adr/0064-accessibility-second-pass.md)), launcher icons on Fedora ([#348](https://github.com/storytold/anicraft/issues/348)) | Accessibility, platforms | M | the machines; the person | platform |
 | P-016 | The guide tells the truth: "Coming from Animate" still lists shipped features as missing; close the issues the appendix marks delivered (the lead does that) | (docs) | S | | docs |
-| P-056 | The test `a_document_that_is_not_shown_keeps_no_pictures` (`src/tabs_tests.rs`) passes every time: on `main` it fails about two runs in three on Windows, alone or in the full run, so a red `cargo test` says nothing | (robustness) | S | | shell |
 
 ### Next: the parity gaps artists meet every day
 
