@@ -108,11 +108,7 @@ fn a_superscript_sits_above_the_line_and_runs_wrap_across() {
     assert!(t.box_width < before.box_width - 5.0, "{} vs {}", t.box_width, before.box_width);
     assert!(t.outline.bounds().min.y <= before.outline.bounds().min.y + 0.5);
     // Wrapping across runs: a width that fits two words per line.
-    run(
-        &mut s,
-        "text.edit",
-        json!({"text": "one two three four five", "width": 180, "runs": [{"chars": 8, "size": 30}, {"chars": 15, "size": 60, "color": "#0000ff"}]}),
-    );
+    run(&mut s, "text.edit", json!({"text": "one two three four five", "width": 180, "runs": [{"chars": 8, "size": 30}, {"chars": 15, "size": 60, "color": "#0000ff"}]}));
     let w = text_of(&s, id);
     assert!(w.box_height > 150.0, "several lines: {}", w.box_height);
     assert!(w.outline.bounds().max.x <= 182.0, "{:?}", w.outline.bounds());
@@ -125,9 +121,7 @@ fn paragraphs_take_their_own_alignment_indent_and_margins() {
         return;
     }
     let mut s = Session::default();
-    let id = ElementId(
-        run(&mut s, "text.create", json!({"text": "Title\nbody text", "x": 0, "y": 0, "size": 30, "width": 400}))["element"].as_u64().unwrap(),
-    );
+    let id = ElementId(run(&mut s, "text.create", json!({"text": "Title\nbody text", "x": 0, "y": 0, "size": 30, "width": 400}))["element"].as_u64().unwrap());
     run(&mut s, "text.paragraph", json!({"start": 0, "end": 0, "align": "center"}));
     let t = text_of(&s, id);
     assert_eq!(t.paragraphs.iter().map(|p| p.align).collect::<Vec<_>>(), vec![TextAlign::Center, TextAlign::Left]);
