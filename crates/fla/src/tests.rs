@@ -461,6 +461,30 @@ fn synthetic_shape_record() -> Vec<u8> {
     d
 }
 
+/// The body of a `CPicShape` record of three 10 × 10 px squares side by side, each in its own
+/// solid fill (red, green, blue): one record that emits three shapes.
+pub(crate) fn three_squares_body() -> Vec<u8> {
+    let mut d = shape_head([0x10000, 0, 0, 0x10000, 0, 0], 12);
+    d.extend_from_slice(&3u16.to_le_bytes());
+    for rgb in [[0xFF, 0, 0], [0, 0xFF, 0], [0, 0, 0xFF]] {
+        d.extend_from_slice(&rgb);
+        d.extend_from_slice(&[0xFF, 0x00, 0x00]); // opaque, solid
+    }
+    d.extend_from_slice(&0u16.to_le_bytes()); // no strokes
+    for fill in 1..=3u8 {
+        // A move 15 px along from the last square's corner (the first from the origin), then
+        // the square, back to that corner.
+        let mv = if fill == 1 { Pt::Half(0, 0) } else { Pt::Half(600, 0) };
+        edge(&mut d, Some(Styles::Narrow(0, 0, fill)), Some(mv), None, Some(Pt::Half(0, 400)));
+        edge(&mut d, None, None, None, Some(Pt::Half(400, 0)));
+        edge(&mut d, None, None, None, Some(Pt::Half(0, -400)));
+        edge(&mut d, None, None, None, Some(Pt::Half(-400, 0)));
+    }
+    d.push(0x00); // the edge list's end
+    d.extend_from_slice(&TAIL);
+    record_body(&d)
+}
+
 fn library_shapes(record: Vec<u8>) -> (Vec<std::sync::Arc<anicraft_doc::Element>>, super::Report) {
     use super::doc;
     let payloads = vec![("Contents", synthetic_contents()), ("P 1 1", synthetic_page()), ("Symbol 9", one_frame_stream(&record_body(&record)))];

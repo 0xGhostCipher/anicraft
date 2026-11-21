@@ -277,6 +277,34 @@ fn groups_shared_exponentially_import_in_bounded_work() {
     assert!(skipped(&report, "objects past a million in one document (left out)") > 0, "{:?}", report.skipped);
 }
 
+/// A drawing whose one record holds three fills, so it emits three shapes.
+fn three_fills(w: &mut Ar) {
+    w.object("CPicShape", 0, None, 1, 0x03, |_| {});
+    w.out.extend(crate::tests::three_squares_body());
+    w.i32(0);
+}
+
+#[test]
+fn every_shape_a_record_emits_is_charged_against_the_object_allowance() {
+    // Four uses of a three-fill drawing, in groups two levels deep: 11 objects visited and 12
+    // shapes emitted, 24 with the library's rectangle.
+    let file = || {
+        let payloads = vec![("Contents", synthetic_contents()), ("P 1 1", page_with(|w| {
+            shared(w, 2, three_fills);
+        })), ("Symbol 9", one_frame_stream(&rectangle_body()))];
+        write(&payloads)
+    };
+    let (doc, report) = crate::doc::import_within(&file(), 24).expect("opens");
+    assert_eq!(shapes_in(&scene(&doc).layers[0].keyframes[0].elements), 12);
+    assert!(report.skipped.is_empty(), "{:?}", report.skipped);
+    // With room for 13, the visits alone (12 with the library's) would have fit and all 12
+    // shapes come in; the shapes count too, so they stop at the allowance and say so.
+    let (doc, report) = crate::doc::import_within(&file(), 13).expect("opens");
+    let shapes = shapes_in(&scene(&doc).layers[0].keyframes[0].elements);
+    assert_eq!(shapes, 6);
+    assert!(skipped(&report, "objects past a million in one document (left out)") > 0, "{:?}", report.skipped);
+}
+
 // The `Contents` scans.
 
 #[test]

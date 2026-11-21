@@ -95,6 +95,12 @@ struct Ctx<'a> {
 
 /// Imports a legacy `.fla` into the AniCraft model.
 pub fn import(data: &[u8]) -> Result<(Document, Report), ImportError> {
+    import_within(data, MAX_CONVERTED)
+}
+
+/// [`import`] converting at most `max_converted` objects and shapes in place of
+/// [`MAX_CONVERTED`] (tests try a small allowance).
+pub(crate) fn import_within(data: &[u8], max_converted: usize) -> Result<(Document, Report), ImportError> {
     let file = Compound::new(data)?;
     let contents = file.stream("Contents")?;
     if contents.first() != Some(&CONTENTS_VERSION) {
@@ -138,7 +144,7 @@ pub fn import(data: &[u8]) -> Result<(Document, Report), ImportError> {
     }
     let fonts = Fonts::get();
     let mut faces = Faces::new();
-    let mut left = MAX_CONVERTED;
+    let mut left = max_converted;
     for (item, &id) in items.iter().zip(&ids) {
         let timeline = match file.stream(&item.stream) {
             Ok(bytes) => {
@@ -542,11 +548,9 @@ fn curve(anchors: &[[f64; 6]], report: &mut Report) -> Option<Easing> {
 /// The AniCraft elements for one decoded object, pushed bottom-first. `groups` are the groups
 /// being converted around it, outermost first.
 fn element(graph: &Graph, n: usize, ctx: &mut Ctx, out: &mut Vec<Arc<Element>>, groups: &mut Vec<usize>) {
-    let Some(left) = ctx.left.checked_sub(1) else {
-        ctx.report.skip("objects past a million in one document (left out)");
+    if !spend(ctx) {
         return;
-    };
-    *ctx.left = left;
+    }
     match graph.node(n) {
         Some(Node::Instance(inst)) => {
             if let Some(e) = instance(inst, ctx) {
@@ -629,12 +633,32 @@ fn shape_skip(why: shape::ShapeError) -> &'static str {
     }
 }
 
+/// Spends one of the document's [`MAX_CONVERTED`] objects; false, and reported, once they are
+/// spent.
+fn spend(ctx: &mut Ctx) -> bool {
+    let Some(left) = ctx.left.checked_sub(1) else {
+        ctx.report.skip("objects past a million in one document (left out)");
+        return false;
+    };
+    *ctx.left = left;
+    true
+}
+
 /// A shape record's AniCraft shapes (one per fill, then per stroke), carried by its matrix.
+/// Each shape is charged against the same allowance as the objects: one record may hold
+/// thousands of fills and strokes and be placed on many keyframes.
 fn push_shapes(record: &shape::ShapeRecord, merge: bool, ctx: &mut Ctx, out: &mut Vec<Arc<Element>>) {
     for what in &record.approximations {
         ctx.report.skip(what);
     }
+    if *ctx.left == 0 {
+        ctx.report.skip("objects past a million in one document (left out)");
+        return;
+    }
     for mut s in record.shapes() {
+        if !spend(ctx) {
+            break;
+        }
         s.merge = merge;
         let id = ElementId(ctx.doc.alloc_id());
         out.push(Arc::new(Element { id, name: String::new(), transform: record.matrix, color: ColorEffect::default(), kind: ElementKind::Shape(s) }));
