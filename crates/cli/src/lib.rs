@@ -3,6 +3,7 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 #[cfg(not(target_arch = "wasm32"))]
+mod bench_stroke;
 pub mod control;
 pub mod mcp;
 
@@ -579,6 +580,9 @@ pub fn check_budgets(out: &Value) -> (Vec<Value>, Vec<String>) {
 /// `cargo run --release -p anicraft-cli -- bench`. With `--check yes`, the default scenario
 /// is compared with [`TIME_BUDGETS`] and a missed budget is an error.
 pub fn bench(a: &Args) -> Result<String, String> {
+    if a.flag("stroke").is_some() || a.flag("stroke-file").is_some() {
+        return bench_stroke::bench_stroke(a);
+    }
     let check = a.flag("check").is_some_and(|v| v == "yes" || v == "true");
     if check {
         if cfg!(debug_assertions) {
