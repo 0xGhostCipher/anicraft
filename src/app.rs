@@ -376,6 +376,9 @@ pub struct App {
     /// The tool in hand last frame (picking the Camera tool adds a camera).
     pub last_tool: Tool,
     pub status: Option<Status>,
+    /// The frame shown was not all drawn when the stage last looked (ADR 0128): the status bar
+    /// has said so, and says it again only after a frame that was whole.
+    pub left_out_said: bool,
     pub prompt: Option<Prompt>,
     /// The Convert to Symbol dialog, and what it chose last (ADR 0053).
     pub convert: Option<crate::convert_symbol::ConvertDialog>,
@@ -802,6 +805,7 @@ impl App {
             camera_preview: false,
             last_tool: Tool::Select,
             status: None,
+            left_out_said: false,
             prompt: None,
             convert: None,
             layer_props: None,

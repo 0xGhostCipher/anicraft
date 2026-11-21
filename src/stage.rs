@@ -230,6 +230,21 @@ fn to_v(p: Pos2) -> Vec2 {
     Vec2::new(p.x, p.y)
 }
 
+/// Says in the status bar, once each time it starts, that the frame shown is not all there: its
+/// artwork took more than a frame's allowance of work, so the rest was left out (ADR 0128). A
+/// picture with parts missing and nothing said would read as lost work. Not asked while
+/// playing, where it would cost an evaluation every frame; the frame playback stops on is.
+fn note_left_out(app: &mut App) {
+    if app.playing {
+        return;
+    }
+    let cut = app.s.display_list().left_out;
+    if cut && !app.left_out_said {
+        app.status_err(tr!("This frame holds more artwork than AniCraft draws at once, so some of it is left out. Nothing is lost: look for symbols nested many times over."));
+    }
+    app.left_out_said = cut;
+}
+
 pub fn show(app: &mut App, ui: &mut egui::Ui) {
     // View › Rulers along the top and the left (ADR 0076); the stage view in what is left.
     let (canvas, bars) = crate::rulers::layout(app, ui.max_rect());
@@ -237,6 +252,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
     crate::camera_tool::on_tool_change(app);
     crate::shape_envelope::settle(app);
     crate::camera_tool::tick(app, ui.ctx(), now);
+    note_left_out(app);
     let canvas_was = std::mem::replace(&mut app.stage_cache.canvas, canvas);
     let laid_out = std::mem::replace(&mut app.stage_cache.laid_out, true);
     // While a colour picker popup is open the stage is its eyedropper (ADR 0109): a click
