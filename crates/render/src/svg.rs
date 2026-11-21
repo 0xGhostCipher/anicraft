@@ -257,9 +257,8 @@ fn style_attrs(st: &anicraft_doc::Stroke, k: f32) -> String {
     out
 }
 
-/// Opaque `#rrggbb`: SVG carries alpha in separate opacity attributes.
 fn hex(c: Rgba) -> String {
-    c.sanitized().with_alpha(1.0).to_hex()
+    c.sanitized().to_hex()
 }
 
 /// `fill="#rrggbb"` (or `stroke=…`), plus the opacity when not opaque.

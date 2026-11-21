@@ -97,14 +97,20 @@ impl Rgba {
         let c = |v: f32| if v.is_finite() { v.clamp(0.0, 1.0) } else { 0.0 };
         Rgba::new(c(self.r), c(self.g), c(self.b), c(self.a))
     }
+    /// Always the opaque `#rrggbb`, alpha left out: what the SVG, HTML and Lottie writers and
+    /// the layer colours put where six digits are expected (they carry opacity themselves).
+    /// [`Rgba::to_hex_alpha`] is the form that reads back as the same colour.
     pub fn to_hex(self) -> String {
         let s = self.sanitized();
         let b = |v: f32| (v * 255.0).round() as u8;
-        if s.a < 1.0 {
-            format!("#{:02x}{:02x}{:02x}{:02x}", b(s.r), b(s.g), b(s.b), b(s.a))
-        } else {
-            format!("#{:02x}{:02x}{:02x}", b(s.r), b(s.g), b(s.b))
-        }
+        format!("#{:02x}{:02x}{:02x}", b(s.r), b(s.g), b(s.b))
+    }
+    /// `#rrggbb`, or `#rrggbbaa` when not opaque: [`Rgba::parse_hex`] reads it back as the
+    /// same colour, to the 8 bits a channel is written in.
+    pub fn to_hex_alpha(self) -> String {
+        let s = self.sanitized();
+        let a = (s.a * 255.0).round() as u8;
+        if a == u8::MAX { s.to_hex() } else { format!("{}{a:02x}", s.to_hex()) }
     }
     /// Parses `#rrggbb`, `rrggbb` or `#rrggbbaa`.
     pub fn parse_hex(s: &str) -> Option<Rgba> {
@@ -2518,8 +2524,12 @@ mod tests {
     #[test]
     fn hex_roundtrip_keeps_alpha() {
         let c = Rgba::parse_hex("#ff000080").unwrap();
-        assert_eq!(c.to_hex(), "#ff000080");
-        assert_eq!(Rgba::parse_hex(&c.to_hex()).unwrap(), c);
+        assert_eq!(c.to_hex_alpha(), "#ff000080");
+        assert_eq!(Rgba::parse_hex(&c.to_hex_alpha()).unwrap(), c);
+        // Six digits where six are expected, whatever the alpha: the exporters' contract.
+        assert_eq!(c.to_hex(), "#ff0000");
+        // An alpha that rounds to opaque is written as opaque, so both forms agree.
+        assert_eq!(Rgba::new(1.0, 0.0, 0.0, 0.999).to_hex_alpha(), "#ff0000");
     }
 
     #[test]
