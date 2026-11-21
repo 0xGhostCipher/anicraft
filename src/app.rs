@@ -474,6 +474,9 @@ pub struct App {
     /// A filter preset being named in Properties (ADR 0091).
     pub filter_naming: crate::panels::FilterNaming,
     pub brush_samples: Vec<(anicraft_engine::geom::Vec2, Option<f32>)>,
+    /// Brush strokes drawn but not yet painted: their outlines are being traced on another
+    /// thread (ADR 0129). Oldest first.
+    pub ink: Vec<crate::ink::Pending>,
     pub pen_pressure: Option<f32>,
     /// Whether a pointer event has carried a pen's tilt this session (ADR 0093). Until one has,
     /// the brushes' Tilt options stay hidden: they would do nothing.
@@ -856,6 +859,7 @@ impl App {
             brush_lib: crate::brush_panel::BrushLibraryView::default(),
             filter_naming: Default::default(),
             brush_samples: Vec::new(),
+            ink: Vec::new(),
             pen_pressure: None,
             pen_tilt_seen: false,
             eraser: crate::erasertool::EraserOptions::default(),
@@ -1031,6 +1035,9 @@ impl App {
     }
 
     pub fn run(&mut self, id: &str, params: Value) -> Option<Value> {
+        // Strokes still on their way in are painted first: commands run in the order they
+        // were asked for (ADR 0129).
+        crate::ink::flush(self);
         let result = self.s.execute(id, &params);
         if platform::WEB && id.starts_with("file.") {
             // In a browser, what a save or an export wrote is in memory: hand it to the
@@ -4759,6 +4766,9 @@ impl App {
             }
         }
         self.handle_screenshot(&ctx);
+        // Brush strokes whose outlines are traced go into the document, before this frame's
+        // input can edit it (ADR 0129).
+        crate::ink::frame(self, &ctx);
         // An assistant's edits (ADR 0104), before anything draws: they show in this frame.
         #[cfg(not(target_arch = "wasm32"))]
         crate::remote::poll(self, &ctx);
