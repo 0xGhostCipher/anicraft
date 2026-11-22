@@ -12,8 +12,9 @@
 //! 05
 //! edge count  u32 (the edges that draw; a decode must find exactly this many)
 //! fills       u16 n, n × fill
-//! strokes     u16 n, n × { RGBA, u16 width (twips), 10 bytes (dash lengths?, [6] cap,
-//!                          [7] join, [9] miter limit), fill }
+//! strokes     u16 n, n × { RGBA, u16 width (twips), 10 bytes ([0..2] dash length,
+//!                          [2..4] dash gap or stroke type, [6] cap, [7] join,
+//!                          [9] miter limit), fill }
 //! edges       records up to a 00 byte
 //! ```
 //!
@@ -198,12 +199,36 @@ fn fill(r: &mut Reader, approximations: &mut Vec<&'static str>) -> Result<Option
     }
 }
 
+/// What a stroke's style bytes ask for that is drawn solid here, as a report kind. A dash
+/// length in bytes 0–1 marks a dashed line; otherwise the low four bits of bytes 2–3 are
+/// the stroke type, in the order of Animate's stroke style list (0 solid, 2 dotted, 3 ragged,
+/// 4 stipple, 5 hatched). Bytes 4 and 8 are zero in every corpus stroke.
+pub(crate) fn unsupported_style(style: &[u8; 10]) -> Option<&'static str> {
+    if style[4] != 0 || style[8] != 0 {
+        return Some("stroke styles not decoded yet (drawn solid)");
+    }
+    let dash = u16::from_le_bytes([style[0], style[1]]);
+    let field = u16::from_le_bytes([style[2], style[3]]);
+    if dash != 0 {
+        return Some("dashed and dotted strokes (drawn solid)");
+    }
+    match (field & 0xF, field >> 4) {
+        (0, 0) => None,
+        (2, _) => Some("dashed and dotted strokes (drawn solid)"),
+        (3..=5, _) => Some("ragged, stipple and hatched strokes (drawn solid)"),
+        _ => Some("stroke styles not decoded yet (drawn solid)"),
+    }
+}
+
 /// A stroke style: RGBA, width in twips, ten bytes of style (cap at 6, join at 7, miter
 /// limit at 9), then the stroke's own fill (for a solid stroke, its colour again).
 fn stroke(r: &mut Reader, approximations: &mut Vec<&'static str>) -> Result<Stroke, ShapeError> {
     let mut color = rgba(r.bytes()?);
     let width = (r.u16()? as f32 / 20.0).clamp(0.05, 1000.0);
     let style: [u8; 10] = r.bytes()?;
+    if let Some(kind) = unsupported_style(&style) {
+        approximations.push(kind);
+    }
     let cap = match style[6] {
         0 => Cap::Butt,
         2 => Cap::Square,

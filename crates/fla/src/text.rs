@@ -489,7 +489,8 @@ impl TextRecord {
         let mut para_of_run: Vec<ParagraphStyle> = Vec::new();
         let (mut chars, mut missing, mut justified) = (0usize, Vec::new(), false);
         let mut cut = self.runs.len() > anicraft_doc::MAX_TEXT_RUNS;
-        for run in self.runs.iter().take(anicraft_doc::MAX_TEXT_RUNS) {
+        let kept = self.runs.get(..self.runs.len().min(anicraft_doc::MAX_TEXT_RUNS)).unwrap_or_default();
+        for (idx, run) in kept.iter().enumerate() {
             let s = &run.style;
             let align = match s.align {
                 Alignment::Left => TextAlign::Left,
@@ -529,6 +530,8 @@ impl TextRecord {
             runs.push(TextRun { chars: n as u32, style: c });
             para_of_run.push(p);
             if chars >= anicraft_text::MAX_CHARS {
+                // A run that fills the field exactly still leaves out any text after it.
+                cut |= kept.iter().skip(idx + 1).any(|r| !r.text.is_empty());
                 break;
             }
         }

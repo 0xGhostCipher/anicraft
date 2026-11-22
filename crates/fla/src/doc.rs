@@ -54,6 +54,10 @@ const MAX_GROUP_DEPTH: usize = 32;
 /// group listed twice, a group in a group listed twice, …), each use converted where it is:
 /// the total is capped so a few objects can't stand for exponentially many.
 const MAX_CONVERTED: usize = 1_000_000;
+/// Most shape edges one document's mapping rebuilds into paths. A shape record placed on many
+/// keyframes is rebuilt on each, and its edges are the work: they are charged before the
+/// rebuild, so a compact stream can't make it repeat without end.
+const MAX_EDGES_BUILT: usize = 32_000_000;
 
 /// A scene as the document lists it: its page stream's name and the scene's label.
 struct Page {
@@ -91,16 +95,19 @@ struct Ctx<'a> {
     language: Language,
     /// Objects the document's mapping may still convert ([`MAX_CONVERTED`]).
     left: &'a mut usize,
+    /// Shape edges the document's mapping may still rebuild ([`MAX_EDGES_BUILT`]).
+    edges_left: &'a mut usize,
 }
 
 /// Imports a legacy `.fla` into the AniCraft model.
 pub fn import(data: &[u8]) -> Result<(Document, Report), ImportError> {
-    import_within(data, MAX_CONVERTED)
+    import_within(data, MAX_CONVERTED, MAX_EDGES_BUILT)
 }
 
-/// [`import`] converting at most `max_converted` objects and shapes in place of
-/// [`MAX_CONVERTED`] (tests try a small allowance).
-pub(crate) fn import_within(data: &[u8], max_converted: usize) -> Result<(Document, Report), ImportError> {
+/// [`import`] converting at most `max_converted` objects and shapes and rebuilding at most
+/// `max_edges` shape edges, in place of [`MAX_CONVERTED`] and [`MAX_EDGES_BUILT`] (tests try
+/// small allowances).
+pub(crate) fn import_within(data: &[u8], max_converted: usize, max_edges: usize) -> Result<(Document, Report), ImportError> {
     let file = Compound::new(data)?;
     let contents = file.stream("Contents")?;
     if contents.first() != Some(&CONTENTS_VERSION) {
@@ -145,10 +152,11 @@ pub(crate) fn import_within(data: &[u8], max_converted: usize) -> Result<(Docume
     let fonts = Fonts::get();
     let mut faces = Faces::new();
     let mut left = max_converted;
+    let mut edges_left = max_edges;
     for (item, &id) in items.iter().zip(&ids) {
         let timeline = match file.stream(&item.stream) {
             Ok(bytes) => {
-                let mut ctx = Ctx { doc: &mut doc, report: &mut report, symbols: &symbols, bitmaps: &bitmaps, sounds: &sounds, fonts, faces: &mut faces, language, left: &mut left };
+                let mut ctx = Ctx { doc: &mut doc, report: &mut report, symbols: &symbols, bitmaps: &bitmaps, sounds: &sounds, fonts, faces: &mut faces, language, left: &mut left, edges_left: &mut edges_left };
                 library_timeline(&bytes, &item.label, &mut ctx)
             }
             Err(_) => {
@@ -170,7 +178,7 @@ pub(crate) fn import_within(data: &[u8], max_converted: usize) -> Result<(Docume
         match file.stream(&page.stream) {
             Ok(bytes) => match archive::parse(&bytes) {
                 Ok(graph) => {
-                    let mut ctx = Ctx { doc: &mut doc, report: &mut report, symbols: &symbols, bitmaps: &bitmaps, sounds: &sounds, fonts, faces: &mut faces, language, left: &mut left };
+                    let mut ctx = Ctx { doc: &mut doc, report: &mut report, symbols: &symbols, bitmaps: &bitmaps, sounds: &sounds, fonts, faces: &mut faces, language, left: &mut left, edges_left: &mut edges_left };
                     timeline = build_timeline(&graph, &mut ctx);
                 }
                 Err(_) => {
@@ -214,7 +222,11 @@ fn place_in_folder(doc: &mut Document, folders: &HashMap<ItemId, String>, parent
 fn media(file: &Compound, contents: &[u8], folders: &HashMap<ItemId, String>, doc: &mut Document, report: &mut Report) -> (HashMap<u16, BitmapId>, HashMap<u16, SoundId>) {
     let streams: HashSet<String> = file.entries().iter().filter(|e| e.kind == crate::cfb::Kind::Stream).map(|e| e.path.clone()).collect();
     let (mut bitmaps, mut sounds) = (HashMap::new(), HashMap::new());
-    for item in library::media_items(contents, |s| streams.contains(s)) {
+    let (items, missing) = library::media_items(contents, |s| streams.contains(s));
+    for name in missing {
+        report.skip_named("media whose stream is missing", name);
+    }
+    for item in items {
         if bitmaps.contains_key(&item.id) || sounds.contains_key(&item.id) {
             continue;
         }
@@ -308,6 +320,9 @@ fn library_timeline(bytes: &[u8], label: &str, ctx: &mut Ctx) -> Timeline {
 
 /// A timeline from a decoded graph: layers top-first, keyframes with their artwork and tweens.
 fn build_timeline(graph: &Graph, ctx: &mut Ctx) -> Timeline {
+    for _ in 0..graph.skipped_layers() {
+        ctx.report.skip("layers that didn't decode (left out)");
+    }
     let order = graph.layers();
     let mut ids: HashMap<usize, LayerId> = HashMap::new();
     for &n in &order {
@@ -345,7 +360,12 @@ fn build_timeline(graph: &Graph, ctx: &mut Ctx) -> Timeline {
                 continue;
             };
             let duration = u32::from(frame.duration);
-            let at = start.min(MAX_FRAME);
+            if start > MAX_FRAME {
+                // Clamped, it would land on a keyframe already there and take its hints.
+                ctx.report.skip("keyframes past frame 100,000 (left out)");
+                break;
+            }
+            let at = start;
             start = start.saturating_add(duration);
             // A zero-length frame record holds nothing that shows (Animate drops it too).
             if duration == 0 {
@@ -655,6 +675,11 @@ fn push_shapes(record: &shape::ShapeRecord, merge: bool, ctx: &mut Ctx, out: &mu
         ctx.report.skip("objects past a million in one document (left out)");
         return;
     }
+    let Some(edges_left) = ctx.edges_left.checked_sub(record.edges.len()) else {
+        ctx.report.skip("shapes past the import's geometry budget (left out)");
+        return;
+    };
+    *ctx.edges_left = edges_left;
     for mut s in record.shapes() {
         if !spend(ctx) {
             break;
@@ -700,6 +725,8 @@ fn instance(inst: &archive::InstanceRec, ctx: &mut Ctx) -> Option<Element> {
             InstanceClass::MovieClip => "movie clip component settings (left out)",
             _ => "button settings in a layout not decoded (left out)",
         });
+    } else if inst.track_as_menu {
+        ctx.report.skip("button track-as-menu settings (left out)");
     }
     // Older documents put handlers (`on (release) { … }`) on instances; only frame scripts
     // have a place yet (as in the XFL importer).
@@ -865,7 +892,8 @@ fn pages(contents: &[u8]) -> Result<Vec<Page>, ImportError> {
         // The scene label: the marker string right after the stream name.
         let after_name = i;
         let (label, end) = rest.get(after_name..)
-            .and_then(|tail| (0..tail.len().saturating_sub(4)).find_map(|j| after_marker(tail, j)))
+            // A one-character label at `j` ends at `j + 4`, so `j` runs to `len - 4` inclusive.
+            .and_then(|tail| (0..tail.len().saturating_sub(3)).find_map(|j| after_marker(tail, j)))
             .ok_or(ImportError::BadStructure("a page record has no scene name"))?;
         out.push(Page { stream, label });
         // On from where the label ends as stored (its UTF-16 units, not its UTF-8 length).

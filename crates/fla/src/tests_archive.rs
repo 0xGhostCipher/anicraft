@@ -294,15 +294,37 @@ fn every_shape_a_record_emits_is_charged_against_the_object_allowance() {
         })), ("Symbol 9", one_frame_stream(&rectangle_body()))];
         write(&payloads)
     };
-    let (doc, report) = crate::doc::import_within(&file(), 24).expect("opens");
+    let (doc, report) = crate::doc::import_within(&file(), 24, usize::MAX).expect("opens");
     assert_eq!(shapes_in(&scene(&doc).layers[0].keyframes[0].elements), 12);
     assert!(report.skipped.is_empty(), "{:?}", report.skipped);
     // With room for 13, the visits alone (12 with the library's) would have fit and all 12
     // shapes come in; the shapes count too, so they stop at the allowance and say so.
-    let (doc, report) = crate::doc::import_within(&file(), 13).expect("opens");
+    let (doc, report) = crate::doc::import_within(&file(), 13, usize::MAX).expect("opens");
     let shapes = shapes_in(&scene(&doc).layers[0].keyframes[0].elements);
     assert_eq!(shapes, 6);
     assert!(skipped(&report, "objects past a million in one document (left out)") > 0, "{:?}", report.skipped);
+}
+
+#[test]
+fn every_rebuilt_shape_record_is_charged_its_edges_before_the_rebuild() {
+    // The same drawing rebuilt at each of its four uses: its edges are charged each time, so a
+    // record placed many times can't rebuild its geometry without end.
+    let file = write(&[("Contents", synthetic_contents()), ("P 1 1", page_with(|w| {
+        shared(w, 2, three_fills);
+    })), ("Symbol 9", one_frame_stream(&rectangle_body()))]);
+    let full = |edges: usize| {
+        let (doc, report) = crate::doc::import_within(&file, usize::MAX, edges).expect("opens");
+        (shapes_in(&scene(&doc).layers[0].keyframes[0].elements), report)
+    };
+    let (all, report) = full(usize::MAX);
+    assert_eq!(all, 12);
+    assert!(report.skipped.is_empty(), "{:?}", report.skipped);
+    // The smallest budget that still brings every use in, and one edge less.
+    let enough = (0..100_000).find(|&b| full(b).1.skipped.is_empty()).expect("some budget fits the document");
+    assert!(enough > 0);
+    let (fewer, report) = full(enough - 1);
+    assert!(fewer < all, "one edge short leaves a use out");
+    assert!(skipped(&report, "shapes past the import's geometry budget (left out)") > 0, "{:?}", report.skipped);
 }
 
 // The `Contents` scans.
@@ -378,4 +400,47 @@ fn a_stage_rectangle_of_extreme_edges_is_no_stage_and_never_overflows() {
     for rect in [[i32::MIN, i32::MAX, i32::MIN, i32::MAX], [i32::MAX, i32::MIN, i32::MAX, i32::MIN], [0, i32::MAX, 0, 8_000], [i32::MIN, 0, 0, 8_000]] {
         assert!(crate::doc::stage(&properties(rect, 24 << 16)).is_none(), "{rect:?}");
     }
+}
+
+#[test]
+fn a_page_child_that_is_not_a_layer_it_decodes_is_reported() {
+    let file = |extra: bool| {
+        let mut w = Ar::new();
+        w.page(|w| {
+            w.layer("art", 0, None, |w| w.frame(&[], &frame_spec(4), |_| {}));
+            if extra {
+                // A kind of layer this importer doesn't know: skipped over, and said so.
+                w.object("CPicLayerOfTheFuture", 0, None, 0, 0x0B, |_| {});
+            }
+        });
+        write(&[("Contents", synthetic_contents()), ("P 1 1", w.out), ("Symbol 9", one_frame_stream(&rectangle_body()))])
+    };
+    let (_, report) = crate::doc::import(&file(false)).expect("opens");
+    assert_eq!(skipped(&report, "layers that didn't decode (left out)"), 0);
+    let (doc, report) = crate::doc::import(&file(true)).expect("opens");
+    assert_eq!(scene(&doc).layers.len(), 1, "the layer that decodes still comes in");
+    assert_eq!(skipped(&report, "layers that didn't decode (left out)"), 1, "{:?}", report.skipped);
+}
+
+#[test]
+fn keyframes_past_the_last_frame_are_left_out_not_stacked_on_it() {
+    // Two frames of 65,535 reach past frame 100,000, so the third starts beyond it.
+    let file = write(&[("Contents", synthetic_contents()), ("P 1 1", {
+        let mut w = Ar::new();
+        w.page(|w| {
+            w.layer("art", 0, None, |w| {
+                for _ in 0..4 {
+                    w.frame(&rectangle_body(), &frame_spec(u16::MAX), |_| {});
+                }
+            });
+        });
+        w.out
+    }), ("Symbol 9", one_frame_stream(&rectangle_body()))]);
+    let (doc, report) = crate::doc::import(&file).expect("opens");
+    let starts: Vec<u32> = scene(&doc).layers[0].keyframes.iter().map(|k| k.start).collect();
+    let mut unique = starts.clone();
+    unique.dedup();
+    assert_eq!(unique, starts, "no two keyframes share a start: {starts:?}");
+    assert!(starts.len() < 4, "{starts:?}");
+    assert!(skipped(&report, "keyframes past frame 100,000 (left out)") > 0, "{:?}", report.skipped);
 }

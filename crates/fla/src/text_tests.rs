@@ -373,3 +373,20 @@ fn without_fonts_static_text_is_reported_and_fields_stay() {
     let t = text::decode(&record(&Head { field: 3, ..Head::default() }, &[(units("Hi"), Style::default())]), 0).unwrap();
     assert!(t.to_element(ElementId(2), &none, &mut faces, &mut report).is_some());
 }
+
+#[test]
+fn text_after_a_run_that_fills_the_field_exactly_is_reported_as_cut() {
+    let none = Fonts::from_faces(Vec::<Vec<u8>>::new());
+    let cut = |second: &str| {
+        let runs = [(units("a"), Style::default()), (units("b"), Style { size: 300, ..Style::default() })];
+        let mut t = text::decode(&record(&Head { field: 3, ..Head::default() }, &runs), 0).unwrap();
+        assert_eq!(t.runs.len(), 2);
+        t.runs[0].text = "a".repeat(anicraft_text::MAX_CHARS);
+        t.runs[1].text = second.to_string();
+        let (mut faces, mut report) = (Faces::new(), Report::default());
+        assert!(t.to_element(ElementId(1), &none, &mut faces, &mut report).is_some());
+        report.skipped.contains_key("text cut to 100,000 characters per field")
+    };
+    assert!(!cut(""), "a field filled exactly loses nothing");
+    assert!(cut("x"), "the run after it is left out, and said so");
+}

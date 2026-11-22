@@ -256,6 +256,13 @@ impl Graph {
     pub fn node(&self, i: usize) -> Option<&Node> {
         self.nodes.get(i)
     }
+    /// How many of the page's children didn't decode as anything (recovery skipped them): the
+    /// layers [`Graph::layers`] can't list.
+    pub fn skipped_layers(&self) -> usize {
+        let Some(Node::Page { layers }) = self.nodes.get(self.root) else { return 0 };
+        layers.iter().filter(|&&l| matches!(self.nodes.get(l), Some(Node::Skipped(_)))).count()
+    }
+
     /// The layers, bottom first, each once.
     pub fn layers(&self) -> Vec<usize> {
         let Some(Node::Page { layers }) = self.nodes.get(self.root) else { return Vec::new() };
@@ -988,11 +995,13 @@ impl<'a> Parser<'a> {
         self.skip(2)?;
         if class != InstanceClass::Graphic {
             let snap = self.snap();
+            let common_name = rec.name.clone();
             if !self.extras(&mut rec, parent) {
-                // Settings in a layout not seen: skipped whole.
+                // Settings in a layout not seen: skipped whole, the name they carried too.
                 self.restore(snap);
                 rec.script.clear();
                 rec.track_as_menu = false;
+                rec.name = common_name;
                 self.resync(parent)?;
                 rec.extras_skipped = true;
             }

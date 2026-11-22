@@ -143,7 +143,7 @@ pub fn folders(contents: &[u8]) -> Vec<Folder> {
 }
 
 /// Each folder's path (its parents' names and its own, joined with `/`), by id. A folder whose
-/// parent chain is broken or loops sits at the root.
+/// parent chain loops sits at the root; one whose chain breaks keeps the parents it found.
 pub fn folder_paths(folders: &[Folder]) -> HashMap<ItemId, String> {
     let by_id: HashMap<ItemId, &Folder> = folders.iter().map(|f| (f.id, f)).collect();
     let mut out = HashMap::new();
@@ -151,11 +151,20 @@ pub fn folder_paths(folders: &[Folder]) -> HashMap<ItemId, String> {
         let mut parts = vec![f.name.as_str()];
         let mut at = f.parent;
         let mut seen = vec![f.id];
+        let mut looped = false;
         while at != ROOT && parts.len() < anicraft_doc::library::MAX_FOLDER_DEPTH {
-            let Some(p) = by_id.get(&at).filter(|_| !seen.contains(&at)) else { break };
+            if seen.contains(&at) {
+                looped = true;
+                break;
+            }
+            let Some(p) = by_id.get(&at) else { break };
             seen.push(at);
             parts.push(p.name.as_str());
             at = p.parent;
+        }
+        if looped {
+            out.insert(f.id, f.name.clone());
+            continue;
         }
         parts.reverse();
         out.insert(f.id, parts.join("/"));
@@ -174,13 +183,14 @@ pub fn symbol_parent(contents: &[u8], after: usize) -> Option<ItemId> {
 
 /// The bitmap and sound items, each found at its class tag (a `CMediaBits` / `CMediaSound`
 /// declaration or a class reference) followed by version 6 and the name of a stream the file
-/// has (`has_stream`).
-pub fn media_items(contents: &[u8], has_stream: impl Fn(&str) -> bool) -> Vec<MediaItem> {
+/// has (`has_stream`); and the names of items declared by class whose stream the file lacks.
+pub fn media_items(contents: &[u8], has_stream: impl Fn(&str) -> bool) -> (Vec<MediaItem>, Vec<String>) {
     const BITS: &[u8] = b"CMediaBits";
     const SOUND: &[u8] = b"CMediaSound";
     let mut out = Vec::new();
+    let mut missing = Vec::new();
     let mut i = 2usize;
-    while i < contents.len() && out.len() < MAX_ITEMS {
+    while i < contents.len() && out.len() + missing.len() < MAX_ITEMS {
         if contents.get(i) != Some(&0x06) {
             i += 1;
             continue;
@@ -203,10 +213,16 @@ pub fn media_items(contents: &[u8], has_stream: impl Fn(&str) -> bool) -> Vec<Me
                 out.push(item);
                 i = end.max(i + 1);
             }
+            // Declared by its class name, the record is one: its data is what's missing. (A
+            // bare class reference is the scan's looser match, so it needs the stream.)
+            Some((item, end)) if declared.is_some() => {
+                missing.push(item.name);
+                i = end.max(i + 1);
+            }
             _ => i += 1,
         }
     }
-    out
+    (out, missing)
 }
 
 /// One media record from just after its version byte.

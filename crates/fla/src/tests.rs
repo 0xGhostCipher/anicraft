@@ -1348,6 +1348,12 @@ fn media_contents() -> Vec<u8> {
 /// A page with a dynamic text, a bitmap instance and a named button with a handler on one
 /// keyframe; a sound frame; and a shape tween with two hints.
 fn media_page() -> Vec<u8> {
+    media_page_with(0, 0)
+}
+
+/// [`media_page`] with the button's track-as-menu byte and the `u32` after its name as given
+/// (0 and 0 as Flash writes them).
+fn media_page_with(track_as_menu: u8, after_name: i32) -> Vec<u8> {
     use crate::text_tests::{record, units, Head, Style};
     let mut w = Ar::new();
     w.page(|w| {
@@ -1378,9 +1384,9 @@ fn media_page() -> Vec<u8> {
                 w.out.push(0x0B);
                 w.out.extend_from_slice(&[4, 0, 0, 0, 1, 0, 0, 0, 0x10, 0x20, 0, 0, 0, 0, 0, 0]);
                 w.string("on (release) {\r\n\tgetURL(\"https://example.org\", \"_self\");\r\n}");
-                w.out.push(0);
+                w.out.push(track_as_menu);
                 w.string("CC");
-                w.i32(0);
+                w.i32(after_name);
             });
         });
     });
@@ -1388,10 +1394,44 @@ fn media_page() -> Vec<u8> {
 }
 
 fn media_document() -> Vec<u8> {
+    media_document_with(media_page(), true)
+}
+
+/// The media document with `page` as its scene, and with or without the bitmap's stream.
+fn media_document_with(page: Vec<u8>, with_bitmap: bool) -> Vec<u8> {
     // A 2 × 1 bitmap: opaque red, then half-transparent white (premultiplied).
     let bitmap = bitmap_payload(2, 1, &[255, 255, 0, 0, 128, 128, 128, 128]);
     let pcm: Vec<u8> = [0i16, 1000, -1000, 32767].iter().flat_map(|v| v.to_le_bytes()).collect();
-    write(&[("Contents", media_contents()), ("P 1 1", media_page()), ("Symbol 9", one_frame_stream(&rectangle_body())), ("Media 1", bitmap), ("M 2 1", pcm)])
+    let mut streams = vec![("Contents", media_contents()), ("P 1 1", page), ("Symbol 9", one_frame_stream(&rectangle_body())), ("M 2 1", pcm)];
+    if with_bitmap {
+        streams.push(("Media 1", bitmap));
+    }
+    write(&streams)
+}
+
+#[test]
+fn a_button_whose_settings_do_not_decode_keeps_none_of_them_and_says_so() {
+    // A nonzero word where the settings end with 0: their layout isn't the one decoded.
+    let (doc, report) = super::doc::import(&media_document_with(media_page_with(0, 7), true)).expect("opens");
+    let names: Vec<&str> = scene(&doc).layers[0].keyframes[0].elements.iter().map(|e| e.name.as_str()).collect();
+    assert!(!names.contains(&"CC"), "the name inside the undecoded settings is left out too: {names:?}");
+    assert!(report.skipped.contains_key("button settings in a layout not decoded (left out)"), "{:?}", report.skipped);
+}
+
+#[test]
+fn a_button_set_to_track_as_menu_is_reported() {
+    let (_, report) = super::doc::import(&media_document()).expect("opens");
+    assert!(!report.skipped.contains_key("button track-as-menu settings (left out)"));
+    let (_, report) = super::doc::import(&media_document_with(media_page_with(1, 0), true)).expect("opens");
+    assert!(report.skipped.contains_key("button track-as-menu settings (left out)"), "{:?}", report.skipped);
+}
+
+#[test]
+fn a_library_bitmap_whose_stream_is_missing_is_named_in_the_report() {
+    let (doc, report) = super::doc::import(&media_document_with(media_page(), false)).expect("opens");
+    assert!(doc.bitmaps.is_empty());
+    let named = report.names.get("media whose stream is missing").cloned().unwrap_or_default();
+    assert!(named.iter().any(|n| n == "badge.png"), "{:?} / {:?}", report.skipped, report.names);
 }
 
 #[test]
@@ -1507,6 +1547,42 @@ fn library_folders_nest_by_their_parents_and_a_loop_stays_at_the_root() {
     // Two folders each other's parent: neither loops forever.
     let looped = [Folder { name: "a".into(), parent: (2, 2), id: (1, 1) }, Folder { name: "b".into(), parent: (1, 1), id: (2, 2) }];
     let paths = folder_paths(&looped);
-    assert_eq!(paths.get(&(1, 1)).map(String::as_str), Some("b/a"));
+    assert_eq!(paths.get(&(1, 1)).map(String::as_str), Some("a"), "a looping folder sits at the root");
+    assert_eq!(paths.get(&(2, 2)).map(String::as_str), Some("b"));
     assert_eq!(super::library::script_version(&media_contents()).as_deref(), Some("2"));
+}
+
+#[test]
+fn strokes_drawn_solid_in_place_of_their_style_are_reported_by_kind() {
+    use super::shape::unsupported_style;
+    let style = |dash: u16, field: u16| {
+        let mut s = [0u8; 10];
+        s[0..2].copy_from_slice(&dash.to_le_bytes());
+        s[2..4].copy_from_slice(&field.to_le_bytes());
+        s
+    };
+    assert_eq!(unsupported_style(&style(0, 0)), None, "a solid line draws as stored");
+    let dashed = unsupported_style(&style(120, 120));
+    assert!(dashed.is_some());
+    assert_eq!(unsupported_style(&style(0, 0x1E2)), dashed, "dotted counts with dashed");
+    let hatched = unsupported_style(&style(0, 0x125));
+    assert!(hatched.is_some() && hatched != dashed);
+    let mut odd = style(0, 0);
+    odd[8] = 1;
+    assert!(unsupported_style(&odd).is_some(), "a style byte never seen is not taken for solid");
+}
+
+#[test]
+fn a_scene_label_at_the_very_end_of_contents_is_found() {
+    let utf16 = |s: &str| -> Vec<u8> { s.encode_utf16().flat_map(|c| c.to_le_bytes()).collect() };
+    let mut c = vec![0x3F, 0x01, 0x00, 0x00, 0x00, 0xFF, 0xFF, 0x01, 0x00];
+    c.extend_from_slice(&13u16.to_le_bytes());
+    c.extend_from_slice(b"CDocumentPage");
+    c.extend_from_slice(&[0x17, 0x00]);
+    c.extend_from_slice(&utf16("P 1 1"));
+    // A one-character label, the last bytes of the stream.
+    c.extend_from_slice(&[0xFF, 0xFE, 0xFF, 0x01]);
+    c.extend_from_slice(&utf16("A"));
+    let (doc, _) = super::doc::import(&write(&[("Contents", c), ("P 1 1", synthetic_page())])).expect("the scene is found");
+    assert_eq!(doc.scenes.iter().map(|s| s.name.as_str()).collect::<Vec<_>>(), ["A"]);
 }
