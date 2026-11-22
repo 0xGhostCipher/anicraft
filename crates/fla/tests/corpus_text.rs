@@ -1,6 +1,6 @@
-//! Differential text test against the local (uncommitted) ground-truth corpus, run only when
-//! it is available: `ANICRAFT_FLA_CORPUS=/path/to/corpus cargo test -p anicraft-fla --test
-//! corpus_text -- --nocapture`.
+//! Differential text test against the ground-truth corpus `corpus.tsv` pins (never committed),
+//! run only when it is available: `scripts/fetch-fla-corpus.sh <folder>`, then
+//! `ANICRAFT_FLA_CORPUS=<folder> cargo test -p anicraft-fla --test corpus_text -- --nocapture`.
 //!
 //! Every `CPicText` record in the legacy files is decoded and paired with its Animate twin's
 //! `DOMStaticText` / `DOMDynamicText` (by characters and position), then compared field by

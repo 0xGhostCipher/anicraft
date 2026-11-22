@@ -40,7 +40,10 @@ follow-on work tracked in `openspec/changes/add-legacy-fla-import/`.
    feature-by-feature against the pair: dump the record from the legacy file, find the
    same artwork's node in the modern twin's XML, decode until they agree. The corpus
    (9 pairs, CC BY-NC-SA) lives **outside** the repo for licensing; committed fixtures
-   are synthetic, written by a spec-only writer like ADR 0054's.
+   are synthetic, written by a spec-only writer like ADR 0054's. These published files are
+   the format's only evidence: no Flash 8–CS4 files of our own exist. As the clean-room
+   standard's fixture rule 2 allows for published files whose licence can't be committed,
+   `crates/fla/tests/corpus.tsv` pins each one (URL, sha256, licence) for the tests to fetch.
 
 4. **A microscope command ships now**: `anicraft-cli fla-dump` prints a legacy file's
    stream tree, prologues and record tags as JSON. It is the tool for every later decode
@@ -188,7 +191,8 @@ follow-on work tracked in `openspec/changes/add-legacy-fla-import/`.
   from the corpus), dashed and dotted strokes, sound in and out points (as in the XFL
   importer), a button's track-as-menu byte (no place in the model), sound formats other than
   raw 16-bit PCM and bitmaps other than the lossless layout or PNG / JPEG. Committed fixtures
-  stay synthetic; the CC BY-NC-SA corpus runs via `ANICRAFT_FLA_CORPUS`.
+  stay synthetic; the CC BY-NC-SA corpus runs via `ANICRAFT_FLA_CORPUS`, pinned by URL and
+  sha256 in `crates/fla/tests/corpus.tsv` and fetched by `scripts/fetch-fla-corpus.sh`.
 
 ## References
 

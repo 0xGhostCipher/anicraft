@@ -1,5 +1,6 @@
-//! Corpus tests, run only when the local (uncommitted) ground-truth corpus is available:
-//! `ANICRAFT_FLA_CORPUS=/path/to/corpus cargo test -p anicraft-fla --test corpus`.
+//! Corpus tests, run only when the ground-truth corpus `corpus.tsv` pins (never committed) is
+//! available: `scripts/fetch-fla-corpus.sh <folder>`, then
+//! `ANICRAFT_FLA_CORPUS=<folder> cargo test -p anicraft-fla --test corpus`.
 //!
 //! The corpus files are EDAP Tools sample rigs (CC BY-NC-SA, "test/educational only, no
 //! commercial"), so they stay out of the MIT-licensed repo; these tests observe behaviour,
