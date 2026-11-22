@@ -413,3 +413,29 @@ fn many_edges_through_one_vertex_rebuild_the_same() {
     assert_eq!(got.len(), 3, "two fills and a stroke");
     assert_eq!(got, oracle_shapes(&rec));
 }
+
+#[test]
+fn each_dumped_stream_is_its_own_entry_even_when_a_damaged_file_repeats_a_path() {
+    // Two entries with one path: each dumps its own size and its own bytes.
+    let mut f = write(&[("Contents", vec![1; 8]), ("Contentz", vec![2; 100])]);
+    let second = entry_record(&f, "Contentz");
+    f[second + 14] = b's'; // "Contentz" → "Contents" (UTF-16, the 8th unit)
+    let dumped = crate::dump(&f).expect("dumps");
+    let sizes: Vec<u64> = dumped.iter().map(|s| s.size).collect();
+    assert!(sizes.contains(&8) && sizes.contains(&100), "{sizes:?}");
+    for s in &dumped {
+        let want = if s.size == 8 { "01 01 01 01 01 01 01 01" } else { "02 02 02 02 02 02 02 02" };
+        assert_eq!(s.head, want, "the {}-byte entry shows its own bytes", s.size);
+    }
+}
+
+#[test]
+fn a_dump_of_one_stream_reads_only_that_stream() {
+    let mut f = write(&[("Contents", b"hello".to_vec()), ("Other", vec![7; 5000])]);
+    let other = entry_record(&f, "Other");
+    f[other + 120..other + 128].copy_from_slice(&0x7FFF_FFFFu64.to_le_bytes()); // past the file
+    assert!(crate::dump(&f).is_err(), "the damaged stream fails a whole dump");
+    let one = crate::dump_only(&f, Some("Contents")).expect("but not one of another stream");
+    assert_eq!(one.iter().map(|s| s.path.as_str()).collect::<Vec<_>>(), ["Contents"]);
+    assert!(matches!(crate::dump_only(&f, Some("Nowhere")), Err(Error::NotFound(_))), "a stream it doesn't have is said");
+}

@@ -311,10 +311,9 @@ pub fn run(argv: &[String]) -> Result<String, String> {
             if !anicraft_fla::is_legacy(&data) {
                 return Err(format!("{p}: not a legacy Flash document (its first bytes are not the compound binary signature)"));
             }
-            let streams = anicraft_fla::dump(&data).map_err(|e| format!("{p}: {e}"))?;
-            let wanted = a.flag("stream");
+            // With --stream, only that stream is read: another one's damage can't fail it.
+            let streams = anicraft_fla::dump_only(&data, a.flag("stream")).map_err(|e| format!("{p}: {e}"))?;
             let list: Vec<Value> = streams.iter()
-                .filter(|s| wanted.is_none_or(|w| s.path == w))
                 .map(|s| {
                     let mut v = json!({
                         "stream": s.path,

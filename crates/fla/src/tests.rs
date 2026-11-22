@@ -126,14 +126,17 @@ pub(crate) fn write(streams: &[(&str, Vec<u8>)]) -> Vec<u8> {
     out.extend_from_slice(&mf_padded);
     pos += mf_padded.len();
 
-    // The FAT: the FAT's own chain first, then the big streams, the directory, the mini
-    // stream and the mini FAT; everything else free.
+    // The FAT: the big streams, the directory, the mini stream and the mini FAT chained, the
+    // FAT's own sectors marked FATSECT ([MS-CFB] 2.3); everything else free.
     let fat_start = (pos / SECTOR - 1) as u32;
-    let fat_entries_needed = pos / SECTOR + 1;
-    let fat_sectors = fat_entries_needed.div_ceil(SECTOR / 4);
+    // Enough FAT sectors to hold an entry for every sector, their own included.
+    let mut fat_sectors = 1;
+    while fat_start as usize + fat_sectors > fat_sectors * SECTOR / 4 {
+        fat_sectors += 1;
+    }
     let mut fat = vec![FREESECT; fat_sectors * SECTOR / 4];
-    for (i, entry) in fat.iter_mut().enumerate().take(fat_sectors) {
-        *entry = if i + 1 < fat_sectors { fat_start + i as u32 + 1 } else { ENDOFCHAIN };
+    for i in 0..fat_sectors {
+        fat[fat_start as usize + i] = FATSECT;
     }
     let chain = |fat: &mut Vec<u32>, first: u32, count: usize| {
         for i in 0..count {
@@ -229,20 +232,19 @@ fn a_fat_chain_that_loops_is_refused() {
     for w in 0..(f.len() - fat_at) / 4 {
         let at = fat_at + w * 4;
         let v = u32::from_le_bytes(f[at..at + 4].try_into().unwrap());
-        if v != ENDOFCHAIN && v != FREESECT && v != FATSECT_MARKER && v > 0 && v < (f.len() / 512) as u32 {
+        if v != ENDOFCHAIN && v != FREESECT && v != FATSECT && v > 0 && v < (f.len() / 512) as u32 {
             set_u32(&mut f, at, w as u32);
         }
     }
-    // Opening validates the header, directory and mini-FAT chains; the stream's own
-    // chain is walked when the stream is read.
-    if let Ok(file) = Compound::new(&f) {
-        assert!(matches!(file.stream("Contents"), Err(Error::Damaged(_))), "the looping stream chain must be refused");
-    }
+    // Only the stream's own chain loops, so the file opens; the loop is refused when the
+    // stream is read.
+    let file = Compound::new(&f).expect("only the stream's chain loops");
+    assert!(matches!(file.stream("Contents"), Err(Error::Damaged(why)) if why.contains("loop")), "the looping stream chain must be refused");
 }
 
 const ENDOFCHAIN: u32 = 0xFFFF_FFFE;
 const FREESECT: u32 = 0xFFFF_FFFF;
-const FATSECT_MARKER: u32 = 0xFFFF_FFFC;
+const FATSECT: u32 = 0xFFFF_FFFD;
 
 #[test]
 fn a_header_that_lies_about_its_structure_is_refused() {

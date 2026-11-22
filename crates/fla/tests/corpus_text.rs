@@ -32,8 +32,18 @@ const TWINS: &[(&str, &str)] = &[
 ];
 
 /// The one known difference: Animate recomputed this text's bounds on resave, one twip
-/// narrower on each side (the legacy value is authoritative).
-const TOLERATED: &[(&str, &str, usize, &str)] = &[("mademoiselle-legacy.fla", "P 2 1609991139", 3619, "left"), ("mademoiselle-legacy.fla", "P 2 1609991139", 3619, "width")];
+/// narrower on each side (the legacy value is authoritative). Each entry pins the difference
+/// seen (legacy minus twin, in px), so any other value of that field still fails.
+const TOLERATED: &[(&str, &str, usize, &str, f64)] = &[("mademoiselle-legacy.fla", "P 2 1609991139", 3619, "left", -0.05), ("mademoiselle-legacy.fla", "P 2 1609991139", 3619, "width", 0.1)];
+
+/// A bounds field's difference, legacy minus twin (only `left` and `width` are tolerated).
+fn bounds_delta(t: &TextRecord, w: &Twin, field: &str) -> Option<f64> {
+    match field {
+        "left" => Some(t.left() as f64 - num(w.attrs.get("left"), 0.0)),
+        "width" => Some(t.width() as f64 - num(w.attrs.get("width"), 0.0)),
+        _ => None,
+    }
+}
 
 /// A twin text element: where it was, its kind, attributes, matrix and runs.
 struct Twin {
@@ -181,7 +191,11 @@ fn compare(t: &TextRecord, w: &Twin) -> Vec<(&'static str, bool)> {
             ("run fillColor", fill == g("fillColor").unwrap_or("#000000").to_ascii_uppercase()),
             ("run alpha", (s.rgba[3] as f64 / 255.0 - num(ra.get("alpha"), 1.0)).abs() < 0.003),
             ("run autoKern", s.auto_kern == (g("autoKern") != Some("false"))),
-            ("run characterPosition", (s.shift == anicraft_doc::BaselineShift::Superscript) == (g("characterPosition") == Some("superscript"))),
+            ("run characterPosition", s.shift == match g("characterPosition") {
+                Some("superscript") => anicraft_doc::BaselineShift::Superscript,
+                Some("subscript") => anicraft_doc::BaselineShift::Subscript,
+                _ => anicraft_doc::BaselineShift::Normal,
+            }),
             ("run alignment", align == g("alignment")),
             // Animate leaves lineSpacing out at its default, 2 px (stored as 40 twips).
             ("run lineSpacing", near(s.line_spacing as f64, num(ra.get("lineSpacing"), 2.0))),
@@ -249,7 +263,9 @@ fn every_corpus_text_record_decodes_like_its_twin() {
                 paired += 1;
                 let mut all = true;
                 for (name, ok) in compare(t, &twins[pick]) {
-                    let tolerated = TOLERATED.iter().any(|(f, s, h, c)| f == legacy && *s == entry.path && *h == t.head && *c == name);
+                    let tolerated = TOLERATED.iter().any(|(f, s, h, c, d)| {
+                        f == legacy && *s == entry.path && *h == t.head && *c == name && bounds_delta(t, &twins[pick], name).is_some_and(|got| (got - d).abs() < 1e-4)
+                    });
                     let e = checks.entry(name).or_default();
                     e.1 += 1;
                     if ok || tolerated {

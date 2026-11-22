@@ -164,7 +164,8 @@ fn twin_library(path: &std::path::Path) -> std::collections::HashMap<String, Vec
                 let p = entry.expect("entry").path();
                 if p.is_dir() {
                     dirs.push(p);
-                } else if let Ok(xml) = std::fs::read_to_string(&p) {
+                } else if p.extension().is_some_and(|e| e == "xml") {
+                    let xml = std::fs::read_to_string(&p).unwrap_or_else(|e| panic!("{}: {e}", p.display()));
                     add(&p.to_string_lossy().replace('\\', "/"), xml);
                 }
             }
@@ -174,9 +175,9 @@ fn twin_library(path: &std::path::Path) -> std::collections::HashMap<String, Vec
         let archive = craft_xfl::Archive::open(&bytes).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
         let names: Vec<String> = archive.names().filter(|n| n.starts_with("LIBRARY/") && n.ends_with(".xml")).map(str::to_string).collect();
         for name in names {
-            if let Ok(Some(xml)) = archive.read(&name) {
-                add(&name, String::from_utf8_lossy(&xml).into_owned());
-            }
+            let xml = archive.read(&name).unwrap_or_else(|e| panic!("{}: {name}: {e}", path.display()));
+            let xml = xml.unwrap_or_else(|| panic!("{}: {name} is listed but has no data", path.display()));
+            add(&name, String::from_utf8_lossy(&xml).into_owned());
         }
     }
     out
@@ -316,14 +317,20 @@ fn the_corpus_decodes_curved_shapes_edge_for_edge_like_the_twins() {
     eprintln!("{matched} decoded shapes match their twins edge for edge ({curved} with curves)");
 }
 
-/// The XML of a twin's member: from its zip package, or its extracted folder.
+/// The XML of a twin's member: from its zip package, or its extracted folder. `None` only
+/// when the twin has no such member; a member it lists that can't be read fails the test, so
+/// a reader that loses members can't shrink what is compared.
 fn twin_member(path: &std::path::Path, member: &str) -> Option<Vec<u8>> {
     if path.is_dir() {
-        return std::fs::read(path.join(member)).ok();
+        let p = path.join(member);
+        if !p.exists() {
+            return None;
+        }
+        return Some(std::fs::read(&p).unwrap_or_else(|e| panic!("{}: {e}", p.display())));
     }
-    let bytes = std::fs::read(path).ok()?;
-    let archive = craft_xfl::Archive::open(&bytes).ok()?;
-    archive.read(member).ok().flatten()
+    let bytes = std::fs::read(path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+    let archive = craft_xfl::Archive::open(&bytes).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+    archive.read(member).unwrap_or_else(|e| panic!("{}: {member}: {e}", path.display()))
 }
 
 fn twin_members(path: &std::path::Path) -> Vec<String> {
@@ -331,8 +338,8 @@ fn twin_members(path: &std::path::Path) -> Vec<String> {
         let mut out = Vec::new();
         let mut dirs = vec![path.to_path_buf()];
         while let Some(dir) = dirs.pop() {
-            for entry in std::fs::read_dir(&dir).expect("twin lists").flatten() {
-                let p = entry.path();
+            for entry in std::fs::read_dir(&dir).unwrap_or_else(|e| panic!("{}: {e}", dir.display())) {
+                let p = entry.unwrap_or_else(|e| panic!("{}: {e}", dir.display())).path();
                 if p.is_dir() {
                     dirs.push(p);
                 } else if let Ok(rel) = p.strip_prefix(path) {
@@ -515,6 +522,7 @@ fn the_corpus_timelines_match_the_twins_keyframe_for_keyframe() {
         let dom = twin_member(&twin_path, "DOMDocument.xml").expect("DOMDocument.xml");
         let dom = craft_xfl::document::Document::parse(&dom).expect("twin parses");
         let scenes: Vec<&craft_xml::El> = dom.root().descendants().filter(|e| local(&e.name) == "DOMTimeline").collect();
+        assert_eq!(doc.scenes.len(), scenes.len(), "{legacy}: scene count");
         for (scene, tl) in doc.scenes.iter().zip(scenes) {
             compare(&format!("{legacy}:{}", scene.name), &legacy_timeline(&doc, &scene.timeline), &twin_timeline(tl), &mut t);
         }
@@ -587,7 +595,7 @@ fn the_corpus_stage_matches_the_twins() {
         }
         checked += 1;
     }
-    assert!(checked >= 6);
+    assert_eq!(checked, TWINS.len(), "every pair the manifest pins is compared");
 }
 
 // ---------------------------------------------------------------------------------------------

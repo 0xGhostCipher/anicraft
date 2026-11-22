@@ -85,6 +85,8 @@ pub struct Compound<'a> {
     len: u64,
     /// Directory entries with paths, root first, then the tree in walk order.
     entries: Vec<Entry>,
+    /// Each stream path's first entry in `entries` (a damaged file may list a path twice).
+    streams: HashMap<String, usize>,
 }
 
 impl<'a> Compound<'a> {
@@ -133,7 +135,13 @@ impl<'a> Compound<'a> {
             let size = if kind == Kind::Stream { e.size } else { 0 };
             entries.push(Entry { path, kind, size, start: e.start, id });
         }
-        Ok(Compound { file, len: data.len() as u64, entries })
+        let mut streams = HashMap::new();
+        for (i, e) in entries.iter().enumerate() {
+            if e.kind == Kind::Stream {
+                streams.entry(e.path.clone()).or_insert(i);
+            }
+        }
+        Ok(Compound { file, len: data.len() as u64, entries, streams })
     }
 
     /// Every entry, root first, then the tree in walk order.
@@ -143,7 +151,16 @@ impl<'a> Compound<'a> {
 
     /// Reads a stream by its full path. Storages have nothing to read.
     pub fn stream(&self, path: &str) -> Result<Vec<u8>, Error> {
-        let entry = self.entries.iter().find(|e| e.kind == Kind::Stream && e.path == path).ok_or_else(|| Error::NotFound(path.to_string()))?;
+        let entry = self.streams.get(path).and_then(|&i| self.entries.get(i)).ok_or_else(|| Error::NotFound(path.to_string()))?;
+        self.read_entry(entry)
+    }
+
+    /// Reads the stream one of [`Compound::entries`] is: its own bytes, even when another
+    /// entry of a damaged file has the same path.
+    pub fn read_entry(&self, entry: &Entry) -> Result<Vec<u8>, Error> {
+        if entry.kind != Kind::Stream {
+            return Err(Error::NotFound(entry.path.clone()));
+        }
         // Refused before anything is reserved for it: no stream holds more than the file does.
         if entry.size > MAX_STREAM || entry.size > self.len {
             return Err(Error::StreamTooLarge);

@@ -13,23 +13,32 @@ fn corpus() -> Option<PathBuf> {
     std::env::var_os("ANICRAFT_FLA_CORPUS").map(PathBuf::from)
 }
 
+/// Lists a folder of the corpus; one that can't be listed fails the test, so a corpus read
+/// short can't pass by comparing less.
+fn list(dir: &Path) -> Vec<PathBuf> {
+    let entries = std::fs::read_dir(dir).unwrap_or_else(|e| panic!("{}: {e}", dir.display()));
+    entries.map(|e| e.unwrap_or_else(|e| panic!("{}: {e}", dir.display())).path()).collect()
+}
+
 /// The corpus's modern twins: `*-animate.fla`, and the `.fla`/`.xfl` files in `*-animate/`.
+/// A `*-animate.fla` whose `*-animate/` folder holds `.fla` files is the download those were
+/// unpacked from (a zip of documents, not a document), so it isn't one; Mademoiselle's is a
+/// zipped XFL folder, a document, and counts beside its unpacked copy.
 fn twins(dir: &Path) -> Vec<PathBuf> {
     let mut out = Vec::new();
-    let Ok(entries) = std::fs::read_dir(dir) else { return out };
-    for path in entries.flatten().map(|e| e.path()) {
+    for path in list(dir) {
         let name = path.file_name().and_then(|n| n.to_str()).unwrap_or_default().to_string();
         if !name.contains("-animate") {
             continue;
         }
         if path.is_dir() {
-            for inner in std::fs::read_dir(&path).into_iter().flatten().flatten().map(|e| e.path()) {
-                if inner.extension().is_some_and(|e| e == "fla" || e == "xfl") {
-                    out.push(inner);
-                }
-            }
+            out.extend(list(&path).into_iter().filter(|inner| inner.extension().is_some_and(|e| e == "fla" || e == "xfl")));
         } else if path.extension().is_some_and(|e| e == "fla") {
-            out.push(path);
+            let unpacked = path.with_extension("");
+            let bundle = unpacked.is_dir() && list(&unpacked).iter().any(|p| p.extension().is_some_and(|e| e == "fla"));
+            if !bundle {
+                out.push(path);
+            }
         }
     }
     out.sort();
@@ -42,8 +51,7 @@ fn every_twins_badge_decodes_from_animates_own_bitmap_data() {
     let mut badges = Vec::new();
     let mut opened = Vec::new();
     for path in twins(&dir) {
-        // One zip in the corpus has a damaged central directory; its XFL folder copy is checked.
-        let Ok((doc, report)) = anicraft_xfl::import_path(&path) else { continue };
+        let (doc, report) = anicraft_xfl::import_path(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
         opened.push(path.display().to_string());
         let summary = report.summary();
         assert!(!summary.contains("Animate's own format"), "{}: {summary}", path.display());
@@ -62,7 +70,9 @@ fn every_twins_badge_decodes_from_animates_own_bitmap_data() {
         assert_eq!(px.rgba[mid + 3], 255, "{}: the middle is opaque", path.display());
         badges.push(px.rgba.clone());
     }
-    assert!(opened.len() >= 8, "expected the corpus's twins to open, got {opened:?}");
+    // The manifest's 9 pairs: 6 Animate `.fla` files, the Mademoiselle XFL folder and its zip,
+    // and the RoboKit and Storyboard downloads' 3 `.fla` files.
+    assert!(opened.len() >= 10, "expected every twin the manifest pins, got {opened:?}");
     assert!(badges.windows(2).all(|w| w[0] == w[1]), "every twin's badge decodes to the same pixels");
 }
 

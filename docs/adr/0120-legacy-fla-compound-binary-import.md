@@ -11,9 +11,9 @@ Files saved by Flash 8 through CS4 — the bulk of the historical Flash authorin
 are OLE2 **compound binary files** (Microsoft `[MS-CFB]`), unlike the zip packages Flash
 CS5 and Animate write. The hardened zip reader (ADR 0054) refuses them with the sentence
 "this .fla was saved by Flash CS4 or earlier…", which was honest, and
-`docs/requirements.md` listed binary FLA as a P1 stretch goal. This ADR covers reading
-the container and its record streams; decoding the records into the document model is
-follow-on work tracked in `openspec/changes/add-legacy-fla-import/`.
+`docs/requirements.md` listed binary FLA as a P1 stretch goal. This ADR began with
+reading the container and its record streams (Stage 1); decoding the records into the
+document model came after it, and the Decision and Consequences below record both.
 
 ## Decision
 
@@ -33,7 +33,8 @@ follow-on work tracked in `openspec/changes/add-legacy-fla-import/`.
    (structure), `CPicShape`, `CPicSymbol`, `CPicText`, `CPicSprite`, `CPicButton`,
    `CPicMorphShape` (+ `CMorphSegment`/`CMorphCurve`/`CMorphHintItem`), `CPicBitmap`,
    `CMediaBits`, `CMediaSound`, `CQTAudioSettings`, `CDocumentPage`, `CColorDef`,
-   `CObList`. Payloads (geometry, fills, transforms, text) stay to be decoded.
+   `CObList`. At Stage 1 the payloads (geometry, fills, transforms, text) were still to be
+   decoded; their layouts follow under Consequences.
 
 3. **Reverse-engineer differentially.** EDAP Tools ships the same sample rigs in both
    eras ("for Flash 8–CS6" legacy OLE2, "for Animate" modern zip FLA). Decoding is built
@@ -79,8 +80,8 @@ follow-on work tracked in `openspec/changes/add-legacy-fla-import/`.
   (i16 in 1/256 twip, i32 in 1/256 twip, i16 in 1/2 twip), all relative to the pen; style
   changes carry stroke/left-fill/right-fill indices as u8 or u16. A record with a control
   point is a quadratic curve. Verified differentially: every shape body the decoder finds
-  in the corpus (3197, 2201 of them curved) matches its twin's XFL edges, styles and
-  matrix. (An earlier reading took the edge unit for half-pixels; it is half-twips — the
+  in the corpus (3197, 2201 of them curved) matches its twin's XFL edges and their fill and
+  stroke style indices (the record's matrix and the styles' contents aren't compared). (An earlier reading took the edge unit for half-pixels; it is half-twips — the
   "UFO mask" fixture is 10.9 × 11.2 px.) Fill regions are rebuilt per style as the XFL
   importer does. Bitmap fills and stroke kinds (dashed, dotted, hairline) are not yet
   located.
@@ -176,10 +177,13 @@ follow-on work tracked in `openspec/changes/add-legacy-fla-import/`.
   1628/1628 layers their keyframes (index and duration), 6993/6993 keyframes their tween
   kind, 4457/4457 instances their library item, matrix, loop mode, first frame and instance
   name (18 buttons, 3 named); 335/335 non-empty texts sit on the twins' keyframes with their
-  kind, characters and position (and 372/372 text records match field for field); 9/9 bitmap
+  kind, characters and position (372/372 text records pair with their twin's, and 371 match
+  field for field: one differs by a twip in its left edge and width, a difference the test
+  pins); 9/9 bitmap
   instances and bitmap items (name, folder, size), 5/5 frame sounds (sound, sync, repeats,
   envelope) and 4/4 sound items (folder, rate, channels, length); 39/39 library folders and
-  328/328 symbols at their twins' library paths and types; the stage matches on all pairs.
+  328/328 symbols at their twins' library paths and types; the stage size, frame rate and
+  colour match on every pair.
   Rendered frames of the movie template and the character rigs match their twins' apart
   from dotted strokes, text antialiasing on a few pixels, and the shape tweens whose hints
   the twins' XFL path drops.

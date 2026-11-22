@@ -64,16 +64,23 @@ pub struct StreamDump {
 
 /// Dumps a legacy document's streams for triage and reverse-engineering.
 pub fn dump(data: &[u8]) -> Result<Vec<StreamDump>, cfb::Error> {
+    dump_only(data, None)
+}
+
+/// [`dump`], of only the streams at path `only` when it is given: the others aren't read, so
+/// a damaged one can't fail the dump or spend the tag budget. A path no stream has is
+/// [`cfb::Error::NotFound`].
+pub fn dump_only(data: &[u8], only: Option<&str>) -> Result<Vec<StreamDump>, cfb::Error> {
     let file = cfb::Compound::new(data)?;
     let mut out = Vec::new();
     // One tag budget for the whole file: several directory entries may share one chain, so a
     // budget per stream would let a small file hold millions of tags.
     let mut tags_left = records::MAX_TAGS;
     for entry in file.entries() {
-        if entry.kind != cfb::Kind::Stream {
+        if entry.kind != cfb::Kind::Stream || only.is_some_and(|p| p != entry.path) {
             continue;
         }
-        let bytes = file.stream(&entry.path)?;
+        let bytes = file.read_entry(entry)?;
         let scan = records::scan_tags_max(&bytes, tags_left);
         tags_left = tags_left.saturating_sub(scan.tags.len());
         out.push(StreamDump {
@@ -83,6 +90,11 @@ pub fn dump(data: &[u8]) -> Result<Vec<StreamDump>, cfb::Error> {
             tags: scan.tags.into_iter().map(|t| (t.offset, t.name)).collect(),
             tags_complete: scan.complete,
         });
+    }
+    if let Some(p) = only
+        && out.is_empty()
+    {
+        return Err(cfb::Error::NotFound(p.to_string()));
     }
     Ok(out)
 }
