@@ -37,7 +37,7 @@
 //!
 //! A run stores at most 512 units: a longer run of one style is split into 512-unit pieces
 //! with byte-identical attribute blocks, which the decode merges back, as XFL shows them.
-//! Strings in the header and trailer are MFC `CArchive` strings ([`Reader::cstring`]).
+//! Strings in the header and trailer are MFC `CArchive` strings (read by `Reader::cstring` in `archive`).
 
 use crate::report::Report;
 use anicraft_doc::{BaselineShift, CharStyle, ColorEffect, Element, ElementId, ElementKind, LineType, ParagraphStyle, Rgba, TextAlign, TextBlock, TextField, TextKind, TextRun};
