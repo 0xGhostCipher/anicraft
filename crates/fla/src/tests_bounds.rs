@@ -177,6 +177,39 @@ fn a_stream_larger_than_the_file_is_refused_before_it_is_read() {
     assert_eq!(Compound::new(&f).unwrap().stream("Contents"), Err(Error::StreamTooLarge));
 }
 
+/// A container whose `Contents` stream sits `depth` levels below the root (inside
+/// `depth - 1` nested storages), written with `craft-cfb`'s own writer.
+fn nested(depth: usize) -> Vec<u8> {
+    let mut w = craft_cfb::Writer::new(craft_cfb::Version::V3);
+    let mut parent = craft_cfb::Writer::ROOT;
+    for i in 1..depth {
+        parent = w.storage(parent, &format!("Storage {i}"), [0; 16]).unwrap();
+    }
+    w.stream(parent, "Contents", b"hi".to_vec()).unwrap();
+    w.finish()
+}
+
+#[test]
+fn storages_nested_past_the_depth_bound_are_refused_before_their_paths_are_built() {
+    // At the bound the deepest stream still opens and reads, by its full path.
+    let f = nested(64);
+    let file = Compound::new(&f).expect("64 levels open");
+    let deepest = file.entries().iter().find(|e| e.path.ends_with("/Contents")).expect("the deep stream is listed");
+    assert_eq!(file.stream(&deepest.path.clone()).unwrap(), b"hi".to_vec());
+    // One level deeper, and far deeper, is refused (without building a path per ancestor).
+    for depth in [65, 2000] {
+        assert!(matches!(Compound::new(&nested(depth)), Err(Error::OverLimit(_))), "depth {depth}");
+    }
+}
+
+#[test]
+fn full_paths_past_their_byte_budget_are_refused() {
+    let f = write(&[("Contents", b"hi".to_vec()), ("S 1", b"a".to_vec()), ("S 2", b"b".to_vec())]);
+    let total: usize = Compound::new(&f).unwrap().entries().iter().map(|e| e.path.len()).sum();
+    assert!(Compound::open_within(&f, total).is_ok(), "a budget the paths fit in opens");
+    assert!(matches!(Compound::open_within(&f, total - 1), Err(Error::OverLimit(_))), "one byte under is refused");
+}
+
 /// Length-prefixed record names, as a stream lays them out.
 fn tags(names: &[&str]) -> Vec<u8> {
     let mut d = records::ITEM_PROLOGUE.to_vec();

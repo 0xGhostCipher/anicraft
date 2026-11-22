@@ -3,10 +3,12 @@
 //!
 //! This module keeps only the importer's own policy: the caps of the hardened zip reader's
 //! profile (ADR 0054: 1 GiB per file, 256 MiB per stream), stream lookup by full path, and one
-//! sentence per failure that is safe to show. Every chain walk, cycle guard and directory bound
-//! is `craft-cfb`'s. Nothing is extracted to disk, and only stream contents are copied.
+//! sentence per failure that is safe to show, and bounds on the full paths it builds (a storage
+//! depth, and a budget for all paths together). Every chain walk, cycle guard and directory
+//! bound is `craft-cfb`'s. Nothing is extracted to disk, and only stream contents are copied.
 
 use craft_cfb::{CompoundFile, EntryKind, Limits};
+use std::collections::HashMap;
 use std::fmt;
 
 /// Hard caps, mirroring the hardened zip reader's profile (ADR 0054): 1 GiB per file and
@@ -15,6 +17,12 @@ pub const MAX_FILE: u64 = 1 << 30;
 const MAX_STREAM: u64 = 256 << 20;
 /// The most directory entries a container may hold (`craft-cfb`'s own default).
 const MAX_ENTRIES: usize = 1 << 20;
+/// The deepest storage nesting read. Flash keeps its streams at the top level; `craft-cfb`
+/// doesn't bound the depth, and a full path costs its depth in names.
+const MAX_TREE_DEPTH: usize = 64;
+/// The most bytes all entries' full paths may take together, so a small file of long, deeply
+/// nested names can't make the path list many times its own size.
+const MAX_PATH_BYTES: usize = 64 << 20;
 
 /// Why a container couldn't be read: one sentence each, safe to show.
 #[derive(Debug, Clone, PartialEq, thiserror::Error)]
@@ -82,6 +90,11 @@ pub struct Compound<'a> {
 impl<'a> Compound<'a> {
     /// Opens a compound file over `data`, validating its header, FAT and directory.
     pub fn new(data: &'a [u8]) -> Result<Compound<'a>, Error> {
+        Self::open_within(data, MAX_PATH_BYTES)
+    }
+
+    /// [`Compound::new`] with a budget for the full paths' bytes (a test seam).
+    pub(crate) fn open_within(data: &'a [u8], max_path_bytes: usize) -> Result<Compound<'a>, Error> {
         if !crate::is_legacy(data) {
             return Err(Error::NotCompound);
         }
@@ -91,6 +104,10 @@ impl<'a> Compound<'a> {
         let file = CompoundFile::open_with(data, Limits { max_stream_size: MAX_STREAM, max_dir_entries: MAX_ENTRIES })?;
         let root = file.root();
         let mut entries = vec![Entry { path: String::new(), kind: Kind::Storage, size: root.size, start: root.start, id: 0 }];
+        // Each storage's depth and full path length, so both are checked before a path is built.
+        // `walk` lists parents before their children.
+        let mut reached: HashMap<usize, (usize, usize)> = HashMap::from([(0, (0, 0))]);
+        let mut path_bytes = 0usize;
         for id in file.walk() {
             let Some(e) = file.entry(id) else { continue };
             // Unallocated entries and unknown types never hold document streams.
@@ -99,6 +116,19 @@ impl<'a> Compound<'a> {
                 EntryKind::Storage | EntryKind::Root => Kind::Storage,
                 EntryKind::Unknown => continue,
             };
+            let Some(&(parent_depth, parent_len)) = e.parent.and_then(|p| reached.get(&p)) else { continue };
+            let depth = parent_depth + 1;
+            if depth > MAX_TREE_DEPTH {
+                return Err(Error::OverLimit(format!("its storages are nested more than {MAX_TREE_DEPTH} deep")));
+            }
+            let len = if parent_len == 0 { e.name.len() } else { parent_len + 1 + e.name.len() };
+            path_bytes = path_bytes.saturating_add(len);
+            if path_bytes > max_path_bytes {
+                return Err(Error::OverLimit("its entries' names add up to more than AniCraft reads".to_string()));
+            }
+            if kind == Kind::Storage {
+                reached.insert(id, (depth, len));
+            }
             let Some(path) = file.path(id) else { continue };
             let size = if kind == Kind::Stream { e.size } else { 0 };
             entries.push(Entry { path, kind, size, start: e.start, id });
