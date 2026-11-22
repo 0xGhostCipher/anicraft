@@ -200,4 +200,6 @@ follow-on work tracked in `openspec/changes/add-legacy-fla-import/`.
 - `craft-cfb` in storytold/craft-libs (`crates/cfb`): the shared reader of that specification.
 - Microsoft's MFC documentation of `CArchive` object serialization (`CArchive::WriteObject`,
   `CRuntimeClass` schemas): the public description of the object framing.
-- The PR's task list and the local corpus notes (not committed; EDAP samples are CC BY-NC-SA).
+- EDAP Tools' sample rigs and templates, https://flash-powertools.com/downloads/ (CC BY-NC-SA 3.0,
+  not committed): every file the format was learned from, pinned by URL and sha256 in
+  `crates/fla/tests/corpus.tsv`.
