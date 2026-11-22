@@ -3,14 +3,14 @@
 //!
 //! A `.fla` saved by Flash 8 through CS4 is an OLE2 **compound binary file** (Microsoft
 //! `[MS-CFB]`), unlike the zip packages Flash CS5 and Animate write (imported by `anicraft-xfl`,
-//! ADR 0009 and ADR 0054). This crate reads the container from the public specification —
-//! its own reader, like every format in the workspace — and exposes the document's streams
+//! ADR 0009 and ADR 0054). This crate reads the container through `craft-cfb`, craft-libs'
+//! shared reader of that public specification ([`cfb`]), and exposes the document's streams
 //! (`Contents`, `S <n> <stamp>` library items, `Symbol <n>` pages, `Media <n>` bitmaps and
 //! sounds). A tag scanner [`records`] lays out each stream's `CPic*`/`C*` record names, the
 //! reverse-engineering microscope behind `anicraft-cli fla-dump`.
 //!
 //! Container hardening follows ADR 0054's zip profile: the file is capped at 1 GiB and every
-//! stream at 256 MiB, chains (FAT, mini-FAT, DIFAT, directory tree) are cycle-guarded, nothing
+//! stream at 256 MiB, `craft-cfb` cycle-guards the chains (FAT, mini-FAT, DIFAT, directory tree), nothing
 //! is written to disk, and hostile or damaged input is refused with a one-sentence error —
 //! never a panic. [`archive`] reads an item stream's object graph (layers, keyframes, symbol
 //! instances, tweens), [`shape`] the shape records' styles and straight and curved edges,
