@@ -194,7 +194,7 @@
     Video uses). Without ffmpeg, the window says how to install it.
   * Headless: `file.import_video`, `file.video_info`, `layer.set_video`.
 
-* **Flash 8–CS4 `.fla` files open** (ADR 0096, #163): the binary `.fla` of the Flash 8 to
+* **Flash 8–CS4 `.fla` files open** (ADR 0120, #163): the binary `.fla` of the Flash 8 to
   CS4 era, which AniCraft used to refuse, now opens like an Animate file, untitled, so Save asks
   for a new `.anicraft` name.
   * **What comes across**: scenes, layers and folders, keyframes with their timing, shapes with

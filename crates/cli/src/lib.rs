@@ -293,7 +293,7 @@ pub fn run(argv: &[String]) -> Result<String, String> {
             let s = session(&a, Some(src.ok_or("info needs a file or --sample")?))?;
             serde_json::to_string_pretty(&s.info()).map_err(|e| e.to_string())
         }
-        // The legacy Flash container's stream tree and record tags (ADR 0096): the
+        // The legacy Flash container's stream tree and record tags (ADR 0120): the
         // reverse-engineering microscope for Flash 8–CS4 era `.fla` files.
         "fla-dump" => {
             let p = src.ok_or("fla-dump needs a legacy .fla file")?;

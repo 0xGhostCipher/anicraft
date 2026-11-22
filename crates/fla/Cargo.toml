@@ -1,6 +1,6 @@
 [package]
 name = "anicraft-fla"
-description = "AniCraft legacy Flash import (L2): the Flash 8–CS4 compound binary .fla container (MS-CFB) and its record streams, read from the public Microsoft [MS-CFB] specification"
+description = "AniCraft legacy Flash import (L2): the Flash 8–CS4 compound binary .fla record streams, in their MS-CFB container read by craft-cfb"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -14,6 +14,8 @@ anicraft-geom.workspace = true
 anicraft-text.workspace = true
 # Animate's own bitmap and sound payloads: the `Media` streams are the XFL twins' `bin/*.dat` files.
 anicraft-flamedia.workspace = true
+# The compound binary container (MS-CFB) the record streams live in.
+craft-cfb.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]

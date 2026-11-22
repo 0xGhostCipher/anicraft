@@ -1,5 +1,5 @@
 //! The object graph of a legacy item stream: a page's or a symbol's timeline as Flash 8–CS4
-//! serialized it (ADR 0096).
+//! serialized it (ADR 0120).
 //!
 //! Learned differentially from the corpus's legacy files and their Animate twins; no Flash or
 //! Animate code involved. An item stream (`P <n> <stamp>`, `S <n> <stamp>`, `Symbol <n>`) is one

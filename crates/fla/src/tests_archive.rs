@@ -1,4 +1,4 @@
-//! The object graph's recovery paths and the mapping's guards on hostile input (ADR 0096):
+//! The object graph's recovery paths and the mapping's guards on hostile input (ADR 0120):
 //! skipping undecoded bytes in linear work without losing count of the objects in them,
 //! references as siblings, groups used more than once or inside themselves, and the
 //! `Contents` scans. Every byte here is written from the grammar in `crate::archive` and

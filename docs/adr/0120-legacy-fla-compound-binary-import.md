@@ -1,4 +1,4 @@
-# ADR 0096: Legacy Flash import — the compound binary container
+# ADR 0120: Legacy Flash import — the compound binary container
 
 Date: 2026-11-16 · Status: accepted — the container (Stage 1), shapes, the timelines
 (scenes, layers, keyframes, instances, tweens, library symbols), texts, bitmaps, sounds, button
@@ -17,12 +17,13 @@ follow-on work tracked in `openspec/changes/add-legacy-fla-import/`.
 
 ## Decision
 
-1. **Own MS-CFB reader** in a new L2 crate `crates/fla`, from the public specification
-   only. Like the workspace's own zip and XML readers: hardening is ours to control
-   (1 GiB file cap, 256 MiB stream cap, cycle-guarded chains, in-memory lookups, nothing
-   extracted to disk), and `deny.toml`'s dependency policy stays narrow. Alternatives
-   considered: an OLE2 crate from crates.io (mixes hardening into a foreign reader; adds
-   a dependency for ~600 lines of spec code).
+1. **The container is read by `craft-cfb`**, the shared clean-room MS-CFB reader in
+   craft-libs, written from the public specification. `crates/fla`'s `cfb` module keeps only
+   the importer's policy on top of it: the hardened zip reader's caps (ADR 0054: 1 GiB per
+   file, 256 MiB per stream), stream lookup by full path, and one sentence per refusal.
+   Chain walks, cycle guards and directory bounds are `craft-cfb`'s, so every Craft app that
+   reads compound files shares one hardened reader. The branch began with its own reader; it
+   was replaced before merging, at review, by the shared one (AGENTS.md rule 9).
 
 2. **Record streams read as data first.** Observation on real files establishes the
    stream layout: a 5-byte prologue per stream family (`Contents`: `3F 01 00 00 00`,
@@ -38,7 +39,7 @@ follow-on work tracked in `openspec/changes/add-legacy-fla-import/`.
    eras ("for Flash 8–CS6" legacy OLE2, "for Animate" modern zip FLA). Decoding is built
    feature-by-feature against the pair: dump the record from the legacy file, find the
    same artwork's node in the modern twin's XML, decode until they agree. The corpus
-   (8 pairs, CC BY-NC-SA) lives **outside** the repo for licensing; committed fixtures
+   (9 pairs, CC BY-NC-SA) lives **outside** the repo for licensing; committed fixtures
    are synthetic, written by a spec-only writer like ADR 0054's.
 
 4. **A microscope command ships now**: `anicraft-cli fla-dump` prints a legacy file's
@@ -46,13 +47,14 @@ follow-on work tracked in `openspec/changes/add-legacy-fla-import/`.
    task and for triaging user files; it also makes the refusal path observable
    (`anicraft-cli info` already names Flash CS4-or-earlier files specifically).
 
-5. **Refusal keeps one sentence.** The reader's errors name one situation each
-   (not-a-compound-file, too large, truncated, lying header, looping chain, looping tree,
-   over-large stream, malformed name), safe to show, never a panic.
+5. **Refusal keeps one sentence.** The container's errors are one sentence each, safe to
+   show, never a panic: not a compound file, too large, damaged (with `craft-cfb`'s reason:
+   a lying header, a looping chain or tree, a cut-short file), an over-large stream, over a
+   limit, no such stream.
 
 ## Consequences
 
-- `crates/fla` joins the workspace at L2 (std, `thiserror`, `anicraft-doc`, `anicraft-geom`,
+- `crates/fla` joins the workspace at L2 (std, `thiserror`, `craft-cfb`, `anicraft-doc`, `anicraft-geom`,
   `anicraft-text` for laying texts out as the XFL importer does, and the L0 `anicraft-flamedia`
   for the media payloads it shares with the XFL importer), with a row in the AGENTS.md map and
   the LAYERS table.
@@ -191,6 +193,7 @@ follow-on work tracked in `openspec/changes/add-legacy-fla-import/`.
 ## References
 
 - Microsoft `[MS-CFB]`: Compound File Binary Format specification (public).
+- `craft-cfb` in storytold/craft-libs (`crates/cfb`): the shared reader of that specification.
 - Microsoft's MFC documentation of `CArchive` object serialization (`CArchive::WriteObject`,
   `CRuntimeClass` schemas): the public description of the object framing.
 - The PR's task list and the local corpus notes (not committed; EDAP samples are CC BY-NC-SA).

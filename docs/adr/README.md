@@ -23,4 +23,4 @@ has to renumber because another PR merged first.
 | Number | Pull request | Topic |
 |---|---|---|
 | 0037 | #38 (outside contribution) | Interface languages |
-| 0096 | legacy Flash import (local working copy, unmerged) | Compound binary `.fla` container |
+| 0120 | #478 | Legacy Flash 8–CS4 `.fla` import (compound binary container) |

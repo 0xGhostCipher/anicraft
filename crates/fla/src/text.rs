@@ -1,4 +1,4 @@
-//! `CPicText` records: static and dynamic text fields (ADR 0096), decoded into the same
+//! `CPicText` records: static and dynamic text fields (ADR 0120), decoded into the same
 //! text blocks the XFL importer makes of their twins' `DOMStaticText` and `DOMDynamicText`.
 //!
 //! Learned differentially from the corpus's legacy files and their Animate twins (every one

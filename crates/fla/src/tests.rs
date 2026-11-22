@@ -213,7 +213,7 @@ fn a_file_that_is_not_a_compound_file_is_refused() {
 fn a_truncated_file_is_refused() {
     let good = write(&[("Contents", b"hi".to_vec())]);
     for cut in [100usize, 512, 1024, good.len() - 1] {
-        assert!(matches!(Compound::new(&good[..cut]), Err(Error::Truncated | Error::NotCompound)), "cut at {cut}");
+        assert!(matches!(Compound::new(&good[..cut]), Err(Error::Damaged(_) | Error::NotCompound)), "cut at {cut}");
     }
 }
 
@@ -236,7 +236,7 @@ fn a_fat_chain_that_loops_is_refused() {
     // Opening validates the header, directory and mini-FAT chains; the stream's own
     // chain is walked when the stream is read.
     if let Ok(file) = Compound::new(&f) {
-        assert!(matches!(file.stream("Contents"), Err(Error::ChainCycle | Error::Truncated)), "the looping stream chain must be refused");
+        assert!(matches!(file.stream("Contents"), Err(Error::Damaged(_))), "the looping stream chain must be refused");
     }
 }
 
@@ -248,15 +248,15 @@ const FATSECT_MARKER: u32 = 0xFFFF_FFFC;
 fn a_header_that_lies_about_its_structure_is_refused() {
     let mut f = write(&[("Contents", b"hi".to_vec())]);
     f[30] = 10; // a sector shift that doesn't match version 3
-    assert!(matches!(Compound::new(&f), Err(Error::BadHeader(_) | Error::Truncated)));
+    assert!(matches!(Compound::new(&f), Err(Error::Damaged(_))));
 
     let mut f = write(&[("Contents", b"hi".to_vec())]);
     f[44] = 99; // more FAT sectors than the header lists
-    assert!(matches!(Compound::new(&f), Err(Error::BadHeader(_) | Error::Truncated | Error::ChainCycle)));
+    assert!(matches!(Compound::new(&f), Err(Error::Damaged(_))));
 
     let mut f = write(&[("Contents", b"hi".to_vec())]);
     f[28] = 0; // the byte order mark broken
-    assert!(matches!(Compound::new(&f), Err(Error::BadHeader(_))));
+    assert!(matches!(Compound::new(&f), Err(Error::Damaged(_))));
 }
 
 #[test]
@@ -265,7 +265,7 @@ fn a_directory_tree_that_loops_is_refused() {
     let record = entry_record(&f, "Contents");
     // Entry 1's right sibling points back at entry 1 (ids count the root as 0).
     set_u32(&mut f, record + 72, 1);
-    assert!(matches!(Compound::new(&f), Err(Error::TreeCycle | Error::BadHeader(_) | Error::Truncated)));
+    assert!(matches!(Compound::new(&f), Err(Error::Damaged(_))));
 }
 
 #[test]
@@ -274,7 +274,9 @@ fn a_stream_larger_than_the_cap_is_refused() {
     let record = entry_record(&f, "Contents");
     let big = (256u64 << 20) + 1;
     f[record + 120..record + 128].copy_from_slice(&big.to_le_bytes());
-    assert!(matches!(Compound::new(&f), Err(Error::StreamTooLarge | Error::Truncated | Error::ChainCycle)));
+    // Refused when it is read, before anything is reserved for it.
+    let file = Compound::new(&f).expect("the directory itself is sound");
+    assert_eq!(file.stream("Contents"), Err(Error::StreamTooLarge));
 }
 
 #[test]
@@ -445,7 +447,7 @@ const TAIL: [u8; 9] = [0x00, 0x80, 0x00, 0x00, 0x00, 0x80, 0x00, 0x00, 0x03];
 /// A `CPicShape` record holding the corpus's smallest shape's geometry (Symbol 123, "UFO
 /// mask"): a 10.9 × 11.2 px rectangle, white fill at 31 % opacity, its matrix scaled by
 /// 65535/65536 and translated to (26.9, −1.55). The bytes are written from the decoded
-/// grammar (ADR 0096), not copied from any file.
+/// grammar (ADR 0120), not copied from any file.
 fn synthetic_shape_record() -> Vec<u8> {
     let mut d = shape_head([0xFFFF, 0, 0, 0xFFFF, 538, -31], 4);
     d.extend_from_slice(&1u16.to_le_bytes()); // one fill:
@@ -720,7 +722,7 @@ fn a_shape_record_cut_short_anywhere_never_panics_and_never_half_draws() {
 }
 
 // ---------------------------------------------------------------------------------------------
-// Timelines: an independent writer for the item streams' object graph (ADR 0096), written from
+// Timelines: an independent writer for the item streams' object graph (ADR 0120), written from
 // the decoded grammar (`crate::archive`), never from corpus bytes.
 
 /// Writes an item stream: the `01` byte, then objects the way the format numbers them (classes

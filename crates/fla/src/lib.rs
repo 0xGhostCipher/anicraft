@@ -16,7 +16,7 @@
 //! instances, tweens), [`shape`] the shape records' styles and straight and curved edges,
 //! [`text`] the `CPicText` records' static and dynamic text fields, [`library`] the folders,
 //! bitmaps and sounds `Contents` lists, and [`doc`] maps them into the AniCraft model the way the
-//! XFL importer maps Animate's (ADR 0096).
+//! XFL importer maps Animate's (ADR 0120).
 
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 

@@ -1,8 +1,9 @@
-//! Bounds on hostile input: the container's header, FAT, directory and stream chains, the
-//! tag scanner's budget, and the shape rebuild's indexes (which must not change its output).
+//! Bounds on hostile input: the container's header, FAT, directory and stream chains (as the
+//! importer sees them through `craft-cfb`), the tag scanner's budget, and the shape rebuild's
+//! indexes (which must not change its output).
 //! Every file here is built from the format's grammar ([MS-CFB]), never from corpus bytes.
 
-use super::cfb::{self, Compound, Error};
+use super::cfb::{Compound, Error};
 use super::records;
 use super::shape::{Edge, Seg, ShapeRecord};
 use super::tests::{entry_record, write};
@@ -32,10 +33,10 @@ fn minifat_word(f: &[u8], id: u32) -> usize {
     (u32_at(f, 60) as usize + 1) * 512 + id as usize * 4
 }
 
-fn bad_header(r: Result<Compound<'_>, Error>) -> &'static str {
+fn damaged(r: Result<Compound<'_>, Error>) -> String {
     match r {
-        Err(Error::BadHeader(why)) => why,
-        other => panic!("expected a bad header, got {other:?}"),
+        Err(Error::Damaged(why)) => why,
+        other => panic!("expected a damaged container, got {other:?}"),
     }
 }
 
@@ -45,7 +46,7 @@ fn a_huge_sector_shift_is_refused_before_it_is_used() {
         let mut f = write(&[("Contents", b"hi".to_vec())]);
         f[26..28].copy_from_slice(&major.to_le_bytes());
         f[30..32].copy_from_slice(&shift.to_le_bytes());
-        assert!(matches!(Compound::new(&f), Err(Error::BadHeader(_))), "version {major}, shift {shift}");
+        assert!(matches!(Compound::new(&f), Err(Error::Damaged(_))), "version {major}, shift {shift}");
     }
 }
 
@@ -56,7 +57,7 @@ fn a_fat_sector_listed_twice_is_refused() {
     let fat = u32_at(&f, 76);
     set_u32(&mut f, 44, 2);
     set_u32(&mut f, 80, fat);
-    assert!(bad_header(Compound::new(&f)).contains("twice"));
+    assert!(damaged(Compound::new(&f)).contains("twice"));
 
     // In an extended DIFAT sector: the same sector 127 times, the count claiming them all
     // (a 1 GiB file of these would reserve a FAT far larger than the file).
@@ -73,42 +74,26 @@ fn a_fat_sector_listed_twice_is_refused() {
     set_u32(&mut f, 44, 128);
     set_u32(&mut f, 68, difat);
     set_u32(&mut f, 72, 1);
-    assert!(bad_header(Compound::new(&f)).contains("twice"));
+    assert!(damaged(Compound::new(&f)).contains("twice"));
 }
 
 #[test]
-fn fat_sectors_past_the_file_or_more_than_it_holds_are_refused() {
+fn fat_sectors_past_the_file_or_more_than_it_could_hold_are_refused() {
     let mut f = write(&[("Contents", b"hi".to_vec())]);
     let past = (f.len() / 512 - 1) as u32; // the sector after the last
     set_u32(&mut f, 76, past);
-    assert!(matches!(Compound::new(&f), Err(Error::Truncated)));
+    assert!(matches!(Compound::new(&f), Err(Error::Damaged(_))));
 
     // A count no file this size could hold is refused before anything is read for it.
     let mut f = write(&[("Contents", b"hi".to_vec())]);
     set_u32(&mut f, 44, u32::MAX);
-    assert!(matches!(Compound::new(&f), Err(Error::Truncated)));
+    assert!(matches!(Compound::new(&f), Err(Error::Damaged(_))));
     let mut f = write(&[("Contents", b"hi".to_vec())]);
     let all = (f.len() / 512) as u32; // every sector, the header's included
     set_u32(&mut f, 44, all);
-    assert!(matches!(Compound::new(&f), Err(Error::Truncated)));
-}
-
-#[test]
-fn the_directory_reads_no_further_than_the_most_entries() {
-    // The budget admits exactly the most entries a directory may hold, at both sizes.
-    for sector in [512usize, 4096] {
-        assert_eq!(cfb::dir_sectors_max(sector) * sector / 128, 1 << 20, "{sector}-byte sectors");
-    }
-    // A chain one sector over its budget stops there; one exactly at it reads whole.
-    let mut data = vec![0u8; 512];
-    data.extend((0..3 * 512).map(|i| (i / 512) as u8));
-    let fat = [1, 2, ENDOFCHAIN];
-    let mut out = Vec::new();
-    assert_eq!(cfb::read_chain(&data, &fat, 0, 512, &mut out, 2), Err(Error::ChainTooLong));
-    assert_eq!(out.len(), 2 * 512, "nothing past the budget is copied");
-    let mut out = Vec::new();
-    assert_eq!(cfb::read_chain(&data, &fat, 0, 512, &mut out, 3), Ok(()));
-    assert_eq!(out.len(), 3 * 512);
+    // A count the file could hold but its DIFAT doesn't list costs nothing (`craft-cfb` reads
+    // only the sectors listed) and leaves the streams readable.
+    assert_eq!(Compound::new(&f).unwrap().stream("Contents").unwrap(), b"hi".to_vec());
 }
 
 #[test]
@@ -138,12 +123,12 @@ fn a_stream_chain_that_ends_before_its_size_is_truncated() {
     let mut f = write(&[("Contents", vec![1; 5000])]);
     let at = fat_word(&f, 5);
     set_u32(&mut f, at, ENDOFCHAIN);
-    assert_eq!(Compound::new(&f).unwrap().stream("Contents"), Err(Error::Truncated));
+    assert!(matches!(Compound::new(&f).unwrap().stream("Contents"), Err(Error::Damaged(_))));
 
     let mut f = write(&[("Contents", vec![2; 200])]);
     let at = minifat_word(&f, 1);
     set_u32(&mut f, at, FREESECT);
-    assert_eq!(Compound::new(&f).unwrap().stream("Contents"), Err(Error::Truncated));
+    assert!(matches!(Compound::new(&f).unwrap().stream("Contents"), Err(Error::Damaged(_))));
 }
 
 #[test]
@@ -156,9 +141,10 @@ fn the_root_mini_stream_chain_is_read_to_its_size() {
     set_u32(&mut f, at, first);
     assert_eq!(Compound::new(&f).unwrap().stream("Contents").unwrap(), vec![3; 100], "a looping tail is never followed");
     set_u32(&mut f, at, ENDOFCHAIN);
-    // A root claiming more than the file holds is refused before anything is reserved.
+    // A root claiming more than the file holds reserves no more than the file (`craft-cfb`
+    // reads the mini stream to the file's end at most), and its streams still read.
     f[root + 120..root + 128].copy_from_slice(&0x8000_0000u64.to_le_bytes());
-    assert!(matches!(Compound::new(&f), Err(Error::Truncated)));
+    assert_eq!(Compound::new(&f).unwrap().stream("Contents").unwrap(), vec![3; 100]);
 }
 
 #[test]

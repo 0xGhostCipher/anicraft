@@ -1,5 +1,5 @@
 //! `CPicShape` records: a shape's matrix, fill and stroke styles and its edge list, with
-//! straight and quadratic edges (ADR 0096).
+//! straight and quadratic edges (ADR 0120).
 //!
 //! Learned differentially from the corpus's legacy files and their Animate twins (every
 //! decoded edge, style index and matrix equals the twin's XFL `DOMShape`): no Flash or

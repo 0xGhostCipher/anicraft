@@ -1,7 +1,7 @@
 //! A legacy document into the AniCraft model: scenes, layers, keyframes and their artwork,
-//! symbol instances, tweens and the library (ADR 0096).
+//! symbol instances, tweens and the library (ADR 0120).
 //!
-//! Observed format (Flash 8–CS4 era; see ADR 0096 and the corpus notes): the `Contents`
+//! Observed format (Flash 8–CS4 era; see ADR 0120 and the corpus notes): the `Contents`
 //! stream lists the document — library items (stream name, label, item id, symbol type), the
 //! stage, and one `CDocumentPage` record per scene (page stream name + scene label). Every page
 //! stream (`P <n> <stamp>`) and library stream (`S <n> <stamp>`, `Symbol <n>`) holds one

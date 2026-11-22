@@ -208,7 +208,7 @@ pub(crate) fn open(s: &mut Session, p: &Value) -> Result<Value> {
             let data = if crate::vfs::len(&path)? > max { None } else { Some(crate::vfs::read_bounded(&path, max)?).filter(|d| d.len() as u64 <= max) };
             match data {
                 None => Err(EngineError::Format(format!("{} is too large to open", path.display()))),
-                // The Flash 8–CS4 era compound binary (ADR 0096).
+                // The Flash 8–CS4 era compound binary (ADR 0120).
                 Some(data) if anicraft_fla::is_legacy(&data) => anicraft_fla::import(&data)
                     .map(|(d, r)| (d, r.summary(), json!(r.skipped), json!(r.kept), json!(r.runs), json!(r.missing_fonts), json!(r.names)))
                     .map_err(|e| EngineError::Format(format!("{}: {e}", path.display()))),

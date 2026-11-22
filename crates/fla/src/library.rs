@@ -1,5 +1,5 @@
 //! The library as `Contents` lists it beyond its symbols: folders, bitmaps and sounds, and the
-//! document's script language (ADR 0096).
+//! document's script language (ADR 0120).
 //!
 //! Learned differentially from the corpus's legacy files and their Animate twins
 //! (`DOMFolderItem`, `DOMBitmapItem`, `DOMSoundItem`, `PublishSettings.xml`); no Flash or
