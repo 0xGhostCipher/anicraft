@@ -648,8 +648,9 @@ fn plain_names(what: &str, app: &crate::app::App, nodes: Vec<(egui::accesskit::N
     if let Ok(v) = serde_json::to_value(&app.s.doc) {
         strings_in(&v, &mut doc_text);
     }
-    // So are open documents' names (their file names, in the Window menu); "Untitled" is ours.
-    doc_text.extend(crate::tabs::infos(app).into_iter().map(|t| t.name).filter(|n| n.chars().any(char::is_alphanumeric) && !n.chars().any(pseudo::is_accented)));
+    // So are the names of documents opened from a file (their file names, in the Window menu).
+    // An unsaved document's "Untitled" is ours, so it still has to be translated.
+    doc_text.extend(crate::tabs::infos(app).into_iter().filter(|t| t.path.is_some()).map(|t| t.name));
     let mut found = BTreeSet::new();
     for (_, n) in nodes {
         for name in [n.label(), n.description()].into_iter().flatten() {

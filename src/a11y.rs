@@ -77,8 +77,8 @@ pub fn pointer_only() -> egui::Sense {
     egui::Sense::click_and_drag() - egui::Sense::FOCUSABLE
 }
 
-/// Names the resize handle egui puts on a panel (`Panel::…(id)`, its `id.with("__resize")`),
-/// which it leaves anonymous.
+/// Names the resize handle egui puts on a panel (`Panel::…(id)` shown in `ui`: its
+/// `ui.scope_id().with(id).with("__resize")`), which it leaves anonymous.
 pub fn name_resize(ctx: &egui::Context, id: Id, name: &str) {
     ctx.accesskit_node_builder(id, |node| {
         node.set_role(egui::accesskit::Role::Splitter);

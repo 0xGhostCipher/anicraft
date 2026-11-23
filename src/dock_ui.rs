@@ -423,7 +423,8 @@ pub fn workspace(app: &mut App, ui: &mut egui::Ui) {
             Side::Bottom => egui::Panel::bottom(id),
         };
         let shown = panel.resizable(true).default_size(size).size_range(min..=max).frame(egui::Frame::NONE.fill(T.panel)).show(ui, |ui| zone_ui(app, ui, side, &zone.groups, &layout, &mut acts));
-        let resize = id.with("__resize");
+        // egui 0.37 salts a panel's id with the parent Ui's scope, and its resize handle with that.
+        let resize = ui.scope_id().with(id).with("__resize");
         if ctx.is_being_dragged(resize) {
             let r = shown.response.rect;
             app.dock.zone_mut(side).size = Some((if side.stacks() { r.width() } else { r.height() }).round());
@@ -1567,6 +1568,20 @@ mod tests {
         assert_eq!(fit_tabs(&[60.0, 120.0, 140.0], 20.0), vec![MIN_TAB; 3]);
         assert_eq!(fit_tabs(&[30.0, 120.0], 20.0), vec![30.0, MIN_TAB]);
         assert!(fit_tabs(&[], 10.0).is_empty());
+    }
+
+    /// Dragging a dock's edge keeps the new size in the layout (so it is saved with the
+    /// workspace), and the handle is the one named for screen readers.
+    #[test]
+    fn dragging_a_dock_edge_keeps_its_new_size() {
+        let (mut app, ctx) = app();
+        settle(&ctx, &mut app);
+        let Some(stage) = app.dock_view.stage else { panic!("stage drawn") };
+        let before = app.dock.right.size;
+        let from = egui::pos2(stage.right() + 1.0, stage.center().y);
+        drag(&ctx, &mut app, from, from - vec2(60.0, 0.0));
+        let Some(after) = app.dock.right.size else { panic!("the right dock's size is kept after a drag (was {before:?})") };
+        assert!(before.is_none_or(|b| after > b + 30.0), "the dock grew: {before:?} -> {after}");
     }
 
     #[test]
