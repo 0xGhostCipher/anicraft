@@ -289,9 +289,9 @@ This page is generated from the command registry, so it always matches the versi
 ## Control
 
 - **Next Frame** `timeline.next_frame` · **.**
-  Parameters: `{}`
+  Parameters: `{} (on the last frame it stays there)`
 - **Previous Frame** `timeline.prev_frame` · **,**
-  Parameters: `{}`
+  Parameters: `{} (on the first frame it stays there)`
 - **Go to First Frame** `timeline.first_frame` · **Home**
   Parameters: `{}`
 - **Go to Last Frame** `timeline.last_frame` · **End**
