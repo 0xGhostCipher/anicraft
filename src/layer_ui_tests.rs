@@ -323,3 +323,98 @@ fn several_layers_are_picked_with_ctrl_and_shift_and_dragged_together() {
     click(&ctx, &mut app, at);
     assert_eq!(picked(&app), ["Sun"], "a plain click is one layer again");
 }
+
+/// The sample with the accessibility tree on.
+fn opened_with_tree() -> (App, egui::Context) {
+    let (mut app, ctx) = opened();
+    ctx.enable_accesskit();
+    settle(&ctx, &mut app);
+    (app, ctx)
+}
+
+/// One more frame (with `events`, in a window `height` tall): every named node, or label with
+/// its text, and where it is, in points.
+fn nodes_after(ctx: &egui::Context, app: &mut App, height: f32, events: Vec<Event>) -> Vec<(String, Rect)> {
+    let input = egui::RawInput { screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(1600.0, height))), events, ..Default::default() };
+    let mut out = ctx.run_ui(input, |ui| app.frame(ui));
+    out.textures_delta.clear();
+    let ppp = ctx.pixels_per_point();
+    let nodes = out.platform_output.accesskit_update.map(|u| u.nodes).unwrap_or_default();
+    nodes.into_iter().filter_map(|(_, n)| Some((n.label().or(n.value())?.to_string(), n.bounds().map(|b| Rect::from_min_max(pos2(b.x0 as f32, b.y0 as f32) / ppp, pos2(b.x1 as f32, b.y1 as f32) / ppp))?))).collect()
+}
+
+fn named_nodes(ctx: &egui::Context, app: &mut App) -> Vec<(String, Rect)> {
+    nodes_after(ctx, app, 940.0, Vec::new())
+}
+
+/// #523: the "1–9 of 17 layers" count in the layer list's header never lies over the buttons
+/// there: the parenting toggle beside the heading and the eye, padlock and square that head
+/// their columns. In a column too narrow for it the heading carries it instead.
+#[test]
+fn the_layer_count_clears_the_header_buttons() {
+    let (mut app, ctx) = opened_with_tree();
+    for _ in 0..12 {
+        app.run("layer.new", serde_json::json!({}));
+    }
+    for width in [crate::prefs::LAYER_W_DEFAULT, *crate::prefs::LAYER_W_RANGE.start(), *crate::prefs::LAYER_W_RANGE.end()] {
+        app.prefs.timeline_layer_w = width;
+        settle(&ctx, &mut app);
+        let nodes = named_nodes(&ctx, &mut app);
+        let find = |name: &str| nodes.iter().find(|(l, _)| l == name).map(|(_, r)| *r).unwrap_or_else(|| panic!("no {name}"));
+        let (count, at) = nodes.iter().find(|(l, _)| l.ends_with("of 17 layers")).cloned().unwrap_or_else(|| panic!("more layers than rows, and no count at width {width}"));
+        for button in ["Parenting view", "Hide all layers", "Lock all layers", "Show all layers as outlines"] {
+            assert!(!at.intersects(find(button)), "{count:?} at {at:?} is over {button} at {:?} (layer column {width} wide)", find(button));
+        }
+    }
+}
+
+/// #513: the Movie Explorer's list uses the height its pane has. With the dock to itself and
+/// more rows than fit, the last row shown is at the bottom of the pane, not half-way down.
+#[test]
+fn the_movie_explorer_list_reaches_the_bottom_of_its_pane() {
+    use crate::dock::Panel;
+    let (mut app, ctx) = opened_with_tree();
+    for _ in 0..60 {
+        app.run("layer.new", serde_json::json!({}));
+    }
+    crate::movie_explorer::open(&mut app);
+    for p in [Panel::Properties, Panel::Align, Panel::Library, Panel::History, Panel::Swatches, Panel::Colour] {
+        app.dock.close(p);
+    }
+    app.dock_changed();
+    settle(&ctx, &mut app);
+    let pane = app.dock_view.drawn.iter().find(|d| d.first == Panel::MovieExplorer).map(|d| d.rect).expect("the Movie Explorer is docked");
+    assert!(pane.height() > 600.0, "the pane has the dock to itself: {pane:?}");
+    let rows: Vec<Rect> = named_nodes(&ctx, &mut app).into_iter().filter(|(l, r)| l.starts_with("Layer: ") && pane.contains(r.center())).map(|(_, r)| r).collect();
+    let row_h = rows.first().map_or(0.0, |r| r.height());
+    let last = rows.iter().map(|r| r.bottom()).fold(0.0, f32::max);
+    assert!(rows.len() < 60, "more rows than fit, so the list scrolls: {} shown", rows.len());
+    assert!(pane.bottom() - last < 2.0 * row_h, "the list ends at {last}, the pane at {} ({} rows of {row_h})", pane.bottom(), rows.len());
+}
+
+/// #246: a click on the fill square or the stroke square under the tools opens its colour
+/// picker (the stroke's square lies over a corner of the fill's, and each takes its own clicks).
+#[test]
+fn the_fill_and_stroke_squares_open_their_colour_pickers() {
+    for (square, corner, picker) in [("Fill colour", 1.0, "Fill colour picker"), ("Stroke colour", 0.0, "Colour picker")] {
+        let (mut app, ctx) = opened_with_tree();
+        // A window tall enough to show the squares under the last tool.
+        let tall = 1400.0;
+        let mut nodes = Vec::new();
+        for _ in 0..3 {
+            nodes = nodes_after(&ctx, &mut app, tall, Vec::new());
+        }
+        assert!(!nodes.iter().any(|(l, _)| l == picker), "no picker is open yet");
+        let r = nodes.iter().find(|(l, _)| l == square).map(|(_, r)| *r).unwrap_or_else(|| panic!("no {square} square"));
+        assert!(r.bottom() < tall, "the squares are on screen: {r:?}");
+        // The corner of the square that the other one does not cover.
+        let at = pos2(r.left() + 4.0 + (r.width() - 8.0) * corner, r.top() + 4.0 + (r.height() - 8.0) * corner);
+        nodes_after(&ctx, &mut app, tall, vec![Event::PointerMoved(at)]);
+        nodes_after(&ctx, &mut app, tall, vec![button(at, true)]);
+        nodes_after(&ctx, &mut app, tall, vec![button(at, false)]);
+        for _ in 0..3 {
+            nodes = nodes_after(&ctx, &mut app, tall, Vec::new());
+        }
+        assert!(nodes.iter().any(|(l, _)| l == picker), "a click on {square} opens its picker");
+    }
+}
