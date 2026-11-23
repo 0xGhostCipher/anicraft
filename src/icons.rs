@@ -74,6 +74,7 @@ pub enum Icon {
     EditMultiple,
     Layer,
     Parent,
+    ActiveLayer,
     InsertFrame,
     InsertKeyframe,
     InsertBlankKeyframe,
@@ -93,7 +94,7 @@ pub enum Icon {
 
 impl Icon {
     #[cfg(test)]
-    pub const ALL: [Icon; 75] = [
+    pub const ALL: [Icon; 76] = [
         Icon::PanelProperties,
         Icon::PanelSwatches,
         Icon::PanelLibrary,
@@ -113,6 +114,7 @@ impl Icon {
         Icon::Bind,
         Icon::Layer,
         Icon::Parent,
+        Icon::ActiveLayer,
         Icon::EditMultiple,
         Icon::Bone,
         Icon::Magnet,
@@ -262,6 +264,9 @@ impl Icon {
             // A layer's dot joined to the layers that follow it (AniCraft original, on Lucide's
             // grid): the timeline's parenting view (ADR 0113).
             Icon::Parent => ("anicraft-parent", false),
+            // One layer drawn whole over the others dashed (AniCraft original, on Lucide's grid):
+            // the timeline's View Only the Active Layer.
+            Icon::ActiveLayer => ("anicraft-active-layer", false),
             // Insert Frame / Keyframe / Blank Keyframe: the timeline's own marks (a frame cell, a
             // filled keyframe dot, a hollow blank-keyframe dot), each with a plus (AniCraft
             // originals, on Lucide's grid).
@@ -349,6 +354,7 @@ static FILES: &[(&str, &str)] = &[
     ("anicraft-bone", include_str!("../assets/icons/anicraft-bone.svg")),
     ("anicraft-bind", include_str!("../assets/icons/anicraft-bind.svg")),
     ("anicraft-parent", include_str!("../assets/icons/anicraft-parent.svg")),
+    ("anicraft-active-layer", include_str!("../assets/icons/anicraft-active-layer.svg")),
     ("anicraft-warp", include_str!("../assets/icons/anicraft-warp.svg")),
     ("anicraft-edit-multiple", include_str!("../assets/icons/anicraft-edit-multiple.svg")),
     ("folder", include_str!("../assets/icons/folder.svg")),
