@@ -1272,13 +1272,34 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
             }
             app.run("timeline.goto", json!({"frame": frame}));
         };
+        // The selection as it was before this press: whether a drag moves selected keyframes
+        // is decided by it, not by the cell the press itself selected.
+        let before_press = egui::Id::new("tl_before_press");
+        // A press puts the selection and the playhead on the cell at once, as in Animate (#561),
+        // rather than on release. Not on selected keyframes (a drag moves them), with Shift or
+        // Ctrl (decided on release), or on a span's end (a drag resizes it).
+        if cr.is_pointer_button_down_on()
+            && ui.input(|inp| inp.pointer.primary_pressed())
+            && app.tl_drag == TlDrag::None
+            && let Some(p) = ui.input(|inp| inp.pointer.press_origin())
+        {
+            ui.data_mut(|d| d.insert_temp(before_press, app.frame_sel));
+            let f = frame_at(p.x);
+            let m = ui.input(|inp| inp.modifiers);
+            let grab = app.frame_sel.is_some_and(|s| s.contains(&layers, i, f) && s.has_keys(&layers));
+            if !grab && !m.shift && !m.command && span_end_at(p.x).is_none() {
+                app.frame_sel = Some(whole_motion_span(layer, f).unwrap_or(FrameSel::cell(layer.id, f)));
+                select_here(app, f);
+            }
+        }
         // Press on selected frames that hold keyframes: drag them. Elsewhere: select a range.
         if cr.drag_started()
             && app.tl_drag == TlDrag::None
             && let Some(p) = ui.input(|inp| inp.pointer.press_origin())
         {
             let f = frame_at(p.x);
-            let grab = app.frame_sel.filter(|s| s.contains(&layers, i, f) && s.has_keys(&layers));
+            let was = ui.data(|d| d.get_temp::<Option<FrameSel>>(before_press)).unwrap_or(app.frame_sel);
+            let grab = was.filter(|s| s.contains(&layers, i, f) && s.has_keys(&layers));
             // A motion tween span is picked whole by a press, as in Animate, and drags away
             // whole (Ctrl starts a frame selection inside it instead).
             let span = whole_motion_span(layer, f).filter(|_| grab.is_none() && !ui.input(|inp| inp.modifiers.command));
@@ -1309,6 +1330,10 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                     let row = rows.get(r.min(rows.len().saturating_sub(1))).copied().unwrap_or(0);
                     if let Some(l) = layers.get(row) {
                         sel.head = (l.id, f);
+                    }
+                    // The playhead follows the selection's end as it is dragged (#561).
+                    if app.s.frame != f {
+                        app.run("timeline.goto", json!({"frame": f}));
                     }
                 }
                 (TlDrag::Move { grab, grab_row, .. }, Some(sel)) => {
@@ -2450,6 +2475,32 @@ mod tests {
         assert_eq!(app.frame_sel.map(|s| s.frames()), Some((7, 7)));
         app.run("edit.undo", json!({}));
         assert_eq!(starts(&app), vec![0, 3]);
+    }
+
+    /// #561: a press on a cell selects it and moves the playhead there at once, before the
+    /// button is let go; dragging on, the playhead follows the selection's end.
+    #[test]
+    fn a_press_selects_at_once_and_the_playhead_follows_a_drag() {
+        let ctx = egui::Context::default();
+        let mut app = App::with_context(&ctx, anicraft_engine::Session::default(), Some(std::path::PathBuf::from("unused.png")));
+        app.show_panel(crate::dock::Panel::Timeline);
+        let layer = app.s.layer;
+        app.run("timeline.insert_frame", json!({"layer": layer.0, "frame": 0, "count": 11}));
+        app.s.set_frame(0);
+        settle(&ctx, &mut app);
+        let Some((cells, x0, cell_w, scroll)) = ctx.data(|d| d.get_temp::<(egui::Rect, f32, f32, f32)>(egui::Id::new("tl_geometry"))) else { panic!("the timeline drew") };
+        let at = |f: u32| pos2(x0 + (f as f32 - scroll) * cell_w + cell_w * 0.5, cells.center().y);
+        frame(&ctx, &mut app, vec![Event::PointerMoved(at(3))], Modifiers::NONE);
+        frame(&ctx, &mut app, vec![button(at(3), true, Modifiers::NONE)], Modifiers::NONE);
+        assert_eq!((app.s.frame, app.frame_sel.map(|s| s.frames())), (3, Some((3, 3))), "on the press, not the release");
+        for f in [4, 5, 6] {
+            frame(&ctx, &mut app, vec![Event::PointerMoved(at(f))], Modifiers::NONE);
+        }
+        frame(&ctx, &mut app, Vec::new(), Modifiers::NONE);
+        assert_eq!((app.s.frame, app.frame_sel.map(|s| s.frames())), (6, Some((3, 6))), "the playhead follows the drag");
+        frame(&ctx, &mut app, vec![button(at(6), false, Modifiers::NONE)], Modifiers::NONE);
+        settle(&ctx, &mut app);
+        assert_eq!((app.s.frame, app.frame_sel.map(|s| s.frames())), (6, Some((3, 6))), "and stays when let go");
     }
 
     #[test]
