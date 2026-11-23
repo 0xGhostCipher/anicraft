@@ -9,6 +9,7 @@
 use crate::Fonts;
 use skrifa::MetadataProvider as _;
 use std::collections::HashMap;
+use std::sync::Arc;
 
 /// Families tried, in order, for characters a run's own face doesn't have: faces with wide
 /// coverage that come with Windows, macOS and common Linux desktops, then the system faces for
@@ -100,13 +101,19 @@ impl<'f> Coverage<'f> {
 
     pub(crate) fn has(&mut self, id: fontdb::ID, c: char) -> bool {
         let fonts = self.fonts;
-        *self.memo.entry((id, c)).or_insert_with(|| fonts.db.with_face_data(id, |data, index| crate::face_has(data, index, c)).unwrap_or(false))
+        *self.memo.entry((id, c)).or_insert_with(|| fonts.covers(id, c))
     }
 }
 
 impl Fonts {
-    /// The faces of [`FALLBACK_FAMILIES`] on this computer in a weight and slant, in order.
-    pub(crate) fn fallback_list(&self, bold: bool, italic: bool) -> Vec<fontdb::ID> {
+    /// The faces of [`FALLBACK_FAMILIES`] on this computer in a weight and slant, in order
+    /// (found once for each).
+    pub(crate) fn fallback_list(&self, bold: bool, italic: bool) -> Arc<[fontdb::ID]> {
+        if let Ok(known) = self.lists.lock()
+            && let Some(list) = known.get(&(bold, italic))
+        {
+            return list.clone();
+        }
         let mut out: Vec<fontdb::ID> = Vec::new();
         for name in FALLBACK_FAMILIES {
             let q = fontdb::Query {
@@ -120,6 +127,10 @@ impl Fonts {
             {
                 out.push(id);
             }
+        }
+        let out: Arc<[fontdb::ID]> = out.into();
+        if let Ok(mut known) = self.lists.lock() {
+            known.insert((bold, italic), out.clone());
         }
         out
     }
@@ -142,6 +153,24 @@ impl Fonts {
             known.insert(c, found);
         }
         found
+    }
+
+    /// Whether face `id` has a glyph for `c`: read from the font once and remembered, so text
+    /// that keeps needing a fallback (every keystroke lays the block out again) doesn't open
+    /// the fallback faces each time.
+    pub(crate) fn covers(&self, id: fontdb::ID, c: char) -> bool {
+        if let Ok(known) = self.covered.lock()
+            && let Some(has) = known.get(&(id, c))
+        {
+            return *has;
+        }
+        let has = self.db.with_face_data(id, |data, index| crate::face_has(data, index, c)).unwrap_or(false);
+        if let Ok(mut known) = self.covered.lock()
+            && known.len() < MAX_REMEMBERED * 16
+        {
+            known.insert((id, c), has);
+        }
+        has
     }
 
     /// A face's family name.

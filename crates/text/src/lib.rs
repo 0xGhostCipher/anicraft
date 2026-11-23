@@ -467,8 +467,15 @@ pub struct Fonts {
     db: fontdb::Database,
     families: Vec<String>,
     /// Which face, if any, has each character the fallback list didn't (`Fonts::any_face_with`).
-    wide: std::sync::Mutex<std::collections::HashMap<char, Option<fontdb::ID>>>,
+    wide: Remembered<char, Option<fontdb::ID>>,
+    /// The fallback families' faces by weight and slant (`Fonts::fallback_list`), found once.
+    lists: Remembered<(bool, bool), Arc<[fontdb::ID]>>,
+    /// Whether a face has a character, for the letters fallback asked about (`Fonts::covers`).
+    covered: Remembered<(fontdb::ID, char), bool>,
 }
+
+/// Answers about the fonts that are worked out once and kept (ADR 0130).
+type Remembered<K, V> = std::sync::Mutex<std::collections::HashMap<K, V>>;
 
 static FONTS: OnceLock<Fonts> = OnceLock::new();
 static EXTRA: OnceLock<Vec<Arc<[u8]>>> = OnceLock::new();
@@ -504,7 +511,7 @@ impl Fonts {
         let mut families: Vec<String> = db.faces().filter_map(|f| f.families.first().map(|(n, _)| n.clone())).filter(|n| !n.starts_with('.')).collect();
         families.sort_by_key(|f| f.to_lowercase());
         families.dedup();
-        Fonts { db, families, wide: std::sync::Mutex::default() }
+        Fonts { db, families, wide: Remembered::default(), lists: Remembered::default(), covered: Remembered::default() }
     }
 
     /// A library of just these faces (tests, and documents carrying their own fonts).

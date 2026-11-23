@@ -480,7 +480,7 @@ impl Fonts {
                     let had = drawn.iter().filter(|c| cover.has(own, **c)).count();
                     let mut chosen: Option<usize> = None;
                     if had < drawn.len() {
-                        let candidates = lists.entry((st.bold, st.italic)).or_insert_with(|| self.fallback_list(st.bold, st.italic).into_iter().filter(|id| *id != own).collect());
+                        let candidates = lists.entry((st.bold, st.italic)).or_insert_with(|| self.fallback_list(st.bold, st.italic).iter().copied().filter(|id| *id != own).collect());
                         let mut pick = pick_face(&drawn, had, candidates.len(), &mut |f, c| candidates.get(f).is_some_and(|id| cover.has(*id, c)));
                         let lacks = |id: Option<fontdb::ID>, cover: &mut Coverage| drawn.iter().copied().find(|c| !cover.has(id.unwrap_or(own), *c));
                         // No listed face has all of it: any installed face with the letter.
