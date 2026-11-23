@@ -534,7 +534,10 @@ Use the **Align** panel in the right-hand dock, or **Modify › Align**: **Left*
 (**Ctrl+Alt+1**), **Horizontal Center** (**Ctrl+Alt+2**), **Right** (**Ctrl+Alt+3**), **Top**
 (**Ctrl+Alt+4**), **Vertical Center** (**Ctrl+Alt+5**) and **Bottom** (**Ctrl+Alt+6**).
 **Distribute Horizontal Centers** and **Distribute Vertical Centers** space three or more
-things evenly. Tick **To stage** in the Align panel (or press **Ctrl+Alt+8**) to align to the
+things evenly by their centres; **Space Evenly Horizontally** and **Space Evenly Vertically**
+make the gaps between them equal instead, leaving the outer two where they are. **Match
+Width**, **Match Height** and **Match Width and Height** make every selected thing the size of
+the largest one (with **To stage**, the stage's size), each keeping its top-left corner. Tick **To stage** in the Align panel (or press **Ctrl+Alt+8**) to align to the
 stage instead of the selection. A single shape always aligns to the stage. Align works across
 layers.
 

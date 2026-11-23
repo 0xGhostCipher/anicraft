@@ -696,6 +696,16 @@ pub(crate) fn align_panel(app: &mut App, ui: &mut egui::Ui) {
         ui.spacing_mut().item_spacing.x = 2.0;
         button(app, ui, Icon::DistributeH, "align.distribute_h");
         button(app, ui, Icon::DistributeV, "align.distribute_v");
+        ui.add_space(10.0);
+        button(app, ui, Icon::SpaceH, "align.space_h");
+        button(app, ui, Icon::SpaceV, "align.space_v");
+    });
+    // Match Size (#566): to the largest selected object, or with To stage to the stage.
+    ui.horizontal_wrapped(|ui| {
+        ui.spacing_mut().item_spacing.x = 2.0;
+        button(app, ui, Icon::MatchWidth, "align.match_width");
+        button(app, ui, Icon::MatchHeight, "align.match_height");
+        button(app, ui, Icon::MatchSize, "align.match_size");
         ui.add_space(12.0);
         crate::theme::checkbox(ui, &mut app.align_to_stage, text(Type::Body, tr!("To stage"))).on_hover_text(tr!("Align to the stage instead of the selection's bounds (a single shape always aligns to the stage)"));
     });

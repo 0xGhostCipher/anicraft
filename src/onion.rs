@@ -483,7 +483,7 @@ pub fn enabled(app: &App, id: &str) -> Option<bool> {
     let sel = !app.onion_ui.sel.is_empty();
     match id {
         "edit.delete" | "edit.cut" | "edit.copy" => Some(sel),
-        "edit.duplicate" | "modify.convert_to_symbol" | "modify.break_apart" | "arrange.bring_to_front" | "arrange.send_to_back" | "align.distribute_h" | "align.distribute_v" => Some(false),
+        "edit.duplicate" | "modify.convert_to_symbol" | "modify.break_apart" | "arrange.bring_to_front" | "arrange.send_to_back" | "align.distribute_h" | "align.distribute_v" | "align.space_h" | "align.space_v" | "align.match_width" | "align.match_height" | "align.match_size" => Some(false),
         _ => None,
     }
 }

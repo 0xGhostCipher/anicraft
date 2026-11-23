@@ -65,7 +65,7 @@ the changelog.
 
 | Id | Goal | Parity area | Size | Needs | Lane |
 |---|---|---|---|---|---|
-| P-017 | Selecting as in the reference app: a marquee takes instances, groups and objects it touches ([#522](https://github.com/storytold/anicraft/issues/522)); Hide Edges ([#298](https://github.com/storytold/anicraft/issues/298)); a first-use hint that a fill and its outline are separate, with double-click selecting both ([#484](https://github.com/storytold/anicraft/issues/484), [#485](https://github.com/storytold/anicraft/issues/485), [#343](https://github.com/storytold/anicraft/issues/343)); Match Size and Space in Align | Tools, drawing model | S each | | stage |
+| P-017 | Selecting as in the reference app: a marquee takes instances, groups and objects it touches ([#522](https://github.com/storytold/anicraft/issues/522)); Hide Edges ([#298](https://github.com/storytold/anicraft/issues/298)); a first-use hint that a fill and its outline are separate, with double-click selecting both ([#484](https://github.com/storytold/anicraft/issues/484), [#485](https://github.com/storytold/anicraft/issues/485), [#343](https://github.com/storytold/anicraft/issues/343)) | Tools, drawing model | S each | | stage |
 | P-018 | Lasso, Polygon and Magic Wand tools ([#515](https://github.com/storytold/anicraft/issues/515)) | Tools | M | | stage |
 | P-019 | Text is typed in its block on the stage, in its real font and alignment ([#303](https://github.com/storytold/anicraft/issues/303)) | Text | L | P-008 | text |
 | P-020 | Modify › Shape: Smooth, Straighten, Advanced Smooth and Optimize ([#510](https://github.com/storytold/anicraft/issues/510)); Distort; oval angles and primitive shapes | Drawing model | M | | geom |
