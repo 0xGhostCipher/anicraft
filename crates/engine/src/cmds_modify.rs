@@ -571,7 +571,6 @@ fn distribute_to_layers(s: &mut Session, _: &Value) -> Result<Value> {
     let mut made: Vec<(LayerId, ElementId)> = Vec::new();
     let mut left_raw = 0;
     for source in s.selected_layers() {
-        let sel = s.selection.on(source);
         let Some(layer) = s.timeline().layer(source).cloned() else { continue };
         if layer.kind != LayerKind::Normal {
             return Err(EngineError::State(format!("'{}' is not an ordinary layer: Distribute to Layers moves artwork from ordinary layers only", layer.name)));
@@ -591,7 +590,7 @@ fn distribute_to_layers(s: &mut Session, _: &Value) -> Result<Value> {
         }
         // Bottom first, each new layer going in just above the last: the topmost object ends
         // up on the topmost new layer.
-        let moving: Vec<Arc<Element>> = kf.elements.iter().filter(|e| sel.contains(&e.id)).cloned().collect();
+        let moving: Vec<Arc<Element>> = kf.elements.iter().filter(|e| s.selection.contains(source, e.id)).cloned().collect();
         left_raw += moving.iter().filter(|e| crate::merge::mergeable(e).is_some()).count();
         let moving: Vec<Arc<Element>> = moving.into_iter().filter(|e| crate::merge::mergeable(e).is_none()).collect();
         if moving.is_empty() {
