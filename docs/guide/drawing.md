@@ -92,7 +92,8 @@ With the **Selection** tool (**V**) on merged drawing:
 * **Double-click** a line to select every line joined to it, or a fill to select the fill and
   its outline.
 * **Drag a marquee** to select the parts of fills and lines under it, cut at the marquee's
-  edges, plus any objects wholly inside it. **Shift** adds more. If you click away without
+  edges, plus any objects it touches (symbol instances, groups, drawing objects, text and
+  bitmaps are taken whole). **Shift** adds more. If you click away without
   changing anything, the drawing is whole again.
 * **Drag an unselected line** or the edge of a fill to **bend** it into a curve through the
   pointer. Its ends stay put, and a straight edge bends into one even arc wherever you grab it.

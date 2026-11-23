@@ -622,7 +622,7 @@ These commands have no menu item: the panels, the stage and the timeline use the
 - **Move Point** `raw.move_point` · changes the document
   Parameters: ``{x, y, to_x, to_y, with?: [[x, y], ..], points?: [[id, cmd], ..], snap?, slop?, merge?: bool} moves the corner or end at (x, y), with every raw shape that shares it, to (to_x, to_y), snapped within `snap` to points, lines and fill edges (while Snap to Objects is on); the anchors at `with` move by as much; returns the points to pass on while a drag goes on``
 - **Select Parts** `raw.select_rect` · changes the document
-  Parameters: `{x0, y0, x1, y1, add?: bool} the marquee, on every visible, unlocked layer: the parts of raw fills and strokes under the rectangle (cut at its edges, per layer) and the objects wholly inside it`
+  Parameters: `{x0, y0, x1, y1, add?: bool} the marquee, on every visible, unlocked layer: the parts of raw fills and strokes under the rectangle (cut at its edges, per layer) and the objects it touches`
 - **Merge Shapes** `raw.merge` · changes the document
   Parameters: `{ids?: [..]} the raw shapes (default: the selection) merge again with the raw shapes they touch, in place`
 - **Selection Tool Target** `raw.hit`
