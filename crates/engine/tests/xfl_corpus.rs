@@ -430,3 +430,23 @@ fn an_imports_save_suggestion_outlives_changes_to_its_package_on_disk() {
     assert_eq!(info["imported"], json!(xfl.display().to_string()));
     std::fs::remove_dir_all(&root).ok();
 }
+
+/// A package reached through ".." is named after the folder it resolves to, and a folder named
+/// "x.xfl" inside a package is a package of its own (ADR 0009).
+#[test]
+fn an_imports_package_is_the_folder_itself() {
+    let primitives = corpus().join("primitives");
+    let up = primitives.join("golden").join("..");
+    let real = std::fs::canonicalize(&primitives).unwrap();
+    let import = anicraft_engine::Import::of(&up);
+    assert_eq!((import.source.as_path(), import.save_as), (up.as_path(), real.with_file_name("primitives.anicraft")), "beside the folder, not inside it");
+    let root = Path::new(env!("CARGO_TARGET_TMPDIR")).join("xfl-corpus-nested-package");
+    let inner = root.join("outer").join("inner.xfl");
+    std::fs::create_dir_all(&inner).unwrap();
+    for dir in [root.join("outer"), inner.clone()] {
+        std::fs::copy(primitives.join("DOMDocument.xml"), dir.join("DOMDocument.xml")).unwrap();
+    }
+    assert_eq!(anicraft_engine::import_package(&inner), inner, "a folder is never the .xfl file of the one around it");
+    assert_eq!(anicraft_engine::Import::of(&inner).save_as, root.join("outer").join("inner.xfl.anicraft"));
+    std::fs::remove_dir_all(&root).ok();
+}

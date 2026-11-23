@@ -203,6 +203,12 @@ impl Import {
     /// The import of `source`, as the disk has it now.
     pub fn of(source: &std::path::Path) -> Import {
         let package = import_package(source);
+        // "." or "walk/sub/.." has no name of its own: resolve it, or the suggestion would land
+        // inside the package as "animation.anicraft".
+        let package = match package.file_name() {
+            Some(_) => package,
+            None => std::fs::canonicalize(&package).unwrap_or(package),
+        };
         // A folder's whole name ("walk.v2" stays "walk.v2"); a file's without its extension.
         let name = if crate::vfs::is_dir(&package) { package.file_name() } else { package.file_stem() };
         let name = name.map_or_else(|| "animation".to_string(), |n| n.to_string_lossy().into_owned());
@@ -214,7 +220,9 @@ impl Import {
 /// The Animate document `path` opens: the XFL folder for the `.xfl` file in one, else `path`
 /// itself (a `.fla`, an XFL folder, or any other file).
 pub fn import_package(path: &std::path::Path) -> PathBuf {
-    let xfl_file = path.extension().is_some_and(|e| e.eq_ignore_ascii_case("xfl"))
+    // A folder named "x.xfl" is a package of its own, not part of the one around it.
+    let xfl_file = crate::vfs::is_file(path)
+        && path.extension().is_some_and(|e| e.eq_ignore_ascii_case("xfl"))
         && path.parent().is_some_and(|d| crate::vfs::is_file(&d.join("DOMDocument.xml")));
     match path.parent() {
         Some(folder) if xfl_file => folder.to_path_buf(),
