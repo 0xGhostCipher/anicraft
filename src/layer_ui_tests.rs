@@ -268,3 +268,58 @@ fn brush_settings_come_back_with_the_next_start() {
     assert!(p.paint_brush_tool.is_some_and(|b| b.size <= 2000.0));
     assert!(crate::prefs::Prefs::from_json("{}").brush_tool.is_none());
 }
+
+/// A click with modifier keys held.
+fn click_with(ctx: &egui::Context, app: &mut App, at: Pos2, modifiers: Modifiers) {
+    let step = |app: &mut App, events: Vec<Event>| {
+        let mut all = vec![Event::ModifiersChanged(modifiers)];
+        all.extend(events);
+        let input = egui::RawInput { screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(1600.0, 940.0))), events: all, ..Default::default() };
+        ctx.run_ui(input, |ui| app.frame(ui)).textures_delta.clear();
+    };
+    step(app, vec![Event::PointerMoved(at)]);
+    step(app, vec![Event::PointerButton { pos: at, button: PointerButton::Primary, pressed: true, modifiers }]);
+    step(app, vec![Event::PointerButton { pos: at, button: PointerButton::Primary, pressed: false, modifiers }]);
+    settle(ctx, app);
+}
+
+/// The layers selected in the layer list, by name, top down.
+fn picked(app: &App) -> Vec<String> {
+    app.s.picked_layers().iter().filter_map(|id| app.s.timeline().layer(*id)).map(|l| l.name.clone()).collect()
+}
+
+/// #512: Ctrl-click and Shift-click on layer names select several layers, a drag that starts on
+/// one of them moves them all in one undo step, and a plain click is one layer again.
+#[test]
+fn several_layers_are_picked_with_ctrl_and_shift_and_dragged_together() {
+    let (mut app, ctx) = opened();
+    assert_eq!(names(&app), ["Ball", "Star", "Sun", "Hills", "Sky"]);
+    let at = on_name(&app, "Star", 0.5);
+    click(&ctx, &mut app, at);
+    let at = on_name(&app, "Hills", 0.5);
+    click_with(&ctx, &mut app, at, Modifiers::COMMAND);
+    assert_eq!(picked(&app), ["Star", "Hills"]);
+    assert_eq!(app.s.active_layer().map(|l| l.name.as_str()), Some("Star"), "the layer clicked first stays the active one");
+    // Dragged by Hills, the one that is not active: both land under Sky, Star first.
+    let undo_before = app.s.history_len();
+    let (from, to) = (on_name(&app, "Hills", 0.5), on_name(&app, "Sky", 0.8));
+    drag(&ctx, &mut app, from, to);
+    assert_eq!(names(&app), ["Ball", "Sun", "Sky", "Star", "Hills"]);
+    assert_eq!(app.s.history_len(), undo_before + 1, "one step");
+    assert_eq!(picked(&app), ["Star", "Hills"], "still selected where they landed");
+    // Ctrl-click again takes a layer out; Shift-click takes every layer from the active one.
+    let at = on_name(&app, "Hills", 0.5);
+    click_with(&ctx, &mut app, at, Modifiers::COMMAND);
+    assert_eq!(picked(&app), ["Star"]);
+    let at = on_name(&app, "Ball", 0.5);
+    click_with(&ctx, &mut app, at, Modifiers::SHIFT);
+    assert_eq!(picked(&app), ["Ball", "Sun", "Sky", "Star"]);
+    // A drag that starts on a layer outside the selection moves that layer alone.
+    let (from, to) = (on_name(&app, "Hills", 0.5), on_name(&app, "Ball", 0.2));
+    drag(&ctx, &mut app, from, to);
+    assert_eq!(names(&app), ["Hills", "Ball", "Sun", "Sky", "Star"]);
+    assert_eq!(picked(&app), ["Hills"]);
+    let at = on_name(&app, "Sun", 0.5);
+    click(&ctx, &mut app, at);
+    assert_eq!(picked(&app), ["Sun"], "a plain click is one layer again");
+}

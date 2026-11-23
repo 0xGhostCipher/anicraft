@@ -3679,7 +3679,17 @@ impl App {
             "edit.undo" => self.status_ok(tr!("Undid {action}", action = crate::i18n::t_dyn(v["undone"].as_str().unwrap_or("")))),
             "edit.redo" => self.status_ok(tr!("Redid {action}", action = crate::i18n::t_dyn(v["redone"].as_str().unwrap_or("")))),
             "edit.delete" => self.status_ok(trn!("Deleted {n} element — {undo} to undo", "Deleted {n} elements — {undo} to undo", selected, undo = self.undo_key())),
-            "layer.delete" => self.status_ok(tr!("Deleted layer — {undo} to undo", undo = self.undo_key())),
+            "layer.delete" => match v["deleted_layers"].as_array().map(Vec::len) {
+                Some(n) => self.status_ok(trn!("Deleted {n} layer — {undo} to undo", "Deleted {n} layers — {undo} to undo", n, undo = self.undo_key())),
+                None => self.status_ok(tr!("Deleted layer — {undo} to undo", undo = self.undo_key())),
+            },
+            "layer.new_folder" => {
+                if let Some(n) = v["wrapped"].as_u64() {
+                    self.status_ok(trn!("Put {n} layer in a new folder — {undo} to undo", "Put {n} layers in a new folder — {undo} to undo", n, undo = self.undo_key()));
+                }
+            }
+            // A new mask is locked, as Animate leaves it (#429): say how to get at its shape.
+            "layer.toggle_mask" if v["type"] == "mask" && v["locked"] == true => self.status_ok(tr!("Mask made and locked. Unlock the mask layer to see its edge and reshape it.")),
             "draw.erase_all" => {
                 let n = v["erased"].as_u64().unwrap_or(0);
                 self.status_ok(trn!("Erased everything at frame {frame} ({n} element). {undo} to undo.", "Erased everything at frame {frame} ({n} elements). {undo} to undo.", n, frame = self.s.frame + 1, undo = self.undo_key()));
@@ -4293,7 +4303,7 @@ impl App {
         // On the focused timeline the arrows move the playhead (Left, Right) and the active
         // layer (Up, Down) instead of nudging artwork (ADR 0064).
         let on_timeline = surface_focused && crate::a11y::focused_region(ctx) == Some(crate::a11y::Region::Timeline);
-        let (mut frame_step, mut layer_step) = (0i64, 0i64);
+        let (mut frame_step, mut layer_step, mut layer_extend) = (0i64, 0i64, 0i64);
         ctx.input_mut(|i| {
             for (m, k, id) in &self.shortcuts {
                 if i.consume_key(*m, *k) {
@@ -4320,6 +4330,9 @@ impl App {
                         Key::ArrowUp => layer_step -= 1,
                         _ => layer_step += 1,
                     }
+                } else if on_timeline && matches!(k, Key::ArrowUp | Key::ArrowDown) && i.consume_key(Modifiers::SHIFT, k) {
+                    // Shift+Up/Down: one more layer selected, or one fewer (#512).
+                    layer_extend += if k == Key::ArrowUp { -1 } else { 1 };
                 } else if i.key_pressed(k) && !i.modifiers.command {
                     nudge += d;
                 }
@@ -4380,6 +4393,17 @@ impl App {
                     // The keyboard goes with it, to the new active row.
                     self.tl_refocus = true;
                 }
+            }
+        }
+        if layer_extend != 0 {
+            // The selected layers run from the active one to their far end: that end moves.
+            let layers = &self.s.timeline().layers;
+            let picked = self.s.picked_layers();
+            let row = |id: &anicraft_engine::doc::LayerId| layers.iter().position(|l| l.id == *id);
+            if let (Some(at), Some(top), Some(bottom)) = (row(&self.s.layer), picked.first().and_then(row), picked.last().and_then(row)) {
+                let far = if at == top { bottom } else { top };
+                let to = (far as i64 + layer_extend).clamp(0, layers.len() as i64 - 1);
+                timeline::pick_layers(self, json!({"index": to, "add": "range"}));
             }
         }
         if play {
