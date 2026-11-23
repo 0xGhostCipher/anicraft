@@ -2,20 +2,21 @@
 
 ## Unreleased
 
-* **Reliability pass on the tests** (M8, roadmap P-056).
-  * **Fixed: a document put aside could keep pictures.** Showing another document (a new tab,
-    New, Open) empties the stage's picture cache, but pictures the render thread was still
-    drawing, or had queued, landed in it afterwards and stayed until something evicted them.
-    They are now dropped, and queued ones are never drawn. This was the flaky test
-    `a_document_that_is_not_shown_keeps_no_pictures`, and the only test that failed in
-    repeated runs of the whole suite (once in 8 runs before the fix, none in 11 after).
-  * **The test suite takes less than half the time**: 141 s of test time on 4 threads against
-    305 s. The command fuzz (`panic_hunt_every_command`) was 268 s in one test, four fifths of
-    the suite; it is now one test per starting document, 17 of them, that the runner spreads
-    over its threads. It does the same work.
-  * Tests that wait for another thread (a save, a freed port, a GPU start) give it a minute
-    instead of two seconds before failing; none of them asserts a time.
+* **Reliability pass on the tests** (M8). Twelve runs of the whole suite after the review's
+  fixes (the picture cache race and the split command fuzz) found no further flaky test. Tests
+  that wait for another thread (a save, a freed port, a GPU start) now give it a minute instead
+  of two seconds before failing on a busy machine; none of them asserts a time.
 
+* **Reliability fixes from the November principal-engineer review** (M8,
+  `docs/reviews/2026-11-principal-review.md`).
+  * **Save is flushed to the disk** before the new file replaces the old one, as the
+    crash-recovery copy already was: a power cut right after a save can no longer leave an
+    empty document.
+  * **History picks and Save As Command stay with their document.** Showing another tab used
+    to keep the picked steps (and an open Save As Command) and apply them to that document's
+    history.
+  * **A document put aside keeps no pictures**, also when one was still being drawn as you
+    switched.
 * **The roadmap is now a guideline, with a parity matrix** (M8, ADR 0125). Docs only.
   `docs/parity.md` compares AniCraft with the reference app feature by feature (done, partial,
   missing, won't do), checked against the code and the guide. `docs/roadmap.md` replaces the

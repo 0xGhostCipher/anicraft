@@ -70,7 +70,7 @@ fn undo_step_in_a_large_document_costs_only_what_changed() {
     let before = s.doc.clone();
     run(&mut s, "element.translate", json!({"dx": 1, "dy": 0}));
     let shared = before.timeline(0).layers.iter().zip(&s.doc.timeline(s.scene).layers).filter(|(a, b)| std::sync::Arc::ptr_eq(a, b)).count();
-    assert_eq!(shared, 19);
+    assert_eq!(shared, before.timeline(0).layers.len() - 1, "every layer but the edited one");
 }
 
 #[test]
@@ -579,28 +579,27 @@ fn save_load_round_trip() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// Adversarial params for every command: must return Ok or Err, never panic.
-///
-/// One test per starting session, so the test runner spreads them over its threads: each start
-/// is a pass over every command that leaves thousands of undo steps behind, and the 17 of them
-/// one after another were four fifths of the whole workspace's test time.
-mod panic_hunt_every_command {
-    macro_rules! from {
-        ($($start:ident),* $(,)?) => {
-            pub(super) const STARTS: &[&str] = &[$(stringify!($start)),*];
+/// One test per starting document, `panic_hunt_every_command::<start>`, so the test runner
+/// runs them side by side: as one test the sweep took 318 s of the 319 s the engine's tests
+/// take (docs/reviews/2026-11-principal-review.md). The names are the starting documents in
+/// the order [`panic_hunt`] lists them.
+macro_rules! panic_hunts {
+    ($($start:ident),*) => {
+        const HUNTS: &[&str] = &[$(stringify!($start)),*];
+        mod panic_hunt_every_command {
             $(
                 #[test]
                 fn $start() {
                     super::panic_hunt(stringify!($start));
                 }
             )*
-        };
-    }
-    from!(empty, sample, sounds, parented_arm, motion_path, raw_shapes, armature, shape_armature, mixed_armature, warped, two_layers_selected, inside_a_symbol, several_keyframes, library_folders, button, group_in_a_group, eases);
+        }
+    };
 }
+panic_hunts!(blank, demo, with_sound, arm, on_path, raw, rig, shaped, mixed, warped, layered, in_symbol, keyed, library, button, grouped, eased);
 
-/// [`panic_hunt_every_command`] from the start named `only`. Every start is built each time:
-/// the hostile parameters name what is in them (bones, pins, folders), whichever one is fuzzed.
+/// Adversarial params for every command, from the starting document called `only`: must return
+/// Ok or Err, never panic. Every start gets the whole hostile list, whichever is run.
 fn panic_hunt(only: &str) {
     let mut hostile: Vec<Value> = vec![
         Value::Null,
@@ -1030,83 +1029,43 @@ Exec=evil", "data_home": "relative/share", "refresh": false}),
         json!({"parent": u64::MAX, "layer": limbs.get(1), "keep": false, "sx": 0, "sy": 0}),
         json!({"parent": null, "layers": [u64::MAX, 0], "frame": 4_000_000_000u64}),
     ]);
-    let starts = [
-        ("empty", Session::default()),
-        ("sample", Session::new(sample::demo())),
-        ("sounds", Session::new(with_sound)),
-        ("parented_arm", arm),
-        ("motion_path", on_path),
-        ("raw_shapes", raw),
-        ("armature", rig),
-        ("shape_armature", shaped),
-        ("mixed_armature", mixed),
-        ("warped", warped),
-        ("two_layers_selected", layered),
-        ("inside_a_symbol", in_symbol),
-        ("several_keyframes", keyed),
-        ("library_folders", library),
-        ("button", button),
-        ("group_in_a_group", grouped),
-        ("eases", eased),
-    ];
-    // A start added here without a test of its own would never be fuzzed.
-    assert_eq!(starts.iter().map(|(name, _)| *name).collect::<Vec<_>>(), panic_hunt_every_command::STARTS);
-    for (name, start) in starts {
-        if name == only {
-            hunt_from(name, start, &hostile, skip);
-        }
-    }
-}
-
-/// One pass of [`panic_hunt_every_command`]: every command with every hostile parameter set,
-/// from `start`, then what the stage, the player and the mixer make of the document left over.
-fn hunt_from(name: &str, start: Session, hostile: &[Value], skip: impl Fn(&str) -> bool) {
-    /// Says where the hunt was when it panicked (the panic itself names only a line).
-    struct At<'a>(&'a str, std::cell::Cell<(&'static str, usize)>);
-    impl Drop for At<'_> {
-        fn drop(&mut self) {
-            if std::thread::panicking() {
-                let (command, param) = self.1.get();
-                eprintln!("panic hunt: start “{}”, command {command}, hostile parameter set {param}", self.0);
+    // A start added here needs its name in `panic_hunts!` (the array's length says so).
+    let starts: [Session; HUNTS.len()] = [Session::default(), Session::new(sample::demo()), Session::new(with_sound), arm, on_path, raw, rig, shaped, mixed, warped, layered, in_symbol, keyed, library, button, grouped, eased];
+    let which = HUNTS.iter().position(|n| *n == only).unwrap_or_else(|| panic!("no starting document is called {only}"));
+    for start in starts.into_iter().skip(which).take(1) {
+        let mut s = start;
+        for spec in commands().iter().filter(|c| !skip(c.id)) {
+            for p in &hostile {
+                let _ = s.execute(spec.id, p);
+            }
+            // and with a selection present
+            let _ = s.execute("edit.select_all", &json!({}));
+            for p in &hostile {
+                let _ = s.execute(spec.id, p);
             }
         }
-    }
-    let at = At(name, std::cell::Cell::new(("", 0)));
-    let mut s = start;
-    for spec in commands().iter().filter(|c| !skip(c.id)) {
-        for (i, p) in hostile.iter().enumerate() {
-            at.1.set((spec.id, i));
-            let _ = s.execute(spec.id, p);
+        // The document must still evaluate and render, and so must what the stage shows.
+        for f in [0, 1, 5, 47, 1000] {
+            let _ = anicraft_render::render_frame(&s.doc, f, 0.1);
         }
-        // and with a selection present
-        let _ = s.execute("edit.select_all", &json!({}));
-        for (i, p) in hostile.iter().enumerate() {
-            at.1.set((spec.id, i));
-            let _ = s.execute(spec.id, p);
-        }
+        s.hit_area = Some((anicraft_doc::Rgba::WHITE, 0.4));
+        let pic = s.stage_picture();
+        // ...and every button's hit area draws, under a pointer that goes over and presses.
+        let mut ns = anicraft_doc::player::NoScripts;
+        let st = anicraft_doc::player::start(&s.doc, &mut ns).state;
+        let p = anicraft_geom::Vec2::new(640.0, 400.0);
+        let st = anicraft_doc::player::input(&s.doc, &st, &[anicraft_doc::player::Event::Move(p), anicraft_doc::player::Event::Down(p), anicraft_doc::player::Event::Up(p)], &mut ns).state;
+        let _ = anicraft_render::render(&anicraft_doc::player::hit_overlay(&s.doc, &st, anicraft_doc::Rgba::WHITE, 0.4), &anicraft_render::View { transform: anicraft_geom::Affine::scale(0.1, 0.1), width: 128, height: 72, background: None });
+        let _ = anicraft_render::render_frame(&pic.doc, pic.frame, 0.1);
+        // ...and its sounds lay out and mix.
+        let voices = anicraft_doc::sound::voices(&s.doc, 8000);
+        let mut out = vec![0.0; 2 * 4096];
+        anicraft_doc::audio::mix(&voices, 8000, Default::default(), 0, &mut out);
+        // ...and its Library tree stays whole: nothing a load would have to repair.
+        let mut loaded = s.doc.clone();
+        loaded.sanitize();
+        assert_eq!(loaded.library_tree, s.doc.library_tree);
     }
-    at.1.set(("(the document left over)", 0));
-    // The document must still evaluate and render, and so must what the stage shows.
-    for f in [0, 1, 5, 47, 1000] {
-        let _ = anicraft_render::render_frame(&s.doc, f, 0.1);
-    }
-    s.hit_area = Some((anicraft_doc::Rgba::WHITE, 0.4));
-    let pic = s.stage_picture();
-    // ...and every button's hit area draws, under a pointer that goes over and presses.
-    let mut ns = anicraft_doc::player::NoScripts;
-    let st = anicraft_doc::player::start(&s.doc, &mut ns).state;
-    let p = anicraft_geom::Vec2::new(640.0, 400.0);
-    let st = anicraft_doc::player::input(&s.doc, &st, &[anicraft_doc::player::Event::Move(p), anicraft_doc::player::Event::Down(p), anicraft_doc::player::Event::Up(p)], &mut ns).state;
-    let _ = anicraft_render::render(&anicraft_doc::player::hit_overlay(&s.doc, &st, anicraft_doc::Rgba::WHITE, 0.4), &anicraft_render::View { transform: anicraft_geom::Affine::scale(0.1, 0.1), width: 128, height: 72, background: None });
-    let _ = anicraft_render::render_frame(&pic.doc, pic.frame, 0.1);
-    // ...and its sounds lay out and mix.
-    let voices = anicraft_doc::sound::voices(&s.doc, 8000);
-    let mut out = vec![0.0; 2 * 4096];
-    anicraft_doc::audio::mix(&voices, 8000, Default::default(), 0, &mut out);
-    // ...and its Library tree stays whole: nothing a load would have to repair.
-    let mut loaded = s.doc.clone();
-    loaded.sanitize();
-    assert_eq!(loaded.library_tree, s.doc.library_tree, "start “{name}”");
 }
 
 #[test]
