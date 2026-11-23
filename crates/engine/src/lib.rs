@@ -100,7 +100,7 @@ pub use anicraft_render as render;
 pub use anicraft_svg as svg;
 /// Whether a path is an Animate document (`.fla`, `.xfl`, or an XFL folder) that `file.open`
 /// imports.
-pub use cmds_file::{import_save_path, is_animate};
+pub use cmds_file::{Import, import_package, is_animate};
 pub use cmds_modify::{Item as SelectedItem, transform_origins};
 
 #[derive(Debug, thiserror::Error)]
@@ -411,7 +411,7 @@ pub struct Session {
     /// The Animate file (`.fla`, `.xfl` or XFL folder) this untitled document was imported from
     /// (ADR 0009). It names the document until it is saved, but is never written to: `path`
     /// stays `None`, so Save asks for a new `.anicraft` name.
-    pub imported: Option<PathBuf>,
+    pub imported: Option<cmds_file::Import>,
     pub style: ToolStyle,
     /// Whether the rulers, grid and guides show and snap (ADR 0076): the editor's, not the
     /// document's.
@@ -1330,8 +1330,8 @@ impl Session {
             "dirty": self.is_dirty(),
             // The Animate file an untitled document came from, and the name Save suggests for
             // it (ADR 0009).
-            "imported": self.imported.as_ref().map(|p| p.display().to_string()),
-            "save_as": self.imported.as_deref().map(|p| cmds_file::import_save_path(p).display().to_string()),
+            "imported": self.imported.as_ref().map(|i| i.source.display().to_string()),
+            "save_as": self.imported.as_ref().map(|i| i.save_as.display().to_string()),
             "history": {"undo": self.history.undo_len(), "redo": self.history.redo_len(), "bytes": self.history.bytes(), "evicted": self.history.evicted},
             "state": self.state,
         })

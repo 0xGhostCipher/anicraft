@@ -388,12 +388,13 @@ fn an_import_keeps_its_animate_name_and_save_suggests_one_beside_it() {
     for (opened, suggested) in [(folder.clone(), beside_folder.clone()), (folder.join("primitives.xfl"), beside_folder), (fla.clone(), dir.join("Walk Cycle.v2.anicraft"))] {
         let mut s = Session::default();
         let info = s.execute("file.open", &json!({"path": opened.display().to_string()})).unwrap_or_else(|e| panic!("{}: {e}", opened.display()));
-        assert_eq!(s.imported.as_deref(), Some(opened.as_path()), "the document is called by what was opened");
+        assert_eq!(s.imported.as_ref().map(|i| i.source.as_path()), Some(opened.as_path()), "the document is called by what was opened");
         assert!(s.path.is_none(), "{}: still untitled, so Save never writes over the Animate file", opened.display());
         assert!(s.execute("file.save", &json!({})).is_err(), "Save asks for a name");
         assert_eq!(info["imported"], json!(opened.display().to_string()));
         assert_eq!(info["save_as"], json!(suggested.display().to_string()), "{}", opened.display());
-        assert_eq!(anicraft_engine::import_save_path(&opened), suggested);
+        assert_eq!(anicraft_engine::Import::of(&opened).save_as, suggested);
+        assert_eq!(anicraft_engine::import_package(&opened), if opened == fla { fla.clone() } else { folder.clone() }, "the folder and its .xfl are one document");
         // A new document is no longer the import.
         let mut t = Session::default();
         t.execute("file.open", &json!({"path": opened.display().to_string()})).unwrap();
@@ -405,7 +406,27 @@ fn an_import_keeps_its_animate_name_and_save_suggests_one_beside_it() {
     s.execute("file.open", &json!({"path": fla.display().to_string()})).unwrap();
     let saved = dir.join("Walk Cycle.v2.anicraft");
     s.execute("file.save", &json!({"path": saved.display().to_string(), "confirm": true})).unwrap();
-    assert_eq!((s.path.as_deref(), s.imported.as_deref()), (Some(saved.as_path()), None));
+    assert_eq!((s.path.as_deref(), s.imported.as_ref()), (Some(saved.as_path()), None));
     assert!(s.info()["save_as"].is_null());
     assert!(fla.is_file(), "the Animate file is untouched");
+}
+
+/// An import's name and Save suggestion are settled when it opens (ADR 0009): an XFL package
+/// whose files change on disk afterwards still suggests saving beside its folder, not inside it.
+#[test]
+fn an_imports_save_suggestion_outlives_changes_to_its_package_on_disk() {
+    let root = Path::new(env!("CARGO_TARGET_TMPDIR")).join("xfl-corpus-import-settled");
+    let folder = root.join("Walk.v2");
+    std::fs::create_dir_all(&folder).unwrap();
+    for f in ["DOMDocument.xml", "primitives.xfl"] {
+        std::fs::copy(corpus().join("primitives").join(f), folder.join(f)).unwrap();
+    }
+    let xfl = folder.join("primitives.xfl");
+    let mut s = Session::default();
+    s.execute("file.open", &json!({"path": xfl.display().to_string()})).unwrap();
+    std::fs::remove_file(folder.join("DOMDocument.xml")).unwrap();
+    let info = s.info();
+    assert_eq!(info["save_as"], json!(root.join("Walk.v2.anicraft").display().to_string()), "still beside the folder");
+    assert_eq!(info["imported"], json!(xfl.display().to_string()));
+    std::fs::remove_dir_all(&root).ok();
 }

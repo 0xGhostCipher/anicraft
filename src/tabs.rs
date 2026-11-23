@@ -206,7 +206,7 @@ impl Tabs {
 /// A document's name on its tab: the file's, the Animate file's it was imported from (ADR 0009),
 /// or "Untitled" (numbered from the second on).
 fn name_of(untitled: u32, s: &Session) -> String {
-    match s.path.as_deref().or(s.imported.as_deref()).and_then(Path::file_name) {
+    match s.path.as_deref().or(s.imported.as_ref().map(|i| i.source.as_path())).and_then(Path::file_name) {
         Some(n) => n.to_string_lossy().into_owned(),
         None if untitled <= 1 => tr!("Untitled").to_string(),
         None => tr!("Untitled {n}", n = untitled),
@@ -223,7 +223,7 @@ fn session(app: &App, i: usize) -> Option<&Session> {
 pub fn info(app: &App, i: usize) -> Option<TabInfo> {
     let slot = app.tabs.slots.get(i)?;
     let s = session(app, i)?;
-    let imported = if s.path.is_none() { s.imported.clone() } else { None };
+    let imported = if s.path.is_none() { s.imported.as_ref().map(|i| i.source.clone()) } else { None };
     Some(TabInfo { id: slot.id, name: name_of(slot.untitled, s), dirty: s.is_dirty(), path: s.path.clone(), imported, active: i == app.tabs.active })
 }
 
@@ -420,8 +420,17 @@ fn already_open(app: &App, id: &str, params: &Value) -> Option<usize> {
         },
         _ => return None,
     };
-    // An unsaved import of the same Animate file counts too: its tab has that file's name.
-    (0..app.tabs.len()).find(|i| session(app, *i).and_then(|s| s.path.as_deref().or(s.imported.as_deref())).is_some_and(|p| same_file(p, &path)))
+    // An unsaved import of the same Animate document counts too, whether its XFL folder or the
+    // .xfl in it was opened. Not in a browser: an upload is known only by its name there, and
+    // two different files may share one.
+    let package = anicraft_engine::import_package(&path);
+    (0..app.tabs.len()).find(|i| {
+        session(app, *i).is_some_and(|s| match (&s.path, &s.imported) {
+            (Some(p), _) => same_file(p, &path),
+            (None, Some(import)) => !platform::WEB && same_file(&import.package, &package),
+            (None, None) => false,
+        })
+    })
 }
 
 /// The shown document is the one the app started with, untouched: what is opened takes its

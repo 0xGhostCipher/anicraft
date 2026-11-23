@@ -32,12 +32,14 @@ elements) and `LIBRARY/*.xml` (symbols), with shape geometry encoded as edge str
    was opened (`walk.fla`, `walk.xfl` or the XFL folder `walk`) on its tab and in the window
    title, marked as imported (a dim "Imported" after the tab's name, "(imported)" in the
    title, the source's path in the tab's tooltip), so artists see which file they are working
-   on. `Session::imported` holds that source; `path` stays `None`, so Save is still Save As.
-   It first suggests `walk.anicraft` beside the original, and beside an XFL folder rather than
-   inside it (`import_save_path`; `file.open` and the session's info report it as
-   `imported` and `save_as`). Saving clears the mark: the document is the `.anicraft` file
-   from then on. Opening the same Animate file again shows its tab instead of importing it a
-   second time. The same holds for XFL folders, `.fla` archives and older binary `.fla` files,
+   on. `Session::imported` (an `Import`) holds that source; `path` stays `None`, so Save is
+   still Save As. It first suggests `walk.anicraft` beside the original, and beside an XFL
+   folder rather than inside it (`file.open` and the session's info report it as `imported`
+   and `save_as`). The package and the suggestion are settled when the file is imported, so
+   later changes on disk don't move them. Saving clears the mark: the document is the
+   `.anicraft` file from then on. Opening the same Animate document again (the XFL folder or
+   the `.xfl` in it) shows its tab instead of importing it a second time; not in a browser,
+   where an upload is known only by its name. The same holds for XFL folders, `.fla` archives and older binary `.fla` files,
    since they all enter through `file.open`.
 5. **Report, don't guess.** Anything not yet mapped (bitmaps, text, sound, masks, motion
    tweens with property curves, shape tweens, filters, extra scenes) is counted and shown in

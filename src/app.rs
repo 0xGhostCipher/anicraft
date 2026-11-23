@@ -3999,7 +3999,7 @@ impl App {
     pub(crate) fn save_suggestion(&self) -> String {
         match (&self.s.path, &self.s.imported) {
             (Some(p), _) => p.display().to_string(),
-            (None, Some(from)) => anicraft_engine::import_save_path(from).display().to_string(),
+            (None, Some(import)) => import.save_as.display().to_string(),
             (None, None) => "animation.anicraft".to_string(),
         }
     }

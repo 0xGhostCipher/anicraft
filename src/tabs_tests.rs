@@ -105,15 +105,20 @@ fn an_import_is_named_after_its_animate_file_until_it_is_saved() {
     app.request("file.new", json!({}));
     assert_eq!(names(&app), ["primitives", "Untitled"]);
     assert_eq!(window_title(&app), "AniCraft — Untitled");
-    // Opening the same Animate file again shows its tab instead of importing it twice.
+    // Opening the same Animate file again shows its tab instead of importing it twice, and so
+    // does the .xfl in its folder: they are one document.
     app.request("file.open", json!({"path": folder.display().to_string()}));
     assert_eq!((app.tabs.len(), app.tabs.active()), (2, 0));
+    app.request("file.new", json!({}));
+    app.request("file.open", json!({"path": folder.join("primitives.xfl").display().to_string()}));
+    assert_eq!((app.tabs.len(), app.tabs.active()), (3, 0), "the .xfl shows the folder's tab");
+    assert_eq!(names(&app), ["primitives", "Untitled", "Untitled 2"]);
     // Saved, it is the .anicraft document, no longer marked.
     let dir = std::env::temp_dir().join(format!("anicraft-tabs-import-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let saved = dir.join("primitives.anicraft");
     app.run("file.save", json!({"path": saved.display().to_string(), "confirm": true}));
-    assert_eq!(names(&app), ["primitives.anicraft", "Untitled"]);
+    assert_eq!(names(&app), ["primitives.anicraft", "Untitled", "Untitled 2"]);
     assert!(infos(&app)[0].imported.is_none());
     assert_eq!(window_title(&app), "AniCraft — primitives.anicraft");
     assert_eq!(app.save_suggestion(), saved.display().to_string());

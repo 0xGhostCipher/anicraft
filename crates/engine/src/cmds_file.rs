@@ -183,18 +183,43 @@ fn new_sample(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({"frames": s.frame_count()}))
 }
 
-/// Where Save first suggests keeping a document imported from `source` (ADR 0009): an
-/// `.anicraft` file of the same name beside the Animate file, so `walk.fla` suggests
-/// `walk.anicraft` in its folder. An XFL document is a folder: whether the folder or the `.xfl`
-/// file in it was opened, the suggestion goes beside the folder, never inside it.
-pub fn import_save_path(source: &std::path::Path) -> PathBuf {
-    let xfl_file = source.extension().is_some_and(|e| e.eq_ignore_ascii_case("xfl"))
-        && source.parent().is_some_and(|d| crate::vfs::is_file(&d.join("DOMDocument.xml")));
-    let package = if xfl_file { source.parent().unwrap_or(source) } else { source };
-    // A folder's whole name ("walk.v2" stays "walk.v2"); a file's without its extension.
-    let name = if crate::vfs::is_dir(package) { package.file_name() } else { package.file_stem() };
-    let name = name.map_or_else(|| "animation".to_string(), |n| n.to_string_lossy().into_owned());
-    package.with_file_name(format!("{name}.anicraft"))
+/// Where an untitled document came from (ADR 0009), settled when it was imported, so a later
+/// change on disk (a package's files moved or removed) never changes what it is called or where
+/// Save suggests keeping it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Import {
+    /// What was opened: the `.fla`, the `.xfl` or the XFL folder. Its name names the document.
+    pub source: PathBuf,
+    /// The Animate document itself: the XFL folder, whether it or the `.xfl` in it was opened,
+    /// or the `.fla`. Two imports of the same package are the same document.
+    pub package: PathBuf,
+    /// Where Save first suggests keeping it: an `.anicraft` of the same name beside the
+    /// package, so `walk.fla` suggests `walk.anicraft` in its folder, and an XFL folder's goes
+    /// beside the folder, never inside it.
+    pub save_as: PathBuf,
+}
+
+impl Import {
+    /// The import of `source`, as the disk has it now.
+    pub fn of(source: &std::path::Path) -> Import {
+        let package = import_package(source);
+        // A folder's whole name ("walk.v2" stays "walk.v2"); a file's without its extension.
+        let name = if crate::vfs::is_dir(&package) { package.file_name() } else { package.file_stem() };
+        let name = name.map_or_else(|| "animation".to_string(), |n| n.to_string_lossy().into_owned());
+        let save_as = package.with_file_name(format!("{name}.anicraft"));
+        Import { source: source.to_path_buf(), package, save_as }
+    }
+}
+
+/// The Animate document `path` opens: the XFL folder for the `.xfl` file in one, else `path`
+/// itself (a `.fla`, an XFL folder, or any other file).
+pub fn import_package(path: &std::path::Path) -> PathBuf {
+    let xfl_file = path.extension().is_some_and(|e| e.eq_ignore_ascii_case("xfl"))
+        && path.parent().is_some_and(|d| crate::vfs::is_file(&d.join("DOMDocument.xml")));
+    match path.parent() {
+        Some(folder) if xfl_file => folder.to_path_buf(),
+        _ => path.to_path_buf(),
+    }
 }
 
 /// Whether `path` is an Animate document: a `.fla` archive, an `.xfl` file or an XFL folder.
@@ -230,7 +255,7 @@ pub(crate) fn open(s: &mut Session, p: &Value) -> Result<Value> {
         // as it was in Animate (ADR 0042).
         let merged = crate::merge::merge_document(&mut doc);
         s.replace_document(doc, None);
-        s.imported = Some(path.clone());
+        s.imported = Some(Import::of(&path));
         // Open Recent reopens the Animate file (ADR 0059).
         s.recent.add(&path);
         // `imported` and `save_as` come with the session's info.
