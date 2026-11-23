@@ -343,6 +343,15 @@ fn match_size_and_space_evenly() {
     let ids: Vec<u64> = s.visible_elements().iter().take(2).map(|e| e.id.0).collect();
     run(&mut s, "element.select", json!({"ids": ids}));
     assert!(s.execute("align.space_h", &json!({})).is_err());
+    // One long object over two short ones: no even spacing keeps their order, so nothing moves.
+    let mut s = Session::default();
+    for (x, w) in [(0, 200), (20, 20), (80, 20)] {
+        run(&mut s, "draw.rect", json!({"x": x, "y": 0, "w": w, "h": 10, "stroke": null, "object": true}));
+    }
+    run(&mut s, "edit.select_all", json!({}));
+    let before = boxes(&s);
+    assert!(s.execute("align.space_h", &json!({})).is_err());
+    assert_eq!(boxes(&s), before);
 }
 
 /// #301, #297: a raw rectangle (one fill and one stroke per side, ADR 0042) aligns, distributes,

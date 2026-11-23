@@ -253,15 +253,15 @@ This page is generated from the command registry, so it always matches the versi
 - **Distribute Vertical Centers** `align.distribute_v` · Modify › Align · changes the document
   Parameters: `{}`
 - **Match Width** `align.match_width` · Modify › Align · changes the document
-  Parameters: `{to_stage?} makes each selected object as wide as the widest (to_stage: as the stage), keeping its left edge where it is`
+  Parameters: `{to_stage?} sets each selected object's width to the widest one's (to_stage: the stage's width), keeping its height and its left edge; an object with no width (a vertical line) keeps none`
 - **Match Height** `align.match_height` · Modify › Align · changes the document
-  Parameters: `{to_stage?} makes each selected object as tall as the tallest (to_stage: as the stage), keeping its top edge where it is`
+  Parameters: `{to_stage?} sets each selected object's height to the tallest one's (to_stage: the stage's height), keeping its width and its top edge; an object with no height (a horizontal line) keeps none`
 - **Match Width and Height** `align.match_size` · Modify › Align · changes the document
-  Parameters: `{to_stage?} makes each selected object as wide as the widest and as tall as the tallest (to_stage: the stage's size), keeping its top-left corner where it is`
+  Parameters: `{to_stage?} sets each selected object's width to the widest one's and its height to the tallest one's, which may be two different objects (to_stage: the stage's width and height), keeping its top-left corner; a side an object has no extent along stays as it is`
 - **Space Evenly Horizontally** `align.space_h` · Modify › Align · changes the document
-  Parameters: `{} moves the selected objects (three or more) so the gaps between them across are equal; the leftmost and rightmost stay where they are`
+  Parameters: `{} moves the selected objects (three or more) so the gaps between them across are equal; the first and last (by their left edges) stay where they are. Refused when the objects overlap too much to keep their order`
 - **Space Evenly Vertically** `align.space_v` · Modify › Align · changes the document
-  Parameters: `{} moves the selected objects (three or more) so the gaps between them down are equal; the topmost and bottommost stay where they are`
+  Parameters: `{} moves the selected objects (three or more) so the gaps between them down are equal; the first and last (by their top edges) stay where they are. Refused when the objects overlap too much to keep their order`
 - **Bind to Data…** `data.bind` · Modify › Data · changes the document
   Parameters: `{property: x|y|scale_x|scale_y|rotation|alpha|frame (x, y pixels; scales and alpha percent; rotation degrees; frame: the 0-based frame of its symbol a graphic instance shows), table (id or name), column, element? (a symbol instance's id; default the selected one), start? (the span's first frame, 0-based; default the first frame the instance is on), frames? (the span's length; default one frame per row, or with a key column the frames the instance is on), from?, to? (the keys the first and last frame show; default the table's first and last; to before from plays it backwards), interpolation?: linear|step, scale?, offset? (value = column × scale + offset)} one binding per property of an instance; before the span it shows the first frame's value, after it the last's → {element, property, table, column, start, frames, value}`
 - **Remove Data Bindings** `data.unbind` · Modify › Data · changes the document
