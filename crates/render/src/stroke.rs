@@ -931,9 +931,9 @@ mod tests {
                 assert!(apart < 1.0 / 255.0, "{what}, {how}: {apart}");
                 // 3. Against the truth: each pixel sampled 16 × 16 times against the pieces.
                 //    (Checked for the plain styles; a sample grid is good to a sixteenth.)
-                let (pieces, _) = piece_loops(&lines, hw, &outline, profile.as_ref(), None, false);
-                let before = coverage(&pieces, FillRule::NonZero);
                 if how == "round" || how == "dashes whose round caps overlap" {
+                    let (pieces, _) = piece_loops(&lines, hw, &outline, profile.as_ref(), None, false);
+                    let before = coverage(&pieces, FillRule::NonZero);
                     for y in (0..300).step_by(7) {
                         for x in 0..400 {
                             let c = drawn[y * 400 + x];
