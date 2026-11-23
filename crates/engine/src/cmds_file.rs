@@ -33,7 +33,7 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "Import to Stage…",
             menu: "File/Import",
             shortcut: Some("Ctrl+R"),
-            params: "{path (.svg, .png, .jpg; or a .wav, .ogg or .mp3 sound: onto a new layer at the playhead), x?, y? (top-left on the stage; default: centred), cx?, cy? (centred on that point instead), layer? (new (default) | active: a one-layer drawing goes into the active layer's keyframe at the playhead)}",
+            params: "{path (.svg, .png, .jpg; or a .wav, .ogg or .mp3 sound: onto a new layer at the playhead), x?, y? (top-left on the stage; default: centred), cx?, cy? (centred on that point instead), layer? (new (default) | active: a one-layer drawing goes into the active layer's keyframe at the playhead), match_stage?: false (SVG only: set the stage to the SVG size rounded up to whole pixels, and place it at the origin unless coordinates are given)}",
             mutates: true,
             run: import_to_stage,
         },
@@ -284,10 +284,14 @@ pub(crate) const MAX_IMPORT_BYTES: u64 = 256 * 1024 * 1024;
 /// artwork they clip (ADR 0021). Centred on the stage unless `x`/`y` give its top-left corner.
 pub(crate) fn import_to_stage(s: &mut Session, p: &Value) -> Result<Value> {
     let path = PathBuf::from(str_req(p, "path")?);
+    let ext = path.extension().and_then(|e| e.to_str()).map(str::to_ascii_lowercase);
+    let match_stage = opt_bool(p, "match_stage")?.unwrap_or(false);
+    if match_stage && ext.as_deref() != Some("svg") {
+        return Err(EngineError::Param("match_stage is only available for SVG drawings".into()));
+    }
     if crate::cmds_sound::is_sound(&path) {
         return crate::cmds_sound::import_to_stage(s, &path);
     }
-    let ext = path.extension().and_then(|e| e.to_str()).map(str::to_ascii_lowercase);
     if !matches!(ext.as_deref(), Some("svg" | "png" | "jpg" | "jpeg")) {
         return Err(EngineError::Param("Import to Stage reads SVG drawings, PNG or JPEG images, and WAV, Ogg Vorbis or MP3 sounds".into()));
     }
@@ -305,15 +309,22 @@ pub(crate) fn import_to_stage(s: &mut Session, p: &Value) -> Result<Value> {
     if drawing.is_empty() {
         return Err(EngineError::State(format!("{} has no shapes AniCraft can import yet. {}", path.display(), drawing.report.summary())));
     }
-    let stage = s.doc.stage;
+    let mut stage = s.doc.stage;
+    let (default_x, default_y) = if match_stage {
+        stage.width = svg_stage_edge(drawing.width)?;
+        stage.height = svg_stage_edge(drawing.height)?;
+        (0.0, 0.0)
+    } else {
+        ((stage.width as f32 - drawing.width) * 0.5, (stage.height as f32 - drawing.height) * 0.5)
+    };
     // `cx`/`cy` centre it on a point (a drop, ADR 0059); `x`/`y` give its top-left corner.
     let x = match opt_f32(p, "cx")? {
         Some(cx) => cx - drawing.width * 0.5,
-        None => opt_f32(p, "x")?.unwrap_or((stage.width as f32 - drawing.width) * 0.5),
+        None => opt_f32(p, "x")?.unwrap_or(default_x),
     };
     let y = match opt_f32(p, "cy")? {
         Some(cy) => cy - drawing.height * 0.5,
-        None => opt_f32(p, "y")?.unwrap_or((stage.height as f32 - drawing.height) * 0.5),
+        None => opt_f32(p, "y")?.unwrap_or(default_y),
     };
     let onto_active = match opt_str(p, "layer")? {
         None | Some("new") => false,
@@ -420,6 +431,9 @@ pub(crate) fn import_to_stage(s: &mut Session, p: &Value) -> Result<Value> {
         s.layer = lid;
         (lid, ids, made, Some(fid.0))
     };
+    if match_stage {
+        s.doc.stage = stage;
+    }
     s.select_only(ids.iter().copied());
     Ok(json!({
         "layer": layer_id.0,
@@ -435,6 +449,16 @@ pub(crate) fn import_to_stage(s: &mut Session, p: &Value) -> Result<Value> {
         "skipped": report.skipped,
         "missing_fonts": report.missing_fonts,
     }))
+}
+
+/// A stage has whole-pixel edges. Round up so the imported drawing fits at its original scale.
+fn svg_stage_edge(pixels: f32) -> Result<u32> {
+    let edge = pixels.ceil();
+    if (1.0..=MAX_STAGE_EDGE as f32).contains(&edge) {
+        Ok(edge as u32)
+    } else {
+        Err(EngineError::Param(format!("the SVG size must fit a stage of up to {MAX_STAGE_EDGE} pixels per edge")))
+    }
 }
 
 /// An SVG drawing read from `path` (size-checked), with at least one shape.

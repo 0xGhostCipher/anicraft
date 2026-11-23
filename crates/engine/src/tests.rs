@@ -432,6 +432,35 @@ fn svg_round_trip_looks_the_same_and_imports_as_one_undo_step() {
 }
 
 #[test]
+fn svg_import_matches_stage_only_when_requested_and_undoes_together() {
+    let dir = std::env::temp_dir().join(format!("anicraft-svg-stage-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let svg = dir.join("badge.svg");
+    std::fs::write(&svg, r#"<svg width="40.5" height="20.25"><rect width="40.5" height="20.25"/></svg>"#).unwrap();
+    let mut s = Session::default();
+    run(&mut s, "file.new", json!({"width": 160, "height": 80, "fps": 30}));
+    let previous = s.doc.stage;
+    let name = svg.display().to_string();
+    run(&mut s, "file.import", json!({"path": name}));
+    assert_eq!(s.doc.stage, previous);
+    let centered = s.visible_elements()[0].transform.translation();
+    assert!(centered.x > 0.0 && centered.y > 0.0, "the default import still centres the file");
+    s.undo().unwrap();
+
+    let report = run(&mut s, "file.import", json!({"path": name, "match_stage": true}));
+    let stage = s.doc.stage;
+    assert_eq!(stage.width, report["width"].as_f64().unwrap().ceil() as u32);
+    assert_eq!(stage.height, report["height"].as_f64().unwrap().ceil() as u32);
+    assert_eq!(stage.fps, previous.fps);
+    let offset = s.visible_elements()[0].transform.translation();
+    assert!(offset.x.abs() < 1e-5 && offset.y.abs() < 1e-5, "the SVG starts at the new stage's origin: {offset:?}");
+    s.undo().unwrap();
+    assert_eq!(s.doc.stage, previous);
+    assert!(s.visible_elements().is_empty());
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
 fn animated_gif_export() {
     let dir = std::env::temp_dir().join(format!("anicraft-gif-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();

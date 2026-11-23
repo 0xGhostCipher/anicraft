@@ -23,7 +23,7 @@ This page is generated from the command registry, so it always matches the versi
 - **Export Frame as PNG…** `file.export_png` · File › Export
   Parameters: `{path, frame? (in the current scene), scale?}`
 - **Import to Stage…** `file.import` · File › Import · **Ctrl+R** (macOS **⌘R**) · changes the document
-  Parameters: `{path (.svg, .png, .jpg; or a .wav, .ogg or .mp3 sound: onto a new layer at the playhead), x?, y? (top-left on the stage; default: centred), cx?, cy? (centred on that point instead), layer? (new (default) | active: a one-layer drawing goes into the active layer's keyframe at the playhead)}`
+  Parameters: `{path (.svg, .png, .jpg; or a .wav, .ogg or .mp3 sound: onto a new layer at the playhead), x?, y? (top-left on the stage; default: centred), cx?, cy? (centred on that point instead), layer? (new (default) | active: a one-layer drawing goes into the active layer's keyframe at the playhead), match_stage?: false (SVG only: set the stage to the SVG size rounded up to whole pixels, and place it at the origin unless coordinates are given)}`
 - **Export Frame as SVG…** `file.export_svg` · File › Export
   Parameters: `{path, frame? (in the current scene), confirm?}`
 - **Export Video…** `file.export_video` · File › Export
