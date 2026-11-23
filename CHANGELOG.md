@@ -10,6 +10,11 @@
   brings AccessKit 0.27.2 with the fix (AccessKit/accesskit#835). Single-line text fields are now
   as tall as the buttons beside them, as egui 0.37 draws them.
 
+* **Reliability pass on the tests** (M8). Twelve runs of the whole suite after the review's
+  fixes (the picture cache race and the split command fuzz) found no further flaky test. Tests
+  that wait for another thread (a save, a freed port, a GPU start) now give it a minute instead
+  of two seconds before failing on a busy machine; none of them asserts a time.
+
 * **Reliability fixes from the November principal-engineer review** (M8,
   `docs/reviews/2026-11-principal-review.md`).
   * **Save is flushed to the disk** before the new file replaces the old one, as the
