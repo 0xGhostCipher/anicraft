@@ -496,7 +496,10 @@ drawing object into merged drawing.
 (a symbol instance, group, drawing object, text or bitmap) on a new layer of its own, just
 above the layer it was on and named after its symbol, for the same frames. Break Apart a
 symbol instance first (**Ctrl+B**), then Distribute to Layers, to spread its contents over
-layers. Raw shapes stay where they are, and a tweened keyframe is refused.
+layers. Each new layer keeps its layer's camera depth and the layer it follows. Raw shapes stay
+where they are. It is refused, with a message saying why, on a tweened keyframe or the end of a
+tween, for an instance that goes on from the keyframe before or after, and on a layer below full
+opacity.
 
 ### Envelope
 
