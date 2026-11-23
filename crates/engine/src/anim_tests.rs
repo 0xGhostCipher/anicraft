@@ -514,11 +514,11 @@ fn png_frames_export_transparent_when_asked() {
         run(&mut s, "file.export_png", json!({"path": path.display().to_string(), "scale": 0.5, "background": background}));
         let (corner, art) = alphas(&std::fs::read(&path).unwrap());
         assert_eq!(art, 255, "the artwork is opaque either way");
-        assert_eq!(corner == 255, background, "the empty stage: the stage colour, or clear");
+        assert_eq!(corner, if background { 255 } else { 0 }, "the empty stage: the stage colour, or clear");
         let seq = dir.join(format!("seq-{background}"));
         run(&mut s, "file.export_png_sequence", json!({"dir": seq.display().to_string(), "scale": 0.5, "background": background}));
         let (corner, _) = alphas(&std::fs::read(seq.join("frame_00001.png")).unwrap());
-        assert_eq!(corner == 255, background, "the sequence too");
+        assert_eq!(corner, if background { 255 } else { 0 }, "the sequence too");
     }
     // Left out, it is the stage colour, as before.
     let path = dir.join("frame-default.png");
