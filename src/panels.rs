@@ -557,9 +557,12 @@ pub(crate) fn live(app: &mut App, label: &str, id: &str, p: Value) {
 /// A live edit that moves, sizes or turns the selection (the Position, Size, Scale and Rotation
 /// fields): selected raw shapes then float where they land and merge with the drawing under
 /// them once deselected, as after a move on the stage (ADR 0122, #571).
+/// A refused edit (a scale of zero) moved nothing, so it leaves the selection as it was.
 fn live_move(app: &mut App, label: &str, id: &str, p: Value) {
-    live(app, label, id, p);
-    app.drop_raw();
+    app.s.begin_gesture(label);
+    if app.run(id, p).is_some() {
+        app.drop_raw();
+    }
 }
 
 /// A symbol's 9-slice guides (ADR 0055): Animate's "Enable guides for 9-slice scaling" and,
