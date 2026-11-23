@@ -299,6 +299,33 @@ fn align_and_distribute() {
     assert!((s.selection_bounds().max.x - s.doc.stage.width as f32).abs() < 1e-3);
 }
 
+/// #517: Distribute to Layers puts each selected object on a new layer of its own above its
+/// layer, named after its symbol, stacked as they were; raw shapes stay.
+#[test]
+fn distribute_to_layers_gives_each_object_its_own_layer() {
+    let mut s = Session::default();
+    let home = s.layer;
+    for (name, x) in [("Back", 10), ("Front", 200)] {
+        run(&mut s, "draw.rect", json!({"x": x, "y": 10, "w": 50, "h": 50, "stroke": null, "object": true}));
+        run(&mut s, "modify.convert_to_symbol", json!({"name": name}));
+        run(&mut s, "edit.deselect", json!({}));
+    }
+    run(&mut s, "draw.rect", json!({"x": 400, "y": 10, "w": 50, "h": 50, "stroke": null, "object": false}));
+    run(&mut s, "edit.select_all", json!({}));
+    let layers_before = s.timeline().layers.len();
+    let v = run(&mut s, "modify.distribute_to_layers", json!({}));
+    assert_eq!(v["left_raw"].as_u64(), Some(1), "{v}");
+    let tl = s.timeline();
+    assert_eq!(tl.layers.len(), layers_before + 2);
+    let names: Vec<&str> = tl.layers.iter().map(|l| l.name.as_str()).collect();
+    let (front, back, src) = (names.iter().position(|n| *n == "Front"), names.iter().position(|n| *n == "Back"), tl.layers.iter().position(|l| l.id == home));
+    assert!(front < back && back < src, "the front instance on the top layer, both above their old layer: {names:?}");
+    let left = tl.layer(home).and_then(|l| l.keyframe_at(0)).map(|k| k.elements.len());
+    assert_eq!(left, Some(1), "only the raw square stays");
+    run(&mut s, "edit.undo", json!({}));
+    assert_eq!(s.timeline().layers.len(), layers_before, "one undo step");
+}
+
 /// #301, #297: a raw rectangle (one fill and one stroke per side, ADR 0042) aligns, distributes,
 /// turns and scales as one shape, so its outline stays on its fill.
 #[test]

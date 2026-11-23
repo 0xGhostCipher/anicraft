@@ -492,6 +492,12 @@ shortcut editor. A merged drawing (a fill and the lines on its edges) counts as 
 **Break Apart** turns text into shapes, a symbol instance into the artwork inside it, and a
 drawing object into merged drawing.
 
+**Modify › Timeline › Distribute to Layers** (**Ctrl+Shift+D**) puts each selected object
+(a symbol instance, group, drawing object, text or bitmap) on a new layer of its own, just
+above the layer it was on and named after its symbol, for the same frames. Break Apart a
+symbol instance first (**Ctrl+B**), then Distribute to Layers, to spread its contents over
+layers. Raw shapes stay where they are, and a tweened keyframe is refused.
+
 ### Envelope
 
 **Modify › Transform › Envelope** bends the selected shapes and drawing objects. A mesh of

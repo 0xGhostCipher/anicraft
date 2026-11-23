@@ -47,6 +47,7 @@ pub fn specs() -> Vec<CommandSpec> {
             reset_transformation_point,
         ),
         c("modify.remove_transform", "Remove Transform", "Modify/Transform", Some("Ctrl+Shift+Z"), "{}", true, |s, p| s.each_layer(true, |s| remove_transform(s, p))),
+        c("modify.distribute_to_layers", "Distribute to Layers", "Modify/Timeline", Some("Ctrl+Shift+D"), "{} each selected object (symbol instance, group, drawing object, text, bitmap) on the keyframe at the playhead moves to a new layer of its own just above its layer, named after its symbol when it is an instance, for the same frames. Raw shapes stay where they are; a tweened keyframe is refused → {layers: [new layer ids], left_raw}", true, distribute_to_layers),
         c("align.left", "Left", "Modify/Align", Some("Ctrl+Alt+1"), "{to_stage?}", true, |s, p| align(s, p, Edge::Left)),
         c("align.hcenter", "Horizontal Center", "Modify/Align", Some("Ctrl+Alt+2"), "{to_stage?}", true, |s, p| align(s, p, Edge::HCenter)),
         c("align.right", "Right", "Modify/Align", Some("Ctrl+Alt+3"), "{to_stage?}", true, |s, p| align(s, p, Edge::Right)),
@@ -560,6 +561,76 @@ fn moves_for(units: &[Unit], target: Rect, edge: Edge) -> Vec<(Item, Vec2)> {
             items.iter().map(move |id| (*id, d))
         })
         .collect()
+}
+
+/// Distribute to Layers (#517): each selected object at the playhead to a new layer of its own,
+/// directly above the layer it was on (in the same folder or under the same mask), stacked as
+/// the objects were. The new layer holds it for the frames its keyframe covered.
+fn distribute_to_layers(s: &mut Session, _: &Value) -> Result<Value> {
+    let frame = s.frame;
+    let mut made: Vec<(LayerId, ElementId)> = Vec::new();
+    let mut left_raw = 0;
+    for source in s.selected_layers() {
+        let sel = s.selection.on(source);
+        let Some(layer) = s.timeline().layer(source).cloned() else { continue };
+        let Some(kf) = layer.keyframe_at(frame) else { continue };
+        if kf.tween.is_some() || kf.motion.is_some() {
+            return Err(EngineError::State(format!("'{}' is tweened at this frame: Distribute to Layers moves still artwork only", layer.name)));
+        }
+        let (start, duration) = (kf.start, kf.duration);
+        // Bottom first, each new layer going in just above the last: the topmost object ends
+        // up on the topmost new layer.
+        let moving: Vec<Arc<Element>> = kf.elements.iter().filter(|e| sel.contains(&e.id)).cloned().collect();
+        left_raw += moving.iter().filter(|e| crate::merge::mergeable(e).is_some()).count();
+        let moving: Vec<Arc<Element>> = moving.into_iter().filter(|e| crate::merge::mergeable(e).is_none()).collect();
+        if moving.is_empty() {
+            continue;
+        }
+        if s.timeline().layers.len() + moving.len() > 1000 {
+            return Err(EngineError::State("too many layers (limit 1000)".into()));
+        }
+        let ids: Vec<ElementId> = moving.iter().map(|e| e.id).collect();
+        s.with_layer(source, |s| -> Result<()> {
+            let kf = s.editable_keyframe()?;
+            kf.elements.retain(|e| !ids.contains(&e.id));
+            Ok(())
+        })?;
+        let mut above = source;
+        for el in moving {
+            let named = match &el.kind {
+                ElementKind::Symbol { symbol, .. } => s.doc.symbol(*symbol).map(|x| x.name.clone()),
+                _ => None,
+            };
+            let count = s.timeline().layers.len();
+            let id = LayerId(s.doc.alloc_id());
+            let mut new = Layer::new(id, named.unwrap_or_else(|| format!("Layer {}", count + 1)));
+            new.parent = layer.parent;
+            new.color = crate::cmds_timeline::layer_color(count + 1);
+            let mut keys = Vec::new();
+            if start > 0 {
+                keys.push(Arc::new(anicraft_doc::Keyframe::new(0, start)));
+            }
+            let mut k = anicraft_doc::Keyframe::new(start, duration);
+            k.elements.push(el.clone());
+            keys.push(Arc::new(k));
+            new.keyframes = keys;
+            let tl = crate::editing::edited_mut(&mut s.doc, s.scene, &s.editing)?;
+            let at = tl.layers.iter().position(|l| l.id == above).unwrap_or(0);
+            tl.layers.insert(at, Arc::new(new));
+            tl.repair_masks();
+            above = id;
+            made.push((id, el.id));
+        }
+    }
+    if made.is_empty() {
+        let why = if left_raw > 0 { "raw shapes stay on their layer: group them or make them drawing objects first" } else { "nothing is selected" };
+        return Err(EngineError::State(why.into()));
+    }
+    s.selection.clear();
+    for (l, e) in &made {
+        s.selection.extend_on(*l, [*e]);
+    }
+    Ok(json!({"layers": made.iter().map(|(l, _)| l.0).collect::<Vec<_>>(), "left_raw": left_raw}))
 }
 
 /// Moves each element by its own amount, on its own layer.
