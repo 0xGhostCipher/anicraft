@@ -554,6 +554,14 @@ pub(crate) fn live(app: &mut App, label: &str, id: &str, p: Value) {
     app.run(id, p);
 }
 
+/// A live edit that moves, sizes or turns the selection (the Position, Size, Scale and Rotation
+/// fields): selected raw shapes then float where they land and merge with the drawing under
+/// them once deselected, as after a move on the stage (ADR 0122, #571).
+fn live_move(app: &mut App, label: &str, id: &str, p: Value) {
+    live(app, label, id, p);
+    app.drop_raw();
+}
+
 /// A symbol's 9-slice guides (ADR 0055): Animate's "Enable guides for 9-slice scaling" and,
 /// when on, where the four guides are (in the symbol's space; also dragged on the stage while
 /// the symbol is open). `place` keeps two copies of the controls apart (Library, Properties).
@@ -1114,7 +1122,7 @@ fn selection_props(app: &mut App, ui: &mut egui::Ui, e: &anicraft_engine::doc::E
                 let a = ui.add(egui::DragValue::new(&mut bx).prefix("X ").speed(1.0).max_decimals(1)).named(tr!("Position X"));
                 let c = ui.add(egui::DragValue::new(&mut by).prefix("Y ").speed(1.0).max_decimals(1)).named(tr!("Position Y"));
                 if (a.changed() || c.changed()) && !b.is_empty() {
-                    live(app, tr_noop!("Move"), "element.translate", json!({"dx": bx - ox, "dy": by - oy}));
+                    live_move(app, tr_noop!("Move"), "element.translate", json!({"dx": bx - ox, "dy": by - oy}));
                 }
             });
         } else {
@@ -1122,7 +1130,7 @@ fn selection_props(app: &mut App, ui: &mut egui::Ui, e: &anicraft_engine::doc::E
                 let a = ui.add(egui::DragValue::new(&mut x).prefix("X ").speed(1.0).max_decimals(1)).named(tr!("Position X"));
                 let b = ui.add(egui::DragValue::new(&mut y).prefix("Y ").speed(1.0).max_decimals(1)).named(tr!("Position Y"));
                 if a.changed() || b.changed() {
-                    live(app, tr_noop!("Move"), "element.set_transform", json!({"x": x, "y": y}));
+                    live_move(app, tr_noop!("Move"), "element.set_transform", json!({"x": x, "y": y}));
                 }
             });
         }
@@ -1138,7 +1146,7 @@ fn selection_props(app: &mut App, ui: &mut egui::Ui, e: &anicraft_engine::doc::E
                 if (a.changed() || c.changed())
                     && let Some(m) = resize_affine([sb.min.x, sb.min.y, sb.max.x, sb.max.y], w, h)
                 {
-                    live(app, tr_noop!("Resize"), "modify.transform", json!({"a": m[0], "b": m[1], "c": m[2], "d": m[3], "e": m[4], "f": m[5]}));
+                    live_move(app, tr_noop!("Resize"), "modify.transform", json!({"a": m[0], "b": m[1], "c": m[2], "d": m[3], "e": m[4], "f": m[5]}));
                 }
             });
         }
@@ -1169,7 +1177,7 @@ fn selection_props(app: &mut App, ui: &mut egui::Ui, e: &anicraft_engine::doc::E
                 if locked {
                     (sx, sy) = linked_scale((sx0, sy0), (sx, sy), a.changed());
                 }
-                live(app, tr_noop!("Scale"), "element.set_transform", json!({"sx": sx / 100.0, "sy": sy / 100.0}));
+                live_move(app, tr_noop!("Scale"), "element.set_transform", json!({"sx": sx / 100.0, "sy": sy / 100.0}));
             }
             // Two fields and the lock fill the row: "mixed" as one faint mark (its hover says it
             // in words), so the values stay beside their label instead of wrapping under it.
@@ -1181,7 +1189,7 @@ fn selection_props(app: &mut App, ui: &mut egui::Ui, e: &anicraft_engine::doc::E
         });
         row(ui, tr!("Rotation"), |ui| {
             if ui.add(egui::DragValue::new(&mut rot).suffix("°").speed(0.5).range(-360.0..=360.0).max_decimals(1)).named(tr!("Rotation")).changed() {
-                live(app, tr_noop!("Rotate"), "element.set_transform", json!({"rotation": rot}));
+                live_move(app, tr_noop!("Rotate"), "element.set_transform", json!({"rotation": rot}));
             }
             mixed(ui, m.rotation);
         });
@@ -3824,6 +3832,28 @@ mod tests {
         let (sx, sy) = check(&app);
         assert!((sx - 3.0).abs() < 1e-4 && (sy - 1.0).abs() < 1e-4, "only X changed, got ({sx}, {sy})");
         app.s.undo().expect("undo");
+    }
+
+    /// #571: a raw shape moved onto another with the Position fields replaces it there once it
+    /// is deselected, as a move on the stage does: drawn on top, the same size, it leaves nothing
+    /// of the shape under it.
+    #[test]
+    fn a_raw_shape_moved_by_the_position_fields_merges_when_deselected() {
+        let ctx = egui::Context::default();
+        let mut app = App::with_context(&ctx, anicraft_engine::Session::default(), Some(std::path::PathBuf::from("unused.png")));
+        let fills = |app: &App, c: &str| {
+            let want = anicraft_engine::doc::Rgba::hex(u32::from_str_radix(c, 16).unwrap_or(0));
+            app.s.visible_elements().iter().filter(|e| matches!(&e.kind, ElementKind::Shape(sh) if sh.merge && sh.fill.as_ref().is_some_and(|f| f.primary_color() == want))).count()
+        };
+        app.run("draw.rect", json!({"x": 0, "y": 0, "w": 100, "h": 100, "fill": "#0000ff", "stroke": "#000000", "object": false}));
+        app.run("edit.deselect", json!({}));
+        app.run("draw.rect", json!({"x": 300, "y": 300, "w": 100, "h": 100, "fill": "#ff00ff", "stroke": "#000000", "object": false}));
+        assert_eq!((fills(&app, "0000ff"), fills(&app, "ff00ff")), (1, 1));
+        // The pink square, selected as drawn, moved onto the blue one through Position.
+        live_move(&mut app, tr_noop!("Move"), "element.translate", json!({"dx": -300, "dy": -300}));
+        app.s.end_gesture();
+        app.run("edit.deselect", json!({}));
+        assert_eq!((fills(&app, "0000ff"), fills(&app, "ff00ff")), (0, 1), "the pink square replaced the blue one");
     }
 
     use crate::app::App;
