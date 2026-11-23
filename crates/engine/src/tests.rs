@@ -344,7 +344,9 @@ fn a_raw_drawing_aligns_distributes_and_turns_as_one() {
     run(&mut s, "edit.select_all", json!({}));
     run(&mut s, "align.left", json!({}));
     assert!(same(&layout(&s), &shape));
-    assert!(s.selection_bounds().min.x.abs() < 1e-3, "{:?}", s.selection_bounds());
+    // Its outline goes to the stage's edge, with its stroke over it (#569).
+    let outline = s.selected_elements().iter().fold(Rect::EMPTY, |r, (l, e)| r.union(&s.element_outline_bounds_on(*l, e.id)));
+    assert!(outline.min.x.abs() < 1e-3 && s.selection_bounds().min.x < outline.min.x, "{outline:?} {:?}", s.selection_bounds());
 
     // The Properties panel's Rotation and Scale fields: about the drawing's centre, as Rotate 90°
     // does.
@@ -371,6 +373,25 @@ fn a_raw_drawing_aligns_distributes_and_turns_as_one() {
     let mut fresh = Session::default();
     raw_rect(&mut fresh);
     assert!(same(&layout(&s), &layout(&fresh)) && (s.selection_bounds().min - fresh.selection_bounds().min).length() < 0.01, "back where it was");
+}
+
+/// #569: align lines up where a shape's outline is, not the edge of its stroke, so a thick
+/// stroke hangs over the edge it is aligned to, and changing its width moves nothing.
+#[test]
+fn align_lines_up_outlines_not_stroke_edges() {
+    use anicraft_geom::Rect;
+    for object in [false, true] {
+        let mut s = Session::default();
+        run(&mut s, "draw.rect", json!({"x": 100, "y": 100, "w": 200, "h": 100, "fill": "#3366ff", "stroke": "#000000", "stroke_width": 16, "object": object}));
+        run(&mut s, "edit.select_all", json!({}));
+        let outline = |s: &Session| s.selected_elements().iter().fold(Rect::EMPTY, |r, (l, e)| r.union(&s.element_outline_bounds_on(*l, e.id)));
+        let covered = |s: &Session| s.selected_elements().iter().fold(Rect::EMPTY, |r, (l, e)| r.union(&s.element_bounds_on(*l, e.id)));
+        run(&mut s, "align.left", json!({"to_stage": true}));
+        run(&mut s, "align.top", json!({"to_stage": true}));
+        let (o, c) = (outline(&s), covered(&s));
+        assert!(o.min.x.abs() < 0.01 && o.min.y.abs() < 0.01, "the outline's corner is on the stage's (object: {object}): {o:?}");
+        assert!(c.min.x < o.min.x && c.min.y < o.min.y, "the stroke hangs over the edge (object: {object})");
+    }
 }
 
 #[test]
