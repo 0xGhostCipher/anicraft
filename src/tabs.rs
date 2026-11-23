@@ -179,6 +179,11 @@ impl Tabs {
         self.active
     }
 
+    /// The shown tab's id (it stays the tab's as tabs open, close and move).
+    pub fn active_id(&self) -> u64 {
+        self.slots.get(self.active).map_or(0, |s| s.id)
+    }
+
     fn index_of(&self, id: u64) -> Option<usize> {
         self.slots.iter().position(|s| s.id == id)
     }
@@ -317,6 +322,10 @@ fn settle(app: &mut App) {
     app.ease = None;
     app.layer_props = None;
     app.aids_dialogs = Default::default();
+    // The History panel's picks and Save As Command number this document's undo steps: in
+    // another document the same numbers are other steps.
+    crate::macros_ui::clear_picks(app);
+    app.macros.save = None;
 }
 
 /// The document in `app` is another one from here on: nothing drawn for the last one is kept
