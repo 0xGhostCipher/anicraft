@@ -1079,10 +1079,22 @@ fn field_items(t: &crate::TextBlock, f: &crate::TextField, live: Option<(Option<
                 if from > to || (from == to && !(a <= l.end && b > l.end)) {
                     continue;
                 }
-                let (x0, x1) = (l.x_at(from), if b > l.end { l.x_at(l.end) + t.size * 0.25 } else { l.x_at(to) });
+                // One stretch per direction the selection runs through (ADR 0130).
+                let mut spans = l.spans(from, to);
+                if b > l.end {
+                    // The line break is selected too: a little past where the line ends.
+                    let (x, tail) = (l.x_at(l.end), t.size * 0.25);
+                    match spans.last_mut() {
+                        Some(last) if !l.rtl && (last.1 - x).abs() < 1e-3 => last.1 = x + tail,
+                        _ if l.rtl => spans.push((x - tail, x)),
+                        _ => spans.push((x, x + tail)),
+                    }
+                }
                 let y = row as f32 * look.line_height;
-                let r = Path::rect(crate::FIELD_GUTTER + x0, crate::FIELD_GUTTER + y, (x1 - x0).max(0.0), look.line_height);
-                out.items.push(item(Arc::new(r), text_xf, Some(Paint::Solid(SELECTION)), None, Some(inner), None));
+                for (x0, x1) in spans {
+                    let r = Path::rect(crate::FIELD_GUTTER + x0, crate::FIELD_GUTTER + y, (x1 - x0).max(0.0), look.line_height);
+                    out.items.push(item(Arc::new(r), text_xf, Some(Paint::Solid(SELECTION)), None, Some(inner), None));
+                }
             }
         }
     }

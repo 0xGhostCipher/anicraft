@@ -1408,7 +1408,7 @@ dependencies = [
 [[package]]
 name = "craft-text"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-libs?rev=249a41bd9306a1b34330ac94e596a1a8b881378a#249a41bd9306a1b34330ac94e596a1a8b881378a"
+source = "git+https://github.com/storytold/craft-libs?rev=f0f4758c01581d79577b9bf5046c06f4e77b1f18#f0f4758c01581d79577b9bf5046c06f4e77b1f18"
 dependencies = [
  "unicode-bidi",
  "unicode-bidi-mirroring",

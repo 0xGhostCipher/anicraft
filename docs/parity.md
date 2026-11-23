@@ -192,8 +192,8 @@ not this table, says what matters most.
 | Justified text | **missing** | Drawn left-aligned (P-033). |
 | Superscript, subscript, first-line indent, margins | **missing** | P-033. |
 | Vertical text | **missing** | P-033. |
-| Mixed directions (Hebrew or Arabic with Latin and numbers) | **partial** | Shaped per paragraph in one direction; outside PR [#39](https://github.com/storytold/anicraft/issues/39) fixes it (P-008). |
-| Letters the font lacks drawn from a fallback face | **partial** | Outside PR [#40](https://github.com/storytold/anicraft/issues/40) (P-008). |
+| Mixed directions (Hebrew or Arabic with Latin and numbers) | **partial** | Static text, text on a path and fields follow the Unicode bidi algorithm, in every export; in a field the arrow keys move the caret the way they point ([ADR 0130](adr/0130-mixed-directions-and-fallback-faces.md); [text](guide/text.md)). Missing: a direction setting for a paragraph with alignment to its start, and right-to-left text a script sets in the HTML page (P-033). |
+| Letters the font lacks drawn from a fallback face | **done** | From a list of system faces, then any installed face; the command says which family lent them ([ADR 0130](adr/0130-mixed-directions-and-fallback-faces.md)). |
 | Anti-alias modes and device fonts | **partial** | Text is stored as outlines, so it draws the same everywhere; there is no choice of anti-aliasing or of device fonts. |
 | Break Apart text into letters, then shapes | **done** | One step to shapes. |
 | Filters on text | **done** | [ADR 0099](adr/0099-filter-colour-and-stepped-tracks-built-in-presets-and-filters-on-text.md). |

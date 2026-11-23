@@ -27,3 +27,4 @@ People who have contributed to AniCraft. The repository starts from one initial 
 * Agapenor (Agapenordev): XFL folder paths with backslashes, the frame limit on loaded documents, the report behind the evaluation allowance.
 * rcoenen: Animate's shape hints (`morphHintsList`), default text line spacing and default dash gap, from files Animate saved.
 * Hagai Baram (hrb9): the Hebrew fallback face, `iw` read as Hebrew, and right-to-left language detection (#486).
+* SoldierPePe: text that mixes directions and letters from a fallback face (#39, #40).

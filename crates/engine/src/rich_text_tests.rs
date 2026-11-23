@@ -227,3 +227,60 @@ fn every_export_draws_each_colour_and_svg_keeps_the_link() {
     let html = anicraft_render::html::to_html(&s.doc, &anicraft_render::html::HtmlOptions::default()).unwrap().html;
     assert!(html.contains("\"pp\":"), "field pieces");
 }
+
+/// ADR 0130: text that mixes directions through the commands, as static text, as a field and
+/// on a path, with this computer's fonts. The command says so when letters were borrowed from
+/// another font or show as boxes, and in a field the arrow keys walk the caret the way they
+/// point.
+#[test]
+fn mixed_directions_and_borrowed_letters_through_the_commands() {
+    use crate::cmds_text::borrowed_note;
+    assert_eq!(borrowed_note(&[], 0), None, "nothing to say about a font that has every letter");
+    let both = borrowed_note(&["One".to_string(), "Two".to_string()], 3).unwrap();
+    assert!(both.contains("One") && both.contains("Two") && both.contains('3'), "{both}");
+    if !fonts() {
+        return;
+    }
+    let fonts = anicraft_text::Fonts::get();
+    // a b _ alef bet gimel _ 1 2 _ and a private-use character few fonts have.
+    let text = "ab \u{05D0}\u{05D1}\u{05D2} 12 \u{10FFFD}";
+    let mut s = Session::default();
+    let out = run(&mut s, "text.create", json!({"text": text, "x": 20, "y": 20, "size": 40, "color": "#000000"}));
+    let id = ElementId(out["element"].as_u64().unwrap());
+    let block = text_of(&s, id);
+    let style = anicraft_text::Style { family: block.font.clone(), size: 40.0, ..anicraft_text::Style::default() };
+    let probe = fonts.layout_glyphs(text, &style).unwrap();
+    assert_eq!(out["note"].is_string(), probe.missing > 0 || !probe.fallbacks.is_empty(), "{out}");
+    assert_eq!(block.text, text, "the text is kept as it was typed");
+    assert_eq!(block.outline.cmds, probe.outline.cmds, "the block's outline is the layout's");
+    // A field of it: the player's caret places come with the layout's boxes.
+    run(&mut s, "text.field", json!({"type": "input", "width": 600, "height": 80}));
+    let field = text_of(&s, id);
+    let look = crate::player::field_look(&field, &field.text, None).unwrap();
+    let hebrew = fonts.layout("\u{05D0}\u{05D1}\u{05D2}", &style).unwrap().missing == 0;
+    if hebrew {
+        let line = &look.lines[0];
+        assert!(line.mixed() && !line.rtl, "a Hebrew word in a paragraph that starts with Latin letters");
+        // Right, pressed from the line's left end, visits every caret place once, each
+        // further right than the last.
+        let mut at = line.stops.iter().min_by(|a, b| a.1.total_cmp(&b.1)).unwrap().0;
+        let mut xs = vec![look.caret_at(at).x];
+        for _ in 0..line.stops.len() {
+            let next = look.step(at, true).unwrap();
+            if next == at {
+                break;
+            }
+            at = next;
+            xs.push(look.caret_at(at).x);
+        }
+        assert_eq!(xs.len(), line.stops.len(), "{xs:?}");
+        assert!(xs.windows(2).all(|w| w[0] <= w[1]), "{xs:?}");
+        // The Hebrew word's first letter is right of its last.
+        assert!(line.x_at(3) > line.x_at(5), "{:?}", line.stops);
+    }
+    // On a path it lays out too, and undo brings the lines back.
+    run(&mut s, "text.field", json!({"type": "static"}));
+    run(&mut s, "text.edit", json!({"text": "\u{05D0}\u{05D1} ab\n12 \u{05D2}", "width": 30}));
+    let wrapped = text_of(&s, id);
+    assert!(wrapped.box_height > block.box_height * 1.5 && wrapped.outline.cmds.iter().all(|c| !matches!(c, anicraft_geom::PathCmd::MoveTo(p) if !p.is_finite())));
+}
