@@ -594,30 +594,32 @@ pub fn nudge(app: &mut App, d: Vec2) {
 /// Boxes around the selection on every keyframe (and the artwork under the pointer), and the
 /// marquee being dragged.
 pub fn draw(app: &mut App, painter: &egui::Painter, to_screen: impl Fn(Vec2) -> Pos2, hover: Option<Pos2>, zoom: f32) {
-    let sel = live_selection(app);
-    let shown = items(app);
-    let box_of = |b: &GRect| Rect::from_min_max(to_screen(b.min), to_screen(b.max)).expand(1.0);
-    if let Some(h) = hover
-        && app.drag == Drag::None
-    {
-        let (first, last) = range(app);
-        if let Some(it) = app.s.multi_frame_pick(first, last, Vec2::new(h.x, h.y), 3.0 / zoom.max(1e-3))
-            && !sel.contains(&it)
-            && let Some((_, b)) = shown.iter().find(|(s, _)| *s == it)
+    if !app.s.aids.hide_edges {
+        let sel = live_selection(app);
+        let shown = items(app);
+        let box_of = |b: &GRect| Rect::from_min_max(to_screen(b.min), to_screen(b.max)).expand(1.0);
+        if let Some(h) = hover
+            && app.drag == Drag::None
         {
-            painter.rect_stroke(box_of(b), 0.0, Stroke::new(1.0, T.selection.gamma_multiply(0.55)), StrokeKind::Middle);
+            let (first, last) = range(app);
+            if let Some(it) = app.s.multi_frame_pick(first, last, Vec2::new(h.x, h.y), 3.0 / zoom.max(1e-3))
+                && !sel.contains(&it)
+                && let Some((_, b)) = shown.iter().find(|(s, _)| *s == it)
+            {
+                painter.rect_stroke(box_of(b), 0.0, Stroke::new(1.0, T.selection.gamma_multiply(0.55)), StrokeKind::Middle);
+            }
         }
-    }
-    for (it, b) in shown.iter().filter(|(it, _)| sel.contains(it)) {
-        if b.is_empty() {
-            continue;
+        for (it, b) in shown.iter().filter(|(it, _)| sel.contains(it)) {
+            if b.is_empty() {
+                continue;
+            }
+            let r = box_of(b);
+            // The playhead's keyframe in the selection colour; the others a step lighter, so it is
+            // clear which artwork is on this frame.
+            let here = app.s.timeline().layer(it.layer).and_then(|l| l.keyframe_at(app.s.frame)).is_some_and(|k| k.start == it.frame);
+            let c = if here { T.selection } else { T.selection.gamma_multiply(0.7) };
+            painter.rect_stroke(r, 0.0, Stroke::new(if here { 1.5 } else { 1.0 }, c), StrokeKind::Middle);
         }
-        let r = box_of(b);
-        // The playhead's keyframe in the selection colour; the others a step lighter, so it is
-        // clear which artwork is on this frame.
-        let here = app.s.timeline().layer(it.layer).and_then(|l| l.keyframe_at(app.s.frame)).is_some_and(|k| k.start == it.frame);
-        let c = if here { T.selection } else { T.selection.gamma_multiply(0.7) };
-        painter.rect_stroke(r, 0.0, Stroke::new(if here { 1.5 } else { 1.0 }, c), StrokeKind::Middle);
     }
     if let Drag::MultiMarquee { start, cur } = app.drag {
         let r = Rect::from_two_pos(to_screen(Vec2::new(start.x, start.y)), to_screen(Vec2::new(cur.x, cur.y)));

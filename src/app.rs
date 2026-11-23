@@ -1042,6 +1042,9 @@ impl App {
                 if matches!(id, "edit.copy" | "edit.cut" | "timeline.copy_frames" | "timeline.cut_frames" | "frames.copy" | "frames.cut") {
                     self.copied = true;
                 }
+                if id == "view.hide_edges" {
+                    self.status_ok(if self.s.aids.hide_edges { tr!("Selection edges hidden") } else { tr!("Selection edges shown") });
+                }
                 Some(v)
             }
             Err(e) => {
