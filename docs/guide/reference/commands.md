@@ -21,7 +21,7 @@ This page is generated from the command registry, so it always matches the versi
 - **Save as Template…** `file.save_as_template`
   Parameters: `{folder (the user templates folder), name, category? (default “My Templates”), confirm? (to replace a template of that name)} → {path, thumbnail}: the document as it is, kept as <folder>/<category>/<name>.anicraft with a picture of its first frame; the open document is unchanged`
 - **Export Frame as PNG…** `file.export_png` · File › Export
-  Parameters: `{path, frame? (in the current scene), scale?}`
+  Parameters: `{path, frame? (in the current scene), scale?, background? (default true: the stage colour; false: transparent)}`
 - **Import to Stage…** `file.import` · File › Import · **Ctrl+R** (macOS **⌘R**) · changes the document
   Parameters: `{path (.svg, .png, .jpg; or a .wav, .ogg or .mp3 sound: onto a new layer at the playhead), x?, y? (top-left on the stage; default: centred), cx?, cy? (centred on that point instead), layer? (new (default) | active: a one-layer drawing goes into the active layer's keyframe at the playhead)}`
 - **Export Frame as SVG…** `file.export_svg` · File › Export
@@ -31,7 +31,7 @@ This page is generated from the command registry, so it always matches the versi
 - **Export Sprite Sheet…** `file.export_sprite_sheet` · File › Export
   Parameters: `{path (.png; the frame map goes beside it as .json), from?, to? (movie frames), scale?, columns?, padding?, background?, confirm?}`
 - **Export PNG Sequence…** `file.export_png_sequence` · File › Export
-  Parameters: `{dir, from?, to? (movie frames: every scene in order), scale?}`
+  Parameters: `{dir, from?, to? (movie frames: every scene in order), scale?, background? (default true: the stage colour; false: transparent)}`
 - **Export SVG Sequence…** `file.export_svg_sequence` · File › Export
   Parameters: `{dir, from?, to? (movie frames: every scene in order), confirm?} → one frame_00001.svg per frame (vectors, gradients and masks kept)`
 - **Export Animated GIF…** `file.export_gif` · File › Export
@@ -322,7 +322,7 @@ These commands have no menu item: the panels, the stage and the timeline use the
 - **Close Envelope** `modify.envelope_close` · changes the document
   Parameters: `{} closes the open envelope: bent raw shapes merge with the drawing they now touch (as after a move). Nothing to close is no error → {closed}`
 - **Publish Settings** `publish.settings_set` · changes the document
-  Parameters: `{profile? (a whole profile, as publish.settings_get returns it), format? (html | gif | apng | webp | video | lottie | sprite_sheet | png_sequence | png | svg | audio), enabled?, output? (relative to the document's folder; {name} is the document's name), and that format's options: title, sound, fit (html); from, to, scale, loop (gif); from, to, scale, loop (true, false or how many times it plays; 0: forever), background (apng, webp); from, to, scale, audio (video); from, to, background (lottie); from, to, scale, columns, padding, background (sprite_sheet); from, to, scale (png_sequence); frame, scale (png); frame (svg); from, to, rate, bits (audio). from/to/frame are movie frames, null for the movie's ends}`
+  Parameters: `{profile? (a whole profile, as publish.settings_get returns it), format? (html | gif | apng | webp | video | lottie | sprite_sheet | png_sequence | png | svg | audio), enabled?, output? (relative to the document's folder; {name} is the document's name), and that format's options: title, sound, fit (html); from, to, scale, loop (gif); from, to, scale, loop (true, false or how many times it plays; 0: forever), background (apng, webp); from, to, scale, audio (video); from, to, background (lottie); from, to, scale, columns, padding, background (sprite_sheet); from, to, scale, background (png_sequence); frame, scale, background (png); frame (svg); from, to, rate, bits (audio). from/to/frame are movie frames, null for the movie's ends}`
 - **Open Recent** `file.open_recent`
   Parameters: `{index? (in file.recent_list order, from 0) | path?, confirm? (needed over unsaved changes)}: opens it as file.open does; a file that is no longer there stays on the list, marked missing`
 - **Recent Files** `file.recent_list`

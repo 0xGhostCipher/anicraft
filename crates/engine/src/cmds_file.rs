@@ -27,7 +27,7 @@ pub fn specs() -> Vec<CommandSpec> {
                 save(s, p)
             },
         },
-        CommandSpec { id: "file.export_png", label: "Export Frame as PNG…", menu: "File/Export", shortcut: None, params: "{path, frame? (in the current scene), scale?}", mutates: false, run: export_png },
+        CommandSpec { id: "file.export_png", label: "Export Frame as PNG…", menu: "File/Export", shortcut: None, params: "{path, frame? (in the current scene), scale?, background? (default true: the stage colour; false: transparent)}", mutates: false, run: export_png },
         CommandSpec {
             id: "file.import",
             label: "Import to Stage…",
@@ -61,7 +61,7 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "Export PNG Sequence…",
             menu: "File/Export",
             shortcut: None,
-            params: "{dir, from?, to? (movie frames: every scene in order), scale?}",
+            params: "{dir, from?, to? (movie frames: every scene in order), scale?, background? (default true: the stage colour; false: transparent)}",
             mutates: false,
             run: export_sequence,
         },
@@ -261,8 +261,18 @@ pub(crate) fn scale_param(p: &Value) -> Result<f32> {
 
 /// Renders movie frame `frame` (scenes in order) of `doc` to PNG bytes.
 pub fn render_png(doc: &Document, frame: u32, scale: f32) -> Result<Vec<u8>> {
+    render_png_on(doc, frame, scale, true)
+}
+
+/// [`render_png`] with the stage colour behind the frame, or (`background` false) nothing: a
+/// transparent PNG with real alpha (#536).
+pub fn render_png_on(doc: &Document, frame: u32, scale: f32, background: bool) -> Result<Vec<u8>> {
     let dl = anicraft_doc::evaluate(doc, frame);
-    let (pm, _) = render(&dl, &View::stage(doc, scale))?;
+    let mut view = View::stage(doc, scale);
+    if !background {
+        view.background = None;
+    }
+    let (pm, _) = render(&dl, &view)?;
     Ok(pm.encode_png()?)
 }
 
@@ -270,7 +280,8 @@ fn export_png(s: &mut Session, p: &Value) -> Result<Value> {
     let path = PathBuf::from(str_req(p, "path")?);
     let frame = opt_u32(p, "frame")?.unwrap_or(s.frame);
     // `frame` is within the current scene; the renderer takes movie frames.
-    let bytes = render_png(&s.doc, s.doc.scene_start(s.scene).saturating_add(frame), scale_param(p)?)?;
+    let background = opt_bool(p, "background")?.unwrap_or(true);
+    let bytes = render_png_on(&s.doc, s.doc.scene_start(s.scene).saturating_add(frame), scale_param(p)?, background)?;
     crate::vfs::write(&path, &bytes)?;
     Ok(json!({"written": path.display().to_string(), "bytes": bytes.len(), "frame": frame}))
 }
@@ -767,6 +778,7 @@ fn export_sequence(s: &mut Session, p: &Value) -> Result<Value> {
         return Err(EngineError::Param("'to' must not be before 'from'".into()));
     }
     let scale = scale_param(p)?;
+    let background = opt_bool(p, "background")?.unwrap_or(true);
     crate::vfs::create_dir_all(&dir)?;
     // Frames are independent: render and encode them in parallel (each render is itself
     // row-parallel; rayon balances both levels), a batch at a time so memory stays bounded.
@@ -777,7 +789,7 @@ fn export_sequence(s: &mut Session, p: &Value) -> Result<Value> {
     let mut files = 0usize;
     let frames: Vec<u32> = (from..=to).collect();
     for batch in frames.chunks(64) {
-        let pngs = batch.par_iter().map(|&f| render_png(doc, f, scale)).collect::<Result<Vec<_>>>()?;
+        let pngs = batch.par_iter().map(|&f| render_png_on(doc, f, scale, background)).collect::<Result<Vec<_>>>()?;
         for (f, png) in batch.iter().zip(pngs) {
             crate::vfs::write(&dir.join(format!("frame_{:05}.png", f + 1)), png)?;
             files += 1;
