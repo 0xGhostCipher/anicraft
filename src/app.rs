@@ -188,7 +188,10 @@ pub struct TextEditing {
 
 /// Stage camera.
 pub struct StageView {
+    /// Egui points per stage pixel. Zoom controls display device pixels instead.
     pub zoom: f32,
+    /// The effective display scale at which this document’s zoom and pan were measured.
+    pub pixels_per_point: Option<f32>,
     pub pan: egui::Vec2,
     pub fit: bool,
     /// The canvas size and zoom of the last fit: while the view is still as fitted, it fits
@@ -197,6 +200,24 @@ pub struct StageView {
     /// View › Clip Content Outside the Stage (#251): hide artwork on the pasteboard (it is still
     /// there, and still exported only where it is on the stage). Off: it shows, as in Animate.
     pub clip_to_stage: bool,
+}
+
+impl StageView {
+    pub fn clamp_zoom(zoom: f32, pixels_per_point: f32) -> f32 {
+        (zoom * pixels_per_point).clamp(0.05, 64.0) / pixels_per_point
+    }
+
+    fn sync_display_scale(&mut self, pixels_per_point: f32) {
+        let Some(previous) = self.pixels_per_point.replace(pixels_per_point).filter(|&previous| previous != pixels_per_point) else { return };
+        if self.fit || self.fitted.is_some_and(|(_, zoom)| zoom == self.zoom && self.pan == egui::Vec2::ZERO) {
+            self.fit = true;
+        } else {
+            let ratio = previous / pixels_per_point;
+            self.zoom *= ratio;
+            self.pan *= ratio;
+            self.fitted = None;
+        }
+    }
 }
 
 /// In-progress pointer gesture on the stage.
@@ -790,7 +811,7 @@ impl App {
             remote: None,
             s: session,
             tool: Tool::Select,
-            view: StageView { zoom: 1.0, pan: egui::Vec2::ZERO, fit: true, fitted: None, clip_to_stage: false },
+            view: StageView { zoom: 1.0, pixels_per_point: None, pan: egui::Vec2::ZERO, fit: true, fitted: None, clip_to_stage: false },
             stage_cache: stage::Cache::default(),
             drag: Drag::None,
             hint_menu: None,
@@ -4042,14 +4063,25 @@ impl App {
         size * 0.5 - self.view.pan / self.view.zoom.max(1e-3)
     }
 
-    pub fn zoom_about(&mut self, canvas: egui::Rect, screen: egui::Pos2, new_zoom: f32) {
-        let new_zoom = new_zoom.clamp(0.05, 64.0);
+    pub fn zoom_by(&mut self, canvas: egui::Rect, screen: egui::Pos2, factor: f32, pixels_per_point: f32) {
+        let zoom = self.view.zoom * factor;
+        // A fitted view can sit below the manual limit. Zooming out must never enlarge it.
+        if factor < 1.0 && StageView::clamp_zoom(zoom, pixels_per_point) > self.view.zoom {
+            return;
+        }
+        self.zoom_about(canvas, screen, zoom, pixels_per_point);
+    }
+
+    pub fn zoom_about(&mut self, canvas: egui::Rect, screen: egui::Pos2, new_zoom: f32, pixels_per_point: f32) {
+        let new_zoom = StageView::clamp_zoom(new_zoom, pixels_per_point);
         let size = egui::vec2(self.s.doc.stage.width as f32, self.s.doc.stage.height as f32);
         let origin = canvas.center() + self.view.pan - size * self.view.zoom * 0.5;
         let stage_pt = (screen - origin) / self.view.zoom;
         let new_origin = screen - stage_pt * new_zoom;
         self.view.pan = new_origin - canvas.center() + size * new_zoom * 0.5;
         self.view.zoom = new_zoom;
+        self.view.fit = false;
+        self.view.fitted = None;
     }
 
     pub fn toggle_play(&mut self) {
@@ -4789,6 +4821,7 @@ impl App {
             platform::set_mac_glyphs(ok);
             self.glyph_check = false;
         }
+        self.view.sync_display_scale(ctx.pixels_per_point());
         self.press_scripted_key(&ctx);
         // The colour pickers show the document's swatches (ADR 0078).
         crate::swatches_panel::publish_to_pickers(&ctx, self);
@@ -4841,6 +4874,8 @@ impl App {
         let bar = |fill| egui::Frame::NONE.fill(fill).inner_margin(egui::Margin::symmetric(8, 2));
         // The open documents' tabs, above the edit bar of the one shown (ADR 0112).
         egui::Panel::top("document_tabs").exact_size(crate::tabs::BAR_HEIGHT).frame(egui::Frame::NONE.fill(T.chrome)).show(ui, |ui| crate::tabs::bar(self, ui));
+        // A tab opened here may last have been shown on a display with a different scale.
+        self.view.sync_display_scale(ui.ctx().pixels_per_point());
         egui::Panel::top("edit_bar").exact_size(theme::TARGET + 8.0).frame(bar(T.panel)).show(ui, |ui| panels::edit_bar(self, ui));
         egui::Panel::bottom("status_bar").exact_size(28.0).frame(bar(T.chrome)).show(ui, |ui| panels::status_bar(self, ui));
         crate::dock_ui::workspace(self, ui);

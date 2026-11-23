@@ -654,19 +654,18 @@ pub(crate) fn menu_contents(app: &mut App, ui: &mut egui::Ui, top: &str, cmds: &
         "View" => {
             let canvas = app.stage_cache.canvas;
             let center = canvas.center();
+            let ppp = ui.ctx().pixels_per_point();
             if ui_item(ui, tr!("Zoom In"), "Ctrl+=", None) {
-                let z = app.view.zoom * 1.5;
-                app.zoom_about(canvas, center, z);
+                app.zoom_by(canvas, center, 1.5, ppp);
             }
             if ui_item(ui, tr!("Zoom Out"), "Ctrl+-", None) {
-                let z = app.view.zoom / 1.5;
-                app.zoom_about(canvas, center, z);
+                app.zoom_by(canvas, center, 1.0 / 1.5, ppp);
             }
             if ui_item(ui, tr!("Fit in Window"), "Ctrl+0", None) {
                 app.view.fit = true;
             }
             if ui_item(ui, "100%", "Ctrl+1", None) {
-                app.zoom_about(canvas, center, 1.0);
+                app.zoom_about(canvas, center, 1.0 / ppp, ppp);
             }
             ui.separator();
             if ui_item(ui, tr!("Onion Skin"), app.keymap.primary("view.onion").unwrap_or(""), Some(app.onion.ghosts)) {
