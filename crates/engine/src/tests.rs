@@ -392,6 +392,15 @@ fn align_lines_up_outlines_not_stroke_edges() {
         assert!(o.min.x.abs() < 0.01 && o.min.y.abs() < 0.01, "the outline's corner is on the stage's (object: {object}): {o:?}");
         assert!(c.min.x < o.min.x && c.min.y < o.min.y, "the stroke hangs over the edge (object: {object})");
     }
+    // A turned outline is measured by its own points, not by its unturned box turned with it.
+    let mut s = Session::default();
+    run(&mut s, "draw.ellipse", json!({"x": 100, "y": 100, "w": 200, "h": 40, "stroke": null, "object": true}));
+    run(&mut s, "edit.select_all", json!({}));
+    run(&mut s, "element.set_transform", json!({"rotation": 45}));
+    let (l, e) = s.selected_elements()[0].clone();
+    let outline = s.element_outline_bounds_on(l, e.id);
+    let boxed = s.display_list().items.iter().filter(|i| i.element == e.id).fold(Rect::EMPTY, |r, i| r.union(&i.path.bounds().transformed(&i.transform)));
+    assert!(outline.width() < boxed.width() - 1.0, "{outline:?} inside {boxed:?}");
 }
 
 #[test]

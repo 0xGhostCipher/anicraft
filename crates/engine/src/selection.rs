@@ -242,7 +242,9 @@ impl Session {
     pub fn element_outline_bounds_on(&self, layer: LayerId, id: ElementId) -> Rect {
         let mut r = Rect::EMPTY;
         for item in self.display_list().items.iter().filter(|i| i.element == id && i.layer == layer) {
-            r = r.union(&item.path.bounds().transformed(&item.transform));
+            // The points carried into stage space, then boxed: a turned or skewed outline's box
+            // is no bigger than the outline.
+            r = r.union(&item.path.transformed(&item.transform).bounds());
         }
         r
     }
