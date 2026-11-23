@@ -1901,131 +1901,146 @@ fn filter_rows(app: &mut App, ui: &mut egui::Ui, current: &[anicraft_engine::doc
         let on = entry.enabled;
         ui.push_id(("filter", i), |ui| {
             tops.push(ui.cursor().top());
-            let header = ui.horizontal(|ui| {
-                let grip = filter_grip(ui, fname, i, n, &mut act);
-                let tip = if on { tr!("Turn {filter} off (it keeps its settings)", filter = fname) } else { tr!("Turn {filter} on", filter = fname) };
-                if crate::timeline::icon_button(ui, &tip, Some(on), if on { Icon::Eye } else { Icon::EyeOff }).clicked() {
-                    act = Some(FilterAct::Enable(Some(i), !on));
+            // Each filter is a card (#533) that folds to its header (#534); folding is view state.
+            let open_id = egui::Id::new("anicraft.filters.open").with(i);
+            let mut open = ui.data(|d| d.get_temp::<bool>(open_id)).unwrap_or(true);
+            egui::Frame::new().stroke(Stroke::new(1.0, T.border)).corner_radius(T.rc()).inner_margin(egui::Margin::symmetric(4, 2)).show(ui, |ui| {
+                ui.set_min_width(ui.available_width());
+                let header = ui.horizontal(|ui| {
+                    let twirl = if open { tr!("Fold {filter}", filter = fname) } else { tr!("Unfold {filter}", filter = fname) };
+                    if crate::timeline::icon_button_wide(ui, &twirl, None, if open { Icon::ChevronDown } else { Icon::ChevronRight }, 18.0).clicked() {
+                        open = !open;
+                        ui.data_mut(|d| d.insert_temp(open_id, open));
+                    }
+                    let grip = filter_grip(ui, fname, i, n, &mut act);
+                    let tip = if on { tr!("Turn {filter} off (it keeps its settings)", filter = fname) } else { tr!("Turn {filter} on", filter = fname) };
+                    if crate::timeline::icon_button(ui, &tip, Some(on), if on { Icon::Eye } else { Icon::EyeOff }).clicked() {
+                        act = Some(FilterAct::Enable(Some(i), !on));
+                    }
+                    let name = if on { text(Type::Label, fname) } else { text(Type::Label, tr!("{filter} (off)", filter = fname)).color(T.text_faint) };
+                    ui.label(name);
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if crate::timeline::icon_button(ui, &tr!("Remove {filter}", filter = fname), None, Icon::Trash).clicked() {
+                            act = Some(FilterAct::Remove(Some(i)));
+                        }
+                    });
+                    grip
+                });
+                let grip = header.inner;
+                if grip.drag_started() {
+                    dragging = Some(i);
                 }
-                let name = if on { text(Type::Label, fname) } else { text(Type::Label, tr!("{filter} (off)", filter = fname)).color(T.text_faint) };
-                ui.label(name);
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if crate::timeline::icon_button(ui, &tr!("Remove {filter}", filter = fname), None, Icon::Trash).clicked() {
+                if grip.drag_stopped() && dragging == Some(i) {
+                    dragging = None;
+                    if let Some(p) = ui.ctx().pointer_interact_pos()
+                        && drop_at(p.y) != i
+                    {
+                        act = Some(FilterAct::Move(i, drop_at(p.y)));
+                    }
+                }
+                header.response.context_menu(|ui| {
+                    if ui.add_enabled(i > 0, egui::Button::new(tr!("Move Up"))).clicked() {
+                        act = Some(FilterAct::Move(i, i - 1));
+                    }
+                    if ui.add_enabled(i + 1 < n, egui::Button::new(tr!("Move Down"))).clicked() {
+                        act = Some(FilterAct::Move(i, i + 1));
+                    }
+                    ui.separator();
+                    if ui.button(if on { tr!("Turn Off") } else { tr!("Turn On") }).clicked() {
+                        act = Some(FilterAct::Enable(Some(i), !on));
+                    }
+                    if ui.button(tr!("Copy Filter")).clicked() {
+                        act = Some(FilterAct::Copy(Some(i)));
+                    }
+                    if ui.button(tr!("Remove Filter")).clicked() {
                         act = Some(FilterAct::Remove(Some(i)));
                     }
                 });
-                grip
-            });
-            let grip = header.inner;
-            if grip.drag_started() {
-                dragging = Some(i);
-            }
-            if grip.drag_stopped() && dragging == Some(i) {
-                dragging = None;
-                if let Some(p) = ui.ctx().pointer_interact_pos()
-                    && drop_at(p.y) != i
-                {
-                    act = Some(FilterAct::Move(i, drop_at(p.y)));
+                if !open {
+                    return;
                 }
-            }
-            header.response.context_menu(|ui| {
-                if ui.add_enabled(i > 0, egui::Button::new(tr!("Move Up"))).clicked() {
-                    act = Some(FilterAct::Move(i, i - 1));
-                }
-                if ui.add_enabled(i + 1 < n, egui::Button::new(tr!("Move Down"))).clicked() {
-                    act = Some(FilterAct::Move(i, i + 1));
-                }
-                ui.separator();
-                if ui.button(if on { tr!("Turn Off") } else { tr!("Turn On") }).clicked() {
-                    act = Some(FilterAct::Enable(Some(i), !on));
-                }
-                if ui.button(tr!("Copy Filter")).clicked() {
-                    act = Some(FilterAct::Copy(Some(i)));
-                }
-                if ui.button(tr!("Remove Filter")).clicked() {
-                    act = Some(FilterAct::Remove(Some(i)));
-                }
-            });
-            let f = &mut entry.filter;
-            let blur_rows = |ui: &mut egui::Ui, bx: &mut f32, by: &mut f32, quality: &mut u8, changed: &mut Option<&'static str>| {
-                row(ui, tr!("Blur"), |ui| {
-                    let a = ui.add(egui::DragValue::new(bx).prefix("X ").suffix(" px").speed(0.25).range(0.0..=255.0).max_decimals(1)).named(&tr!("{filter} blur X", filter = fname));
-                    let b = ui.add(egui::DragValue::new(by).prefix("Y ").suffix(" px").speed(0.25).range(0.0..=255.0).max_decimals(1)).named(&tr!("{filter} blur Y", filter = fname));
-                    if a.changed() || b.changed() {
-                        *changed = Some(tr_noop!("Filter blur"));
-                    }
-                });
-                row_prose(ui, tr!("Quality"), |ui| {
-                    for (q, name) in quality_names.iter().enumerate() {
-                        if ui.selectable_label(usize::from(*quality) == q + 1, *name).named(&tr!("{filter} quality {quality}", filter = fname, quality = name)).clicked() {
-                            *quality = q as u8 + 1;
-                            *changed = Some(tr_noop!("Filter quality"));
+                let f = &mut entry.filter;
+                let blur_rows = |ui: &mut egui::Ui, bx: &mut f32, by: &mut f32, quality: &mut u8, changed: &mut Option<&'static str>| {
+                    row(ui, tr!("Blur"), |ui| {
+                        let a = ui.add(egui::DragValue::new(bx).prefix("X ").suffix(" px").speed(0.25).range(0.0..=255.0).max_decimals(1)).named(&tr!("{filter} blur X", filter = fname));
+                        let b = ui.add(egui::DragValue::new(by).prefix("Y ").suffix(" px").speed(0.25).range(0.0..=255.0).max_decimals(1)).named(&tr!("{filter} blur Y", filter = fname));
+                        if a.changed() || b.changed() {
+                            *changed = Some(tr_noop!("Filter blur"));
                         }
-                    }
-                });
-            };
-            let pin = anicraft_engine::doc::pinned_stop(f);
-            match f {
-                Filter::Blur { blur_x, blur_y, quality } => blur_rows(ui, blur_x, blur_y, quality, &mut changed),
-                Filter::DropShadow { blur_x, blur_y, strength, quality, angle, distance, color, inner, knockout, hide_object } => {
-                    blur_rows(ui, blur_x, blur_y, quality, &mut changed);
-                    shadow_rows(ui, fname, strength, color, &mut changed);
-                    offset_row(ui, fname, angle, distance, tr_noop!("Shadow offset"), &mut changed);
-                    row_prose(ui, tr!("Options"), |ui| {
-                        for (v, label) in [(inner, tr!("Inner")), (knockout, tr!("Knockout")), (hide_object, tr!("Hide object"))] {
-                            if crate::theme::checkbox(ui, v, label).changed() {
-                                changed = Some(tr_noop!("Shadow options"));
+                    });
+                    row_prose(ui, tr!("Quality"), |ui| {
+                        for (q, name) in quality_names.iter().enumerate() {
+                            if ui.selectable_label(usize::from(*quality) == q + 1, *name).named(&tr!("{filter} quality {quality}", filter = fname, quality = name)).clicked() {
+                                *quality = q as u8 + 1;
+                                *changed = Some(tr_noop!("Filter quality"));
                             }
                         }
                     });
-                }
-                Filter::Glow { blur_x, blur_y, strength, quality, color, inner, knockout } => {
-                    blur_rows(ui, blur_x, blur_y, quality, &mut changed);
-                    shadow_rows(ui, fname, strength, color, &mut changed);
-                    row_prose(ui, tr!("Options"), |ui| {
-                        for (v, label) in [(inner, tr!("Inner")), (knockout, tr!("Knockout"))] {
-                            if crate::theme::checkbox(ui, v, label).changed() {
-                                changed = Some(tr_noop!("Glow options"));
-                            }
-                        }
-                    });
-                }
-                Filter::Bevel { blur_x, blur_y, strength, quality, angle, distance, shadow_color, highlight_color, side, knockout } => {
-                    blur_rows(ui, blur_x, blur_y, quality, &mut changed);
-                    strength_row(ui, fname, strength, &mut changed);
-                    row_prose(ui, tr!("Colours"), |ui| {
-                        let colours = [
-                            (shadow_color, tr!("Shadow"), tr!("{filter} shadow colour", filter = fname), tr_noop!("Bevel shadow colour")),
-                            (highlight_color, tr!("Highlight"), tr!("{filter} highlight colour", filter = fname), tr_noop!("Bevel highlight colour")),
-                        ];
-                        for (c, label, name, undo) in colours {
-                            ui.label(label);
-                            if alpha_swatch(ui, c, &name) {
-                                changed = Some(undo);
-                            }
-                        }
-                    });
-                    offset_row(ui, fname, angle, distance, tr_noop!("Bevel offset"), &mut changed);
-                    side_rows(ui, fname, side, knockout, &mut changed);
-                }
-                Filter::GradientGlow { blur_x, blur_y, strength, quality, angle, distance, stops, side, knockout } | Filter::GradientBevel { blur_x, blur_y, strength, quality, angle, distance, stops, side, knockout } => {
-                    // The ramp first: it is what makes the filter.
-                    ramp_editor(ui, fname, stops, pin, &mut changed);
-                    blur_rows(ui, blur_x, blur_y, quality, &mut changed);
-                    strength_row(ui, fname, strength, &mut changed);
-                    offset_row(ui, fname, angle, distance, tr_noop!("Filter offset"), &mut changed);
-                    side_rows(ui, fname, side, knockout, &mut changed);
-                }
-                Filter::AdjustColor { brightness, contrast, saturation, hue } => {
-                    for (v, label, range) in [(brightness, tr!("Brightness"), 100.0), (contrast, tr!("Contrast"), 100.0), (saturation, tr!("Saturation"), 100.0), (hue, tr!("Hue"), 180.0)] {
-                        row(ui, label, |ui| {
-                            if a11y::slider(ui, v, -range..=range, label, a11y::SliderLook { max_decimals: Some(0), ..Default::default() }).changed() {
-                                changed = Some(tr_noop!("Adjust colour"));
+                };
+                let pin = anicraft_engine::doc::pinned_stop(f);
+                match f {
+                    Filter::Blur { blur_x, blur_y, quality } => blur_rows(ui, blur_x, blur_y, quality, &mut changed),
+                    Filter::DropShadow { blur_x, blur_y, strength, quality, angle, distance, color, inner, knockout, hide_object } => {
+                        blur_rows(ui, blur_x, blur_y, quality, &mut changed);
+                        shadow_rows(ui, fname, strength, color, &mut changed);
+                        offset_row(ui, fname, angle, distance, tr_noop!("Shadow offset"), &mut changed);
+                        row_prose(ui, tr!("Options"), |ui| {
+                            for (v, label) in [(inner, tr!("Inner")), (knockout, tr!("Knockout")), (hide_object, tr!("Hide object"))] {
+                                if crate::theme::checkbox(ui, v, label).changed() {
+                                    changed = Some(tr_noop!("Shadow options"));
+                                }
                             }
                         });
                     }
+                    Filter::Glow { blur_x, blur_y, strength, quality, color, inner, knockout } => {
+                        blur_rows(ui, blur_x, blur_y, quality, &mut changed);
+                        shadow_rows(ui, fname, strength, color, &mut changed);
+                        row_prose(ui, tr!("Options"), |ui| {
+                            for (v, label) in [(inner, tr!("Inner")), (knockout, tr!("Knockout"))] {
+                                if crate::theme::checkbox(ui, v, label).changed() {
+                                    changed = Some(tr_noop!("Glow options"));
+                                }
+                            }
+                        });
+                    }
+                    Filter::Bevel { blur_x, blur_y, strength, quality, angle, distance, shadow_color, highlight_color, side, knockout } => {
+                        blur_rows(ui, blur_x, blur_y, quality, &mut changed);
+                        strength_row(ui, fname, strength, &mut changed);
+                        row_prose(ui, tr!("Colours"), |ui| {
+                            let colours = [
+                                (shadow_color, tr!("Shadow"), tr!("{filter} shadow colour", filter = fname), tr_noop!("Bevel shadow colour")),
+                                (highlight_color, tr!("Highlight"), tr!("{filter} highlight colour", filter = fname), tr_noop!("Bevel highlight colour")),
+                            ];
+                            for (c, label, name, undo) in colours {
+                                ui.label(label);
+                                if alpha_swatch(ui, c, &name) {
+                                    changed = Some(undo);
+                                }
+                            }
+                        });
+                        offset_row(ui, fname, angle, distance, tr_noop!("Bevel offset"), &mut changed);
+                        side_rows(ui, fname, side, knockout, &mut changed);
+                    }
+                    Filter::GradientGlow { blur_x, blur_y, strength, quality, angle, distance, stops, side, knockout } | Filter::GradientBevel { blur_x, blur_y, strength, quality, angle, distance, stops, side, knockout } => {
+                        // The ramp first: it is what makes the filter.
+                        ramp_editor(ui, fname, stops, pin, &mut changed);
+                        blur_rows(ui, blur_x, blur_y, quality, &mut changed);
+                        strength_row(ui, fname, strength, &mut changed);
+                        offset_row(ui, fname, angle, distance, tr_noop!("Filter offset"), &mut changed);
+                        side_rows(ui, fname, side, knockout, &mut changed);
+                    }
+                    Filter::AdjustColor { brightness, contrast, saturation, hue } => {
+                        for (v, label, range) in [(brightness, tr!("Brightness"), 100.0), (contrast, tr!("Contrast"), 100.0), (saturation, tr!("Saturation"), 100.0), (hue, tr!("Hue"), 180.0)] {
+                            row(ui, label, |ui| {
+                                if a11y::slider(ui, v, -range..=range, label, a11y::SliderLook { max_decimals: Some(0), ..Default::default() }).changed() {
+                                    changed = Some(tr_noop!("Adjust colour"));
+                                }
+                            });
+                        }
+                    }
                 }
-            }
+            });
+            ui.add_space(2.0);
         });
     }
     // Where the rows are, for the next frame's drop, and the drop mark while one is dragged:
@@ -3824,6 +3839,47 @@ mod tests {
         let (sx, sy) = check(&app);
         assert!((sx - 3.0).abs() < 1e-4 && (sy - 1.0).abs() < 1e-4, "only X changed, got ({sx}, {sy})");
         app.s.undo().expect("undo");
+    }
+
+    /// #533, #534: each filter in Properties is a card whose header folds it: folded, its
+    /// values are gone from the panel (and from the accessibility tree); unfolded, they are back.
+    #[test]
+    fn a_filter_folds_to_its_header() {
+        use egui::{Event, Modifiers, PointerButton, Pos2};
+        let ctx = egui::Context::default();
+        ctx.enable_accesskit();
+        let mut app = App::with_context(&ctx, anicraft_engine::Session::default(), Some(std::path::PathBuf::from("unused.png")));
+        app.show_panel(crate::dock::Panel::Properties);
+        app.run("draw.rect", json!({"x": 10, "y": 10, "w": 100, "h": 50, "fill": "#ff0000", "stroke": null}));
+        app.run("edit.select_all", json!({}));
+        app.run("modify.convert_to_symbol", json!({"name": "Clip", "kind": "movie_clip"}));
+        app.run("element.set_filters", json!({"filters": [{"type": "blur"}]}));
+        let screen = |events: Vec<Event>| egui::RawInput { screen_rect: Some(Rect::from_min_size(Pos2::ZERO, egui::vec2(1600.0, 1400.0))), events, ..Default::default() };
+        let mut run = |app: &mut App, events: Vec<Event>| {
+            let mut out = ctx.run_ui(screen(events), |ui| app.frame(ui));
+            out.textures_delta.clear();
+            out.platform_output.accesskit_update.expect("the accessibility tree")
+        };
+        let find = |t: &egui::accesskit::TreeUpdate, label: &str| {
+            t.nodes.iter().map(|(_, n)| n).find(|n| n.label().is_some_and(|l| l.starts_with(label))).and_then(|n| n.bounds()).map(|b| Pos2::new(((b.x0 + b.x1) * 0.5) as f32, ((b.y0 + b.y1) * 0.5) as f32))
+        };
+        let click = |run: &mut dyn FnMut(&mut App, Vec<Event>) -> egui::accesskit::TreeUpdate, app: &mut App, at: Pos2| {
+            let press = |pressed| Event::PointerButton { pos: at, button: PointerButton::Primary, pressed, modifiers: Modifiers::NONE };
+            run(app, vec![Event::PointerMoved(at)]);
+            run(app, vec![press(true)]);
+            run(app, vec![press(false)]);
+            run(app, Vec::new());
+            run(app, Vec::new())
+        };
+        run(&mut app, Vec::new());
+        let t = run(&mut app, Vec::new());
+        assert!(find(&t, "Blur blur X").is_some(), "the filter's values show");
+        let fold = find(&t, "Fold Blur").expect("the filter's fold button");
+        let t = click(&mut run, &mut app, fold);
+        assert!(find(&t, "Blur blur X").is_none(), "folded: only its header shows");
+        let unfold = find(&t, "Unfold Blur").expect("and it can be unfolded");
+        let t = click(&mut run, &mut app, unfold);
+        assert!(find(&t, "Blur blur X").is_some(), "unfolded: its values are back");
     }
 
     use crate::app::App;
