@@ -70,9 +70,24 @@ fn every_twins_badge_decodes_from_animates_own_bitmap_data() {
         assert_eq!(px.rgba[mid + 3], 255, "{}: the middle is opaque", path.display());
         badges.push(px.rgba.clone());
     }
-    // The manifest's 9 pairs: 6 Animate `.fla` files, the Mademoiselle XFL folder and its zip,
-    // and the RoboKit and Storyboard downloads' 3 `.fla` files.
-    assert!(opened.len() >= 10, "expected every twin the manifest pins, got {opened:?}");
+    // Every twin of the manifest's 9 pairs, by name: 5 Animate `.fla` files, Mademoiselle's
+    // zipped XFL folder and its unpacked copy, and the RoboKit and Storyboard downloads' 3
+    // `.fla` files.
+    let expected = [
+        "giskard-animate.fla",
+        "kinefox-animate.fla",
+        "mademoiselle-animate.fla",
+        "mademoiselle-animate/EDAPT_SMR_MademoiselleD_v4a_CC.xfl",
+        "magnebot-animate.fla",
+        "movietemplate-animate.fla",
+        "rabbit-animate.fla",
+        "robokit-animate/EDAPT_SMR_FreeStyle_RoboKit_v1b_CC.fla",
+        "storyboard-animate/EDAPT_Storyboard_Template_CC.fla",
+        "storyboard-animate/EDAPT_Storyboard_Template_Sample_Animatic_CC.fla",
+    ];
+    let mut got: Vec<String> = opened.iter().map(|p| Path::new(p).strip_prefix(&dir).map_or_else(|_| p.clone(), |r| r.to_string_lossy().replace('\\', "/"))).collect();
+    got.sort();
+    assert_eq!(got, expected, "every twin the manifest pins opens");
     assert!(badges.windows(2).all(|w| w[0] == w[1]), "every twin's badge decodes to the same pixels");
 }
 

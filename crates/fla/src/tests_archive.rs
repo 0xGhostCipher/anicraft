@@ -319,9 +319,13 @@ fn every_rebuilt_shape_record_is_charged_its_edges_before_the_rebuild() {
     let (all, report) = full(usize::MAX);
     assert_eq!(all, 12);
     assert!(report.skipped.is_empty(), "{:?}", report.skipped);
-    // The smallest budget that still brings every use in, and one edge less.
-    let enough = (0..100_000).find(|&b| full(b).1.skipped.is_empty()).expect("some budget fits the document");
-    assert!(enough > 0);
+    // The budget the fixture needs, from its records: the drawing's edges at each of its four
+    // uses, and the library rectangle's once.
+    let edges = |body: Vec<u8>| crate::shape::find_all(&one_frame_stream(&body)).first().map(|r| r.edges.len()).expect("the record decodes");
+    let enough = 4 * edges(crate::tests::three_squares_body()) + edges(rectangle_body());
+    let (at_budget, report) = full(enough);
+    assert_eq!(at_budget, all, "exactly the edges rebuilt fit");
+    assert!(report.skipped.is_empty(), "{:?}", report.skipped);
     let (fewer, report) = full(enough - 1);
     assert!(fewer < all, "one edge short leaves a use out");
     assert!(skipped(&report, "shapes past the import's geometry budget (left out)") > 0, "{:?}", report.skipped);
