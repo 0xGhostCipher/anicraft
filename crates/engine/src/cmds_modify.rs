@@ -625,6 +625,16 @@ fn selected_units(s: &Session) -> Vec<Unit> {
     units
 }
 
+/// What To Stage aligns to: the stage, or inside an open symbol its own space, where the
+/// symbol's registration point stands for the stage (#568): centring there centres the
+/// artwork on that point, and Left and Top put its edge on it.
+fn stage_in_edit_space(s: &Session) -> Rect {
+    match s.editing.last().map(|l| l.open) {
+        Some(crate::editing::Opened::Symbol(_)) => Rect::new(0.0, 0.0, 0.0, 0.0),
+        _ => Rect::new(0.0, 0.0, s.doc.stage.width as f32, s.doc.stage.height as f32),
+    }
+}
+
 fn align(s: &mut Session, p: &Value, edge: Edge) -> Result<Value> {
     let units = selected_units(s);
     if units.is_empty() {
@@ -633,7 +643,7 @@ fn align(s: &mut Session, p: &Value, edge: Edge) -> Result<Value> {
     // One element (or one raw drawing) aligns to the stage: there is nothing else to align it with.
     let to_stage = opt_bool(p, "to_stage")?.unwrap_or(units.len() == 1);
     let target = if to_stage {
-        Rect::new(0.0, 0.0, s.doc.stage.width as f32, s.doc.stage.height as f32)
+        stage_in_edit_space(s)
     } else {
         units.iter().fold(Rect::EMPTY, |r, (_, b)| r.union(b))
     };
