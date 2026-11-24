@@ -2,6 +2,27 @@
 
 ## Unreleased
 
+* **An Animate drawing no longer loses lines without a word** (M4, ADR 0133, #498, #347,
+  backlog P-006).
+  * A stroke in a style AniCraft doesn't know was dropped, and the report still said
+    "Imported everything in the file". It is now drawn as a solid line with its weight, colour,
+    caps and joints, and counted.
+  * One unreadable command in a shape's outline lost everything after it on that edge. An
+    outline is written as runs, each starting at its own point: the command now costs the
+    rest of its own run only, the runs after it are drawn, and the report counts the run that
+    was cut short.
+  * The report also counts fills whose outline has a gap (they are closed straight across,
+    which can fill in more than the fill covered), fills of a kind AniCraft doesn't know, and
+    lines and fills in a style their shape doesn't have.
+  * The corpus has a package for these (`unknowns`), with its report, a golden frame and
+    probes.
+  * #498 came without a file, so which of these its drawing runs into is not confirmed: the
+    report line it now gets, or the file, will say. The merge of raw shapes on opening and the
+    GPU stage were ruled out with generated sketches.
+  * #347 (a `.fla` refused on macOS with the system's "cannot open files in this format"):
+    v0.2.1 did not take documents the system hands over; `main` has since ADR 0062. Not
+    re-tested on a Mac here.
+  * Not yet: the same recovery in the shared reader (storytold/craft-libs#3282).
 * **Memory and frame time stay flat** (M8, P-004, ADR 0132;
   [#314](https://github.com/storytold/anicraft/issues/314),
   [#477](https://github.com/storytold/anicraft/issues/477)).
