@@ -1515,3 +1515,5 @@ mod group_tests;
 mod swatch_tests;
 #[cfg(test)]
 mod parity_tests;
+#[cfg(test)]
+mod render_budget_tests;
