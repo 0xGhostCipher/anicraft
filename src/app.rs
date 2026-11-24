@@ -424,6 +424,8 @@ pub struct App {
     pub tl_last_layer: Option<anicraft_engine::doc::LayerId>,
     /// Folders shown closed on the timeline (view state: not saved, not undoable).
     pub tl_collapsed: HashSet<anicraft_engine::doc::LayerId>,
+    /// The timeline shows only the active layer's row (#529; view state).
+    pub tl_only_active: bool,
     pub library_sel: Option<LibraryItem>,
     /// The Library panel's folders, selection, sorting, search and preview (ADR 0050).
     pub library: crate::library::LibraryView,
@@ -836,6 +838,7 @@ impl App {
             tl_vscroll: 0.0,
             tl_last_layer: None,
             tl_collapsed: HashSet::new(),
+            tl_only_active: false,
             library_sel,
             library: Default::default(),
             text_edit: None,

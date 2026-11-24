@@ -544,10 +544,15 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
     // sideways wheels / trackpad swipes scroll the frames (egui turns Shift+wheel into a
     // horizontal delta). Anywhere over the timeline, rows and cells included. Only visible
     // rows and columns are painted, so cost is independent of document size.
-    // Rows are the layers not inside a closed folder (`rows[r]` is row r's layer index).
+    // Rows are the layers not inside a closed folder (`rows[r]` is row r's layer index), or
+    // with View Only the Active Layer on, the active layer alone (#529).
     let rows: Vec<usize> = {
         let tl = app.s.timeline();
-        (0..tl.layers.len()).filter(|&i| !app.tl_collapsed.iter().any(|f| tl.is_inside(i, *f))).collect()
+        if app.tl_only_active {
+            tl.layers.iter().position(|l| l.id == app.s.layer).into_iter().collect()
+        } else {
+            (0..tl.layers.len()).filter(|&i| !app.tl_collapsed.iter().any(|f| tl.is_inside(i, *f))).collect()
+        }
     };
     let n_layers = rows.len();
     // Each row is its layer's height (100, 200 or 300 % of a normal or short row, ADR 0061).
@@ -606,6 +611,18 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
     {
         let side = TOGGLE.min(RULER_H);
         crate::parenting::head_toggle(app, ui, &painter, Rect::from_center_size(pos2(heading.right() + 8.0 + side * 0.5, ruler.center().y), vec2(side, side)));
+        // View Only the Active Layer (#529): the other rows go until it is clicked again.
+        let rect = Rect::from_center_size(pos2(heading.right() + 8.0 + side * 1.5 + 2.0, ruler.center().y), vec2(side, side));
+        let on = app.tl_only_active;
+        let r = ui.interact(rect, ui.id().with("only_active_layer"), Sense::click());
+        if r.hovered() || on {
+            painter.rect_filled(rect, T.rc(), if on { T.accent_dim } else { T.hover });
+        }
+        icons::paint(&painter, Rect::from_center_size(rect.center(), vec2(15.0, 15.0)), Icon::ActiveLayer, if on { T.accent_text } else { T.text_dim });
+        a11y::control(ui, &r, WidgetType::Checkbox, tr!("View only the active layer"), Some(on));
+        if r.on_hover_text(tr!("View only the active layer: hide the other layers' rows here (they stay on the stage). Click again to show every layer")).clicked() {
+            app.tl_only_active = !on;
+        }
     }
     // The eye, the padlock and the square above the columns they head show, lock or outline
     // every layer at once, as in Animate (#422). Each shows its other face once every layer
@@ -2523,6 +2540,40 @@ mod tests {
         click(&ctx, &mut app, at(past), Modifiers::NONE);
         assert_eq!(app.frame_sel.map(|s| s.frames()), Some((past, past)), "the empty cell is selected");
         assert_eq!(app.s.frame, past, "and the playhead is on it");
+    }
+
+    /// #529: the header's View Only the Active Layer toggle leaves the active layer's row alone
+    /// on the timeline; clicked again, every row is back.
+    #[test]
+    fn the_timeline_can_show_only_the_active_layer() {
+        let ctx = egui::Context::default();
+        ctx.enable_accesskit();
+        let mut app = App::with_context(&ctx, anicraft_engine::Session::default(), Some(std::path::PathBuf::from("unused.png")));
+        app.show_panel(crate::dock::Panel::Timeline);
+        let first = app.s.layer;
+        app.run("layer.rename", json!({"layer": first.0, "name": "Ground"}));
+        app.run("layer.new", json!({"name": "Hero"}));
+        app.run("layer.new", json!({"name": "Sky"}));
+        app.run("layer.select", json!({"layer": first.0}));
+        let tree = |ctx: &egui::Context, app: &mut App, events: Vec<Event>| {
+            let input = egui::RawInput { screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(1600.0, 940.0))), events, ..Default::default() };
+            let mut out = ctx.run_ui(input, |ui| app.frame(ui));
+            out.textures_delta.clear();
+            out.platform_output.accesskit_update.expect("the accessibility tree")
+        };
+        let rows = |t: &egui::accesskit::TreeUpdate| ["Ground", "Hero", "Sky"].into_iter().filter(|n| t.nodes.iter().any(|(_, x)| x.label().is_some_and(|l| l.starts_with(n)))).collect::<Vec<_>>();
+        tree(&ctx, &mut app, Vec::new());
+        let t = tree(&ctx, &mut app, Vec::new());
+        assert_eq!(rows(&t), ["Ground", "Hero", "Sky"]);
+        let toggle = t.nodes.iter().map(|(_, n)| n).find(|n| n.label() == Some("View only the active layer")).and_then(|n| n.bounds()).expect("the toggle");
+        let at = Pos2::new(((toggle.x0 + toggle.x1) * 0.5) as f32, ((toggle.y0 + toggle.y1) * 0.5) as f32);
+        click(&ctx, &mut app, at, Modifiers::NONE);
+        let t = tree(&ctx, &mut app, Vec::new());
+        assert!(app.tl_only_active);
+        assert_eq!(rows(&t), ["Ground"], "only the active layer's row");
+        click(&ctx, &mut app, at, Modifiers::NONE);
+        let t = tree(&ctx, &mut app, Vec::new());
+        assert_eq!(rows(&t), ["Ground", "Hero", "Sky"], "every row back");
     }
 
     #[test]
