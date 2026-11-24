@@ -461,6 +461,9 @@ pub struct Session {
     /// An import the editor prepared on another thread (ADR 0116): `file.import_video` asked
     /// for the same thing takes it instead of decoding again. Never in the document.
     pub staged_video: Option<video::Prepared>,
+    /// A Brush stroke's outline the editor traced on another thread (ADR 0129): `draw.brush`
+    /// asked for the same stroke takes it instead of tracing again. Never in the document.
+    pub staged_stroke: Option<cmds_brush::PreparedStroke>,
     /// Files this session's publishes wrote: publishing again replaces them without asking.
     pub published: std::collections::BTreeSet<PathBuf>,
     /// The files opened and saved last, and pinned favourites (ADR 0059). They belong to the
@@ -599,6 +602,7 @@ impl Session {
             picture_cache: RefCell::new(None),
             job: None,
             staged_video: None,
+            staged_stroke: None,
             published: std::collections::BTreeSet::new(),
             recent: cmds_recent::RecentFiles::default(),
             brushes: brush_library::BrushLibrary::default(),
