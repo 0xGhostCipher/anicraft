@@ -2,6 +2,29 @@
 
 ## Unreleased
 
+* **Flash 8 to CS4 `.fla` files open** (backlog P-039, ADR 0120, #163; by rcoenen, #478 and
+  #481): the binary `.fla` of the Flash 8 to CS4 era, which AniCraft used to refuse, now opens
+  like an Animate file, untitled, so Save asks for a new `.anicraft` name.
+  * **What comes across**: scenes, layers and folders, keyframes with their timing, shapes with
+    curves, gradients and strokes (dashed and dotted ones with their pattern), groups, symbol
+    instances (matrix, loop, first frame, colour effect), classic and shape tweens with their
+    eases and shape hints, static and dynamic text, bitmaps, sounds on frames, button names,
+    frame scripts (kept, never run), library folders and the stage size and frame rate.
+  * **Checked against the same documents saved by Animate**: on nine published sample rigs and
+    templates every timeline, layer, keyframe and instance matches (337 timelines, 1,628
+    layers, 6,993 keyframes, 4,457 instances), and against a Flash 8 file a community member
+    made, which reads to its end with one thing left out and named.
+  * **Not yet**, and named in the import report: filters, movie clip component settings, bitmap
+    fills and sound in and out points; ragged, stipple and hatched strokes are drawn solid, as
+    from Animate documents. Files from Flash MX 2004 and earlier are refused with the reason.
+  * **A damaged or hostile file can't crash or stall the import**: it is refused with a
+    one-sentence reason, or opens with what was left out counted. One import reads at most
+    twice the file's size in streams, decoding a stream costs at most 64 times its length,
+    and keyframes, text and bitmap pixels count against allowances for the whole document.
+  * `anicraft-cli fla-dump <file> [--stream name]` lists a legacy file's streams and records.
+  * Animate's own lossless bitmaps and uncompressed sounds (`bin/*.dat`) now decode in modern
+    `.fla` and XFL files too, instead of being reported as unreadable.
+
 * **Timeline and panel bugs from the tracker** (M8, backlog P-009 and P-010, ADR 0131).
   * **Several layers selected at once** (#512). **Ctrl**-click a layer's name to add it or take
     it out, **Shift**-click for every layer from the active one, or **Shift+Up** and
@@ -307,21 +330,6 @@
   * AniCraft still holds no video codec: your own ffmpeg does the decoding (the one Export
     Video uses). Without ffmpeg, the window says how to install it.
   * Headless: `file.import_video`, `file.video_info`, `layer.set_video`.
-
-* **Flash 8–CS4 `.fla` files open** (ADR 0120, #163): the binary `.fla` of the Flash 8 to
-  CS4 era, which AniCraft used to refuse, now opens like an Animate file, untitled, so Save asks
-  for a new `.anicraft` name.
-  * **What comes across**: scenes, layers and folders, keyframes with their timing, shapes with
-    curves, gradients and strokes (dashed and dotted ones with their pattern), groups, symbol instances (matrix, loop, first frame, colour
-    effect), classic and shape tweens with their eases and shape hints, static and dynamic text,
-    bitmaps, sounds on frames, button names, frame scripts (kept, never run), library folders
-    and the stage size and frame rate.
-  * **Checked against the same documents saved by Animate**: on nine sample rigs and templates
-    every timeline, layer, keyframe and instance matches, and rendered frames are identical.
-  * **Not yet**, and named in the import report: filters, movie clip component settings, bitmap
-    fills; ragged, stipple and hatched strokes are drawn solid, as from Animate documents. Damaged or hostile files are refused with a
-    one-sentence reason, never a crash.
-  * `anicraft-cli fla-dump <file> [--stream name]` lists a legacy file's streams and records.
 
 * **Themes of your own** (#340, ADR 0117, M8): a theme is a small JSON file that names colours
   for the interface's roles, kept in `themes` in the settings folder (`data/themes` in a

@@ -81,8 +81,7 @@ document model came after it, and the Decision and Consequences below record bot
   changes carry stroke/left-fill/right-fill indices as u8 or u16. A record with a control
   point is a quadratic curve. Verified differentially: every shape body the decoder finds
   in the corpus (3197, 2201 of them curved) matches its twin's XFL edges and their fill and
-  stroke style indices (the record's matrix and the styles' contents aren't compared). (An earlier reading took the edge unit for half-pixels; it is half-twips — the
-  "UFO mask" fixture is 10.9 × 11.2 px.) Fill regions are rebuilt per style as the XFL
+  stroke style indices (the record's matrix and the styles' contents aren't compared). (An earlier reading took the edge unit for half-pixels; it is half-twips.) Fill regions are rebuilt per style as the XFL
   importer does. Bitmap fills are not yet located.
 - **Stroke styles:** of a stroke's ten style bytes, [0..2] is a dashed line's dash length
   and [2..4] its gap, both u16 twips; without a dash, [2..4] is `(pattern << 4) | type`,
@@ -211,6 +210,54 @@ document model came after it, and the Decision and Consequences below record bot
   raw 16-bit PCM and bitmaps other than the lossless layout or PNG / JPEG. Committed fixtures
   stay synthetic; the CC BY-NC-SA corpus runs via `ANICRAFT_FLA_CORPUS`, pinned by URL and
   sha256 in `crates/fla/tests/corpus.tsv` and fetched by `scripts/fetch-fla-corpus.sh`.
+
+## Review at integration (2026-11-24)
+
+The first-party review before merging (backlog P-039) checked three things and changed what
+they asked for.
+
+- **Provenance.** The account in #478 was checked against `standards/clean-room.md`. The
+  knowledge comes from Microsoft's public `[MS-CFB]` and MFC documentation, Adobe's public
+  help pages, and corpus evidence: sample files their author published on his own site in
+  both formats, obtained from that source, never committed, and pinned by URL, sha256 and
+  licence in a manifest the tests fetch from (fixture rule 2; a fresh fetch on 2026-11-24
+  matched all 16 hashes, and the differential tests reproduce the numbers above). No app was
+  operated and no parser or decompiler source was read; the container reader whose author had
+  looked at a BSD library's source was replaced by `craft-cfb` before merging. One committed
+  test reproduced a shape of the corpus (its geometry, fill, matrix and name): it now holds
+  values of our own.
+- **A second, independent file.** A Flash 8 document a community member made and attached to
+  #478 (not committed: its maker hasn't stated a licence) was read locally. Every item stream
+  parses to its end with the grammar above, with one skip, a movie clip's component settings.
+  It confirms on a file that isn't the corpus's: the stage (550 × 400, 12 fps), layer names,
+  lock and outline colours, the guide layer type (1), keyframe durations, classic tweens and
+  their eases (+100, −100), a graphic instance's first frame following its keyframes, a shape
+  tween with its morph cache, symbol types (graphic, button with its four frames, movie clip),
+  static texts with face, size, colour, bold and italic, a linear and a radial gradient, and a
+  30 s mono sound whose sample count is exactly its stream's length. Two things it doesn't
+  settle: the byte read as a frame's sound sync is 3 on its sound frame, and also on some
+  frames with no sound, so its meaning beyond "3 on the corpus's stream sounds" stays a
+  hypothesis; and its sound repeats 32,767 times, which is likely Flash's Loop setting and
+  comes across as the most repeats a sound holds.
+- **Hostile files.** 40,000 mutated copies of that document (byte and bit flips, extreme
+  16- and 32-bit values, copied blocks, in the header, the directory and every record stream)
+  and 600 truncations: no panic, the slowest import 34 ms. Reading the code found what random
+  mutation doesn't, small files that multiply work, and these are now bounded for the whole
+  document:
+  - streams are read against an allowance of twice the file's size (one stream named by
+    thousands of symbols, scenes or media items is no longer read and decoded for each);
+  - every byte a stream's decoders read, again after a rolled-back trial too, is charged to a
+    work budget of 64 times the stream's length (it was a fixed 256 MiB of scanning per
+    stream, and trial decodes of shapes and texts weren't charged);
+  - a keyframe (with its script and hints) and a text's characters count against the million
+    objects of a document, since references can place one record many times;
+  - bitmaps share the XFL importer's 256-megapixel budget, refused by their header;
+  - at most 20,000 symbols and 4,096 scenes are converted; the `Contents` scans step over
+    strings by their head, so a candidate that isn't a record costs nothing;
+  - the report says when the stage wasn't found (the defaults are used), a list was cut at
+    its cap, a media id is listed twice, or an envelope was cut.
+  The bounded file read that opens a `.fla` now applies the automation read root itself
+  (ADR 0124), as every other read in `engine::vfs` does.
 
 ## References
 
