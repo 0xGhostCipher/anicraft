@@ -1019,6 +1019,16 @@ impl App {
         self.status = Some(Status { text: text.into(), error: true, at: 0.0 });
     }
 
+    /// What a text command had to say about the fonts it used, in the status bar: a font that
+    /// isn't installed, letters drawn from another font, characters no font has (ADR 0012,
+    /// ADR 0130). The block looks right either way, so this is the only place it is said.
+    pub fn text_note(&mut self, result: &Value) {
+        if let Some(note) = result["note"].as_str() {
+            // The engine's English, translated when a catalog has that exact message.
+            self.status_ok(crate::i18n::t_dyn(note).into_owned());
+        }
+    }
+
     /// Runs an engine command, reporting failures in the status bar.
     /// After a move, selected raw shapes float over what they landed on, and merge with it when
     /// they are deselected, as in Animate (ADR 0122, #487): until then they can be moved on.
@@ -3722,6 +3732,7 @@ impl App {
             }
             "plugin.run" | "plugin.install" | "plugin.remove" | "plugin.reload" => crate::plugins_ui::status(self, id, v),
             id if id.starts_with("macro.") => crate::macros_ui::done(self, id, v),
+            id if id.starts_with("text.") => self.text_note(v),
             "timeline.remove_frame" => {
                 let n = v["removed"].as_u64().unwrap_or(1);
                 self.status_ok(if n == 1 { tr!("Removed frame — {undo} to undo", undo = self.undo_key()).to_string() } else { trn!("Removed {n} frame — {undo} to undo", "Removed {n} frames — {undo} to undo", n, undo = self.undo_key()) });
