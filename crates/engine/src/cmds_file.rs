@@ -208,7 +208,7 @@ impl Import {
         // inside the package as "animation.anicraft".
         let package = match package.file_name() {
             Some(_) => package,
-            None => std::fs::canonicalize(&package).unwrap_or(package),
+            None => crate::vfs::canonicalize(&package).unwrap_or(package),
         };
         // A folder's whole name ("walk.v2" stays "walk.v2"); a file's without its extension.
         let name = if crate::vfs::is_dir(&package) { package.file_name() } else { package.file_stem() };

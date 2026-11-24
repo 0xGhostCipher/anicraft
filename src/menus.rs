@@ -512,7 +512,9 @@ fn item(app: &mut App, ui: &mut egui::Ui, spec: &CommandSpec) {
         _ => crate::i18n::t_cmd(spec.id, spec.label).to_string(),
     };
     // Settings show whether they are on, as check items do.
-    let label = match checked(app, spec.id) {
+    let on = checked(app, spec.id);
+    let name = label.clone();
+    let label = match on {
         Some(true) => format!("✔ {label}"),
         Some(false) => format!("   {label}"),
         None => label,
@@ -521,12 +523,14 @@ fn item(app: &mut App, ui: &mut egui::Ui, spec: &CommandSpec) {
     // What this build can't do stays in its usual place, dimmed, saying why (the web build).
     let missing = platform::unavailable(spec.id);
     let r = ui.add_enabled(enabled(app, spec.id) && missing.is_none(), button);
-    if spec.id == "view.hide_edges" {
+    // A setting is a check item to a screen reader too: its name without the tick drawn for
+    // the eye, and whether it is on (every toggling command, not one of them).
+    if let Some(on) = on {
         use egui::accesskit::{Role, Toggled};
         ui.ctx().accesskit_node_builder(r.id, |node| {
             node.set_role(Role::MenuItemCheckBox);
-            node.set_label(crate::i18n::t_cmd(spec.id, spec.label).to_string());
-            node.set_toggled(if app.s.aids.hide_edges { Toggled::True } else { Toggled::False });
+            node.set_label(name);
+            node.set_toggled(if on { Toggled::True } else { Toggled::False });
             if let Some(key) = app.keymap.primary(spec.id) {
                 node.set_keyboard_shortcut(platform::shortcut_label(key));
             }

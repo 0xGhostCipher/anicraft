@@ -493,6 +493,15 @@ fn align_to_stage_inside_a_symbol_centres_on_its_registration_point() {
     run(&mut s, "align.vcenter", json!({"to_stage": true}));
     let c = s.selection_bounds().center();
     assert!(c.x.abs() < 0.01 && c.y.abs() < 0.01, "centred on the registration point: {c:?}");
+    // A group opened inside the symbol is still inside it.
+    run(&mut s, "element.translate", json!({"dx": 70, "dy": 30}));
+    run(&mut s, "modify.group", json!({}));
+    let group = s.selection.ids().next().unwrap();
+    run(&mut s, "symbol.edit", json!({"id": group.0}));
+    run(&mut s, "edit.select_all", json!({}));
+    run(&mut s, "align.hcenter", json!({"to_stage": true}));
+    let c = s.selection_bounds().center();
+    assert!(c.x.abs() < 0.01, "inside a group in the symbol, still its registration point: {c:?}");
     // On the stage itself, To Stage is still the document's stage.
     run(&mut s, "symbol.exit", json!({"all": true}));
     run(&mut s, "edit.select_all", json!({}));

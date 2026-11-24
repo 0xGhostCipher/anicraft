@@ -725,11 +725,13 @@ fn selected_units(s: &Session, outlines: bool) -> Vec<Unit> {
 
 /// What To Stage aligns to: the stage, or inside an open symbol its own space, where the
 /// symbol's registration point stands for the stage (#568): centring there centres the
-/// artwork on that point, and Left and Top put its edge on it.
+/// artwork on that point, and Left and Top put its edge on it. A group or drawing object opened
+/// inside a symbol is still inside that symbol.
 fn stage_in_edit_space(s: &Session) -> Rect {
-    match s.editing.last().map(|l| l.open) {
-        Some(crate::editing::Opened::Symbol(_)) => Rect::new(0.0, 0.0, 0.0, 0.0),
-        _ => Rect::new(0.0, 0.0, s.doc.stage.width as f32, s.doc.stage.height as f32),
+    if s.editing.iter().any(|l| l.symbol().is_some()) {
+        Rect::new(0.0, 0.0, 0.0, 0.0)
+    } else {
+        Rect::new(0.0, 0.0, s.doc.stage.width as f32, s.doc.stage.height as f32)
     }
 }
 
