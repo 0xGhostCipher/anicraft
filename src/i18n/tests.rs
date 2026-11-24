@@ -577,7 +577,13 @@ fn strings_in(v: &serde_json::Value, out: &mut BTreeSet<String>) {
 
 /// Names egui gives its own parts: a window's close button, and (since egui 0.37) the handles
 /// that resize a panel or a window. egui offers no way to name them ourselves.
-const EGUI_OWN: [&str; 10] = [
+const EGUI_OWN: [&str; 14] = [
+    // egui's colour mixer (the picker's Mixer view) names its sliders and its value button, and
+    // since egui 0.37 passes their tooltips on too.
+    "Hue",
+    "Alpha",
+    "Click to copy color values",
+    "Showing color values in 0-255 gamma space",
     "Close window",
     "Resize panel",
     "Resize window right edge",

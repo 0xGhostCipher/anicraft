@@ -4115,8 +4115,11 @@ mod tests {
             }
             nodes
         };
+        // The History panel names a step after its command, so once the button has been used
+        // there are two controls of this name: the one in Properties is the upper one.
         let button = |nodes: &[(egui::accesskit::NodeId, Node)]| {
-            nodes.iter().find(|(_, n)| n.role() == Role::Button && n.label() == Some("Convert Lines to Fills")).map(|(id, n)| {
+            let named = nodes.iter().filter(|(_, n)| n.role() == Role::Button && n.label() == Some("Convert Lines to Fills"));
+            named.min_by(|a, b| a.1.bounds().map_or(f64::MAX, |r| r.y0).total_cmp(&b.1.bounds().map_or(f64::MAX, |r| r.y0))).map(|(id, n)| {
                 (*id, n.is_disabled(), n.supports_action(Action::Click) && n.supports_action(Action::Focus))
             })
         };
