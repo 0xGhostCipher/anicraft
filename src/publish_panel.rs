@@ -525,11 +525,13 @@ fn options(app: &mut App, ui: &mut egui::Ui, f: PublishFormat) {
         PublishFormat::PngSequence => {
             range_row(app, ui, f, p.png_sequence.range);
             scale_row(app, ui, f, p.png_sequence.scale);
+            check(app, ui, f, "background", p.png_sequence.background, tr!("Stage colour as background"), tr!("Off: transparent"));
             form_note(ui, FORM_LABEL_DIALOG, text(Type::Caption, tr!("The output is a folder; the frames in it are frame_00001.png and on.")));
         }
         PublishFormat::Png => {
             frame_row(app, ui, f, p.png.frame);
             scale_row(app, ui, f, p.png.scale);
+            check(app, ui, f, "background", p.png.background, tr!("Stage colour as background"), tr!("Off: transparent"));
         }
         PublishFormat::Svg => frame_row(app, ui, f, p.svg.frame),
         PublishFormat::Audio => {
