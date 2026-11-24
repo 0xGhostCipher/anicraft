@@ -213,7 +213,7 @@ pub fn fill_picker(ui: &mut egui::Ui, popup: Id, paint: Option<&Paint>, bitmaps:
         }
         Some(Paint::Solid(c)) => {
             let mut px = bytes(*c);
-            crate::colour::picker(ui, popup, &mut px, true, None).then_some(FillEdit::Solid(px))
+            crate::colour::picker(ui, popup, &mut px, true, None, true).then_some(FillEdit::Solid(px))
         }
         Some(Paint::Linear { stops, spread, linear_rgb, .. }) => gradient(ui, popup, stops, *spread, *linear_rgb, None),
         Some(Paint::Radial { stops, spread, linear_rgb, focal, .. }) => gradient(ui, popup, stops, *spread, *linear_rgb, Some(*focal)),
@@ -490,7 +490,7 @@ fn stop_bar(ui: &mut egui::Ui, popup: Id, stops: &mut Vec<GradientStop>) -> Opti
         });
         ui.add_space(4.0);
         let mut px = bytes(st.color);
-        if crate::colour::picker(ui, popup.with(("stop", sel)), &mut px, true, None) {
+        if crate::colour::picker(ui, popup.with(("stop", sel)), &mut px, true, None, false) {
             st.color = from_bytes(px);
             changed = Some((tr_noop!("Colour stop"), true));
         }
