@@ -156,7 +156,7 @@ fn a_long_drag_does_not_grow_the_memory() {
     let tiles = |s: &Session| -> Vec<_> {
         (0..2).map(|tx| svc.job(s.state, &s.doc, 0, View { transform: Affine::translate(-512.0 * tx as f32, 0.0), width: 512, height: 512, background: Some(s.doc.stage.background) }, None)).collect()
     };
-    let mut drag = |s: &mut Session, moves: u32, show: bool| {
+    let drag = |s: &mut Session, moves: u32, show: bool| {
         let started = web_time::Instant::now();
         for i in 0..moves {
             s.execute("element.translate", &json!({"dx": if i % 2 == 0 { 2 } else { -2 }, "dy": 0})).unwrap();
@@ -179,6 +179,7 @@ fn a_long_drag_does_not_grow_the_memory() {
     // Fills in a step at a time within a budget.
     s.execute("element.translate", &json!({"dx": 1, "dy": 0})).unwrap();
     let jobs = tiles(&s);
+    svc.show(jobs[0].set);
     let first = svc.request_batch_within(jobs.clone(), std::time::Duration::ZERO);
     assert_eq!(first.iter().filter(|i| i.is_some()).count(), 1);
     assert!(svc.request_batch_within(jobs, std::time::Duration::ZERO).iter().all(Option::is_some));

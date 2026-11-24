@@ -336,13 +336,24 @@ pub fn render_batch(jobs: &[FrameJob]) -> Vec<FrameImage> {
     render_batch_by(jobs, &RasterSlot::default())
 }
 
+/// Evaluated scenes by [`FrameJob::scene`].
+type Scenes = HashMap<u64, Arc<DisplayList>>;
+
 /// [`render_batch`] with the service's rasterizer for the jobs made for it.
 fn render_batch_by(jobs: &[FrameJob], slot: &RasterSlot) -> Vec<FrameImage> {
-    let mut scenes: HashMap<u64, Arc<DisplayList>> = HashMap::new();
+    render_batch_from(jobs, slot, &Scenes::new()).0
+}
+
+/// [`render_batch_by`], taking the scenes it needs from `known` when they are there (the pass
+/// before: a view and the look-ahead around it are several passes of one scene). The pictures,
+/// and this batch's scenes for the next.
+fn render_batch_from(jobs: &[FrameJob], slot: &RasterSlot, known: &Scenes) -> (Vec<FrameImage>, Scenes) {
+    let mut scenes = Scenes::new();
     for j in jobs {
-        scenes.entry(j.scene).or_insert_with(|| Arc::new(j.display_list()));
+        scenes.entry(j.scene).or_insert_with(|| known.get(&j.scene).cloned().unwrap_or_else(|| Arc::new(j.display_list())));
     }
-    jobs.par_iter()
+    let imgs = jobs
+        .par_iter()
         .map(|j| {
             // A job made for another rasterizer (queued before a switch) is drawn by the oracle.
             let raster = slot.raster.as_ref().filter(|_| j.raster != 0 && j.raster == slot.id);
@@ -351,7 +362,8 @@ fn render_batch_by(jobs: &[FrameJob], slot: &RasterSlot) -> Vec<FrameImage> {
                 None => render_job_by(j, &j.display_list(), raster),
             }
         })
-        .collect()
+        .collect();
+    (imgs, scenes)
 }
 
 /// The rasterizer in use and its id (0 and `None`: the oracle).
@@ -808,6 +820,8 @@ impl Drop for RenderService {
 }
 
 fn worker_loop(s: &Shared) {
+    // The scenes of the pass before, for the passes of one view.
+    let mut scenes = Scenes::new();
     loop {
         // Take a whole batch: urgent first, topped up with prefetch work.
         let jobs: Vec<FrameJob> = {
@@ -841,7 +855,8 @@ fn worker_loop(s: &Shared) {
             (jobs.iter().filter(|j| !cache.contains(j.key) && cache.keeps(j.set)).cloned().collect(), cache.cleared)
         };
         let slot = s.raster.lock().unwrap_or_else(PoisonError::into_inner).clone();
-        let imgs = render_batch_by(&todo, &slot);
+        let (imgs, evaluated) = render_batch_from(&todo, &slot, &scenes);
+        scenes = evaluated;
         {
             let mut cache = s.cache.lock().unwrap_or_else(PoisonError::into_inner);
             // Cleared meanwhile (`forget_pictures`): these show a document put aside.
@@ -855,6 +870,10 @@ fn worker_loop(s: &Shared) {
             let mut q = s.queue.lock().unwrap_or_else(PoisonError::into_inner);
             for j in &jobs {
                 q.busy.remove(&j.key);
+            }
+            // Nothing more to draw: an idle worker holds no document's scene.
+            if q.urgent.is_empty() && q.prefetch.is_empty() {
+                scenes.clear();
             }
         }
         if let Some(n) = &s.notify {

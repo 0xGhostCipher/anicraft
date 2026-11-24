@@ -950,8 +950,8 @@ fn prepare(item: &DisplayItem, view: &Affine, surface: IRect, soft: bool, cut: b
             return;
         }
         // The bounds first, from every point: they place the coverage buffer.
-        if let Some(b) = pixel_bounds(&polys, surface) {
-            if cut {
+        if let Some((b, beyond)) = pixel_bounds_of(&polys, surface) {
+            if cut && beyond {
                 drop_unseen(&mut polys, surface);
             }
             out.push(Prepared { polys, rule, shader, bounds: b, clip, masks, group, layer: None, hairline: false });
@@ -994,6 +994,12 @@ fn prepare(item: &DisplayItem, view: &Affine, surface: IRect, soft: bool, cut: b
 }
 
 fn pixel_bounds(polys: &[Vec<Vec2>], surface: IRect) -> Option<IRect> {
+    pixel_bounds_of(polys, surface).map(|(b, _)| b)
+}
+
+/// The pixels of `surface` that `polys` can touch, and whether they reach above, below or
+/// right of it (then some of their points may be [`unseen`]).
+fn pixel_bounds_of(polys: &[Vec<Vec2>], surface: IRect) -> Option<(IRect, bool)> {
     let mut r = Rect::EMPTY;
     for p in polys.iter().flatten() {
         r.include(*p);
@@ -1007,7 +1013,8 @@ fn pixel_bounds(polys: &[Vec<Vec2>], surface: IRect) -> Option<IRect> {
         x1: (r.max.x.ceil().min(surface.x1 as f32)) as i32,
         y1: (r.max.y.ceil().min(surface.y1 as f32)) as i32,
     };
-    (!b.is_empty()).then_some(b)
+    let beyond = r.min.y <= surface.y0 as f32 || r.max.y >= surface.y1 as f32 || r.max.x >= surface.x1 as f32;
+    (!b.is_empty()).then_some((b, beyond))
 }
 
 /// Composites coverage `cov` (over `b`) of `op` into the band whose first row is `band_y0`,
