@@ -60,6 +60,8 @@ pub struct Cache {
     /// `(ready, needed)` visible tiles this frame.
     pub ready: (usize, usize),
     pub canvas: Rect,
+    /// Device pixels per point when `canvas` was measured.
+    canvas_pixels_per_point: f32,
     /// The stage has been laid out once, so `canvas` is where it really was last frame.
     laid_out: bool,
     pub service: Option<RenderService>,
@@ -75,7 +77,7 @@ pub struct Cache {
 
 impl Default for Cache {
     fn default() -> Self {
-        Cache { tiles: Vec::new(), tick: 0, ms: 0.0, ready: (0, 0), canvas: Rect::from_min_size(Pos2::ZERO, vec2(800.0, 600.0)), laid_out: false, service: None, shown_state: None, gpu: Default::default(), drawn_by: None, pattern: None }
+        Cache { tiles: Vec::new(), tick: 0, ms: 0.0, ready: (0, 0), canvas: Rect::from_min_size(Pos2::ZERO, vec2(800.0, 600.0)), canvas_pixels_per_point: 1.0, laid_out: false, service: None, shown_state: None, gpu: Default::default(), drawn_by: None, pattern: None }
     }
 }
 
@@ -253,6 +255,8 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
     crate::shape_envelope::settle(app);
     crate::camera_tool::tick(app, ui.ctx(), now);
     note_left_out(app);
+    let ppp = ui.ctx().pixels_per_point();
+    let ppp_was = std::mem::replace(&mut app.stage_cache.canvas_pixels_per_point, ppp);
     let canvas_was = std::mem::replace(&mut app.stage_cache.canvas, canvas);
     let laid_out = std::mem::replace(&mut app.stage_cache.laid_out, true);
     // While a colour picker popup is open the stage is its eyedropper (ADR 0109): a click
@@ -261,7 +265,6 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
     let resp = ui.allocate_rect(canvas, if picker.is_some() { Sense::hover() } else { Sense::click_and_drag() });
     // The drawing surface: Ctrl+F6 lands here, and screen readers hear the tool in hand.
     crate::a11y::anchor(ui, crate::a11y::Region::Stage, canvas, &resp);
-    let ppp = ui.ctx().pixels_per_point();
     let show_edges = !app.s.aids.hide_edges;
     let size = vec2(app.s.doc.stage.width as f32, app.s.doc.stage.height as f32);
     // Still as fitted (nobody zoomed or panned since) but the canvas changed size: fit again, as
@@ -276,12 +279,15 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
     // Otherwise the artist chose this view, and a panel that grows or shrinks (the Timeline's
     // top edge, a dock, the rulers, the window) only covers or reveals the stage: the artwork
     // stays where it is on screen (#423). The pan is measured from the canvas centre, so it
-    // takes up the centre's move.
-    if laid_out && !app.view.fit && canvas_was != canvas && canvas_was.width() > 10.0 && canvas_was.height() > 10.0 {
-        app.view.pan += canvas_was.center() - canvas.center();
+    // takes up the centre's move, with both centres in this frame's points.
+    if laid_out && !app.view.fit && (canvas_was != canvas || ppp_was != ppp) && canvas_was.width() > 10.0 && canvas_was.height() > 10.0 {
+        app.view.pan += canvas_was.center().to_vec2() * (ppp_was / ppp) - canvas.center().to_vec2();
     }
     if app.view.fit && canvas.width() > 10.0 && canvas.height() > 10.0 {
-        app.view.zoom = ((canvas.width() - 64.0) / size.x).min((canvas.height() - 64.0) / size.y).clamp(0.05, 64.0);
+        let width = (canvas.width() - 64.0).max(1.0);
+        let height = (canvas.height() - 64.0).max(1.0);
+        // Fitting may need to go below the minimum manual zoom to show the whole stage.
+        app.view.zoom = (width / size.x).min(height / size.y).min(64.0 / ppp);
         app.view.pan = egui::Vec2::ZERO;
         app.view.fit = false;
         app.view.fitted = Some((vec2(canvas.width(), canvas.height()), app.view.zoom));
@@ -292,8 +298,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
         let (zoom_delta, scroll) = ui.input(|i| (i.zoom_delta(), i.smooth_scroll_delta));
         if let Some(p) = resp.hover_pos() {
             if (zoom_delta - 1.0).abs() > 1e-4 {
-                let z = app.view.zoom * zoom_delta;
-                app.zoom_about(canvas, p, z);
+                app.zoom_by(canvas, p, zoom_delta, ppp);
             } else if app.tool == Tool::Camera && scroll.y != 0.0 {
                 // With the Camera tool the wheel zooms the camera, not the view.
                 crate::camera_tool::wheel(app, scroll.y, now);
@@ -313,18 +318,16 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
         });
         let c = canvas.center();
         if zin {
-            let z = app.view.zoom * 1.5;
-            app.zoom_about(canvas, c, z);
+            app.zoom_by(canvas, c, 1.5, ppp);
         }
         if zout {
-            let z = app.view.zoom / 1.5;
-            app.zoom_about(canvas, c, z);
+            app.zoom_by(canvas, c, 1.0 / 1.5, ppp);
         }
         if fit {
             app.view.fit = true;
         }
         if one {
-            app.zoom_about(canvas, c, 1.0);
+            app.zoom_about(canvas, c, 1.0 / ppp, ppp);
         }
     }
 
@@ -870,8 +873,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                     app.run("element.pick", json!({"x": sp.x, "y": sp.y, "add": shift}));
                 }
                 Tool::Zoom => {
-                    let z = if alt { app.view.zoom / 2.0 } else { app.view.zoom * 2.0 };
-                    app.zoom_about(canvas, p, z);
+                    app.zoom_by(canvas, p, if alt { 0.5 } else { 2.0 }, ppp);
                 }
                 _ => {}
             }
@@ -1172,7 +1174,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
     if preview {
         // The movie's picture: stage-space overlays don't belong on it.
         painter.text(stage_rect.left_top() + vec2(0.0, -6.0), egui::Align2::LEFT_BOTTOM, tr!("Camera view"), crate::theme::font(crate::theme::Type::Caption), T.text_dim);
-        let badge = format!("{:.0}%", st_zoom * 100.0);
+        let badge = format!("{:.0}%", st_zoom * ppp * 100.0);
         painter.text(canvas.right_bottom() + vec2(-10.0, -8.0), egui::Align2::RIGHT_BOTTOM, badge, crate::theme::font(crate::theme::Type::Data), T.text_dim);
         crate::a11y::surface(ui, &resp, &tr!("Stage · previewing through the camera · {tool} tool · frame {frame}", tool = crate::i18n::t(app.tool.label()), frame = app.s.frame + 1));
         return;
@@ -1490,7 +1492,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
     }
 
     // zoom badge
-    let badge = format!("{:.0}%", st_zoom * 100.0);
+    let badge = format!("{:.0}%", st_zoom * ppp * 100.0);
     painter.text(canvas.right_bottom() + vec2(-10.0, -8.0), egui::Align2::RIGHT_BOTTOM, badge, crate::theme::font(crate::theme::Type::Data), T.text_dim);
     // Last, so the focus ring is drawn over the artwork.
     let selected = app.s.selection.len();

@@ -406,7 +406,8 @@ pub fn edit_bar(app: &mut App, ui: &mut egui::Ui) {
         let layer = app.s.active_layer().map_or("—".to_string(), |l| l.name.clone());
         ui.label(text(Type::Body, layer).color(T.text_dim));
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            let z = app.view.zoom;
+            let ppp = ui.ctx().pixels_per_point();
+            let z = app.view.zoom * ppp;
             let canvas = app.stage_cache.canvas;
             // The presets arrow alone opens the menu, as in Animate: clicking the text never does.
             // The arrow is an icon drawn over a blank button (the fonts may lack an arrow glyph).
@@ -418,7 +419,7 @@ pub fn edit_bar(app: &mut App, ui: &mut egui::Ui) {
                 for pct in [25.0f32, 50.0, 100.0, 200.0, 400.0, 800.0] {
                     if ui.selectable_label((z * 100.0 - pct).abs() < 0.5, text(Type::Data, format!("{pct:>4.0}%"))).clicked() {
                         ui.close();
-                        app.zoom_about(canvas, canvas.center(), pct / 100.0);
+                        app.zoom_about(canvas, canvas.center(), pct / (100.0 * ppp), ppp);
                     }
                 }
             });
@@ -441,7 +442,7 @@ pub fn edit_bar(app: &mut App, ui: &mut egui::Ui) {
                 if let Ok(pct) = typed.parse::<f32>()
                     && pct.is_finite()
                 {
-                    app.zoom_about(canvas, canvas.center(), pct.clamp(5.0, 6400.0) / 100.0);
+                    app.zoom_about(canvas, canvas.center(), pct / (100.0 * ppp), ppp);
                 }
                 app.zoom_text = None;
                 if enter {
