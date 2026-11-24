@@ -204,15 +204,11 @@ impl Import {
     /// The import of `source`, as the disk has it now.
     pub fn of(source: &std::path::Path) -> Import {
         let package = import_package(source);
-        // "." or "walk/sub/.." has no name of its own, and nor does the empty folder a bare
-        // "walk.xfl" is in: resolve it, or the suggestion would land inside the package as
-        // "animation.anicraft".
+        // "." or "walk/sub/.." has no name of its own: resolve it, or the suggestion would land
+        // inside the package as "animation.anicraft".
         let package = match package.file_name() {
             Some(_) => package,
-            None => {
-                let here = if package.as_os_str().is_empty() { std::path::Path::new(".") } else { package.as_path() };
-                std::fs::canonicalize(here).unwrap_or(package)
-            }
+            None => std::fs::canonicalize(&package).unwrap_or(package),
         };
         // A folder's whole name ("walk.v2" stays "walk.v2"); a file's without its extension.
         let name = if crate::vfs::is_dir(&package) { package.file_name() } else { package.file_stem() };
@@ -230,6 +226,8 @@ pub fn import_package(path: &std::path::Path) -> PathBuf {
         && path.extension().is_some_and(|e| e.eq_ignore_ascii_case("xfl"))
         && path.parent().is_some_and(|d| crate::vfs::is_file(&d.join("DOMDocument.xml")));
     match path.parent() {
+        // A bare "walk.xfl" is in the current folder: "." resolves, an empty path doesn't.
+        Some(folder) if xfl_file && folder.as_os_str().is_empty() => PathBuf::from("."),
         Some(folder) if xfl_file => folder.to_path_buf(),
         _ => path.to_path_buf(),
     }
