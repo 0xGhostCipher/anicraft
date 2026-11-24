@@ -91,6 +91,10 @@ These come across, but look a little different from Animate, and the report coun
 
 * gradient and bitmap strokes (drawn in one colour);
 * ragged, stipple and hatched strokes (drawn solid);
+* strokes of a kind AniCraft doesn't know (drawn solid, with their weight and colour): a newer
+  version's brush or line style comes across as a plain line, not as nothing;
+* fills with a gap in their outline (closed straight across). If an area looks filled in that
+  wasn't, this line says which import to look at;
 * reverse loop modes (played forward) and extra spins on classic tweens (turned the shortest
   way);
 * in text: justified text (drawn left-aligned), first-line indents, superscript and subscript,
@@ -112,6 +116,10 @@ These come across, but look a little different from Animate, and the report coun
 * **Video playback.** Videos other than Screen Video (Sorenson H.263, On2 VP6, H.264, linked
   MPEG-4 files) are named in the report, not shown; their instances are left out.
 * Frame comments, and linkage classes on bitmaps and sounds.
+* **Parts of a drawing AniCraft can't read**: "outline parts AniCraft couldn't read" (the rest
+  of that outline is drawn), fills of a kind AniCraft doesn't know, and lines or fills in a
+  style their shape doesn't have. If lines are missing after opening a file, these counts say
+  why; please include the report when you tell us.
 * Camera layers and bone armatures don't come across as a camera or an armature.
 * **Layer parenting** doesn't come across: parented layers open as plain layers. Parent them
   again in the timeline's [parenting view](timeline.md#layer-parenting).
