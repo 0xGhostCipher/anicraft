@@ -276,7 +276,7 @@ not this table, says what matters most.
 | Motion presets: save a tween, apply it elsewhere | **missing** | P-041. |
 | Copy and paste motion; paste properties | **missing** | P-041. |
 | 3D properties in a motion tween | **missing** | With the 3D tools (P-044). |
-| Shape tweens | **done** | Open: strokes that should follow their fills (outside PR [#238](https://github.com/storytold/anicraft/issues/238), P-011). |
+| Shape tweens | **done** | A raw shape's outline morphs with its fill, whatever the number of sides, and rides a motion guide with the fill it edges (an edge two fills share goes with the lower one). |
 | Shape hints | **done** | [ADR 0023](adr/0023-shape-hints.md). [#82](https://github.com/storytold/anicraft/issues/82) can close. Missing: hints inside a symbol edited in place. |
 | Shape tween blend (distributive, angular) | **partial** | One blend; no choice?. |
 | Keep area while tweening | **ours** | [ADR 0115](adr/0115-pen-parity-and-keep-area-tweens.md). |
