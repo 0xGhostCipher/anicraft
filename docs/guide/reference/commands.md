@@ -1,6 +1,6 @@
 # Command reference
 
-Everything you can do in AniCraft is a command: the menus, the shortcuts, the command palette (**Ctrl+K**, macOS **⌘K**), `anicraft-cli` and AI assistants over MCP all run the same 399 commands, listed here by menu. The id is what scripts and [working headless](../working-headless.md) use; the parameters are what a command takes as JSON. Commands that change the document are one undo step each. Your own shortcuts (**Help › Keyboard Shortcuts**) replace the defaults shown here; see the [shortcut reference](shortcuts.md).
+Everything you can do in AniCraft is a command: the menus, the shortcuts, the command palette (**Ctrl+K**, macOS **⌘K**), `anicraft-cli` and AI assistants over MCP all run the same 400 commands, listed here by menu. The id is what scripts and [working headless](../working-headless.md) use; the parameters are what a command takes as JSON. Commands that change the document are one undo step each. Your own shortcuts (**Help › Keyboard Shortcuts**) replace the defaults shown here; see the [shortcut reference](shortcuts.md).
 
 This page is generated from the command registry, so it always matches the version of AniCraft it came with.
 
@@ -236,6 +236,8 @@ This page is generated from the command registry, so it always matches the versi
   Parameters: `{} puts the selected symbol instances' transformation point back at the centre (none kept: tools use the centre of the box, tweens the registration point) → {reset}`
 - **Remove Transform** `modify.remove_transform` · Modify › Transform · **Ctrl+Shift+Z** (macOS **⇧⌘Z**) · changes the document
   Parameters: `{}`
+- **Distribute to Layers** `modify.distribute_to_layers` · Modify › Timeline · **Ctrl+Shift+D** (macOS **⇧⌘D**) · changes the document
+  Parameters: `{} each selected object (symbol instance, group, drawing object, text, bitmap) on the keyframe at the playhead moves to a new layer of its own just above its layer, named after its symbol when it is an instance, for the same frames. Each new layer keeps its layer's settings (camera depth, attachment, the layer it follows). Raw shapes stay where they are; refused for a tweened keyframe or the end of a tween, an instance that goes on from the keyframe before or after, a layer below full opacity, and mask, guide and other special layers → {layers: [new layer ids], left_raw}`
 - **Left** `align.left` · Modify › Align · **Ctrl+Alt+1** (macOS **⌥⌘1**) · changes the document
   Parameters: `{to_stage?}`
 - **Horizontal Center** `align.hcenter` · Modify › Align · **Ctrl+Alt+2** (macOS **⌥⌘2**) · changes the document

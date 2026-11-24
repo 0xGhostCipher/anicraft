@@ -237,7 +237,7 @@ not this table, says what matters most.
 | Span length by dragging | **done** | [ADR 0083](adr/0083-motion-editor-and-timeline-retiming.md). |
 | Convert to Keyframes | **done** | [#272](https://github.com/storytold/anicraft/issues/272). |
 | Reverse Frames | **missing** | P-021. |
-| Distribute to Layers, Distribute to Keyframes | **missing** | P-021. |
+| Distribute to Layers, Distribute to Keyframes | **partial** | Distribute to Layers: `modify.distribute_to_layers` (#517; objects, not raw shapes or tweened keyframes). Missing: Distribute to Keyframes (P-021). |
 | Convert a tween to frame-by-frame animation | **missing** | P-021. Bake to Keyframes exists for data bindings only. |
 | Frame labels | **partial** | Names only. Missing: comment and anchor labels (comments in Animate files are dropped and reported) (P-021). |
 | Onion skin: markers, colours, outlines, per layer | **done** | [ADR 0047](adr/0047-onion-skin-and-edit-multiple-frames.md), [ADR 0061](adr/0061-timeline-polish.md). |

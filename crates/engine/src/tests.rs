@@ -299,6 +299,54 @@ fn align_and_distribute() {
     assert!((s.selection_bounds().max.x - s.doc.stage.width as f32).abs() < 1e-3);
 }
 
+/// #517: Distribute to Layers puts each selected object on a new layer of its own above its
+/// layer, named after its symbol, stacked as they were; raw shapes stay.
+#[test]
+fn distribute_to_layers_gives_each_object_its_own_layer() {
+    let mut s = Session::default();
+    let home = s.layer;
+    for (name, x) in [("Back", 10), ("Front", 200)] {
+        run(&mut s, "draw.rect", json!({"x": x, "y": 10, "w": 50, "h": 50, "stroke": null, "object": true}));
+        run(&mut s, "modify.convert_to_symbol", json!({"name": name}));
+        run(&mut s, "edit.deselect", json!({}));
+    }
+    run(&mut s, "draw.rect", json!({"x": 400, "y": 10, "w": 50, "h": 50, "stroke": null, "object": false}));
+    run(&mut s, "edit.select_all", json!({}));
+    let layers_before = s.timeline().layers.len();
+    let v = run(&mut s, "modify.distribute_to_layers", json!({}));
+    assert_eq!(v["left_raw"].as_u64(), Some(1), "{v}");
+    let tl = s.timeline();
+    assert_eq!(tl.layers.len(), layers_before + 2);
+    let names: Vec<&str> = tl.layers.iter().map(|l| l.name.as_str()).collect();
+    let at = |n: &str| names.iter().position(|x| *x == n).unwrap_or_else(|| panic!("a layer named {n}: {names:?}"));
+    let src = tl.layers.iter().position(|l| l.id == home).expect("the old layer");
+    assert!(at("Front") < at("Back") && at("Back") < src, "the front instance on the top layer, both above their old layer: {names:?}");
+    let left = tl.layer(home).and_then(|l| l.keyframe_at(0)).map(|k| k.elements.len());
+    assert_eq!(left, Some(1), "only the raw square stays");
+    run(&mut s, "edit.undo", json!({}));
+    assert_eq!(s.timeline().layers.len(), layers_before, "one undo step");
+
+    // A layer's camera depth goes with it; a faded layer and the end of a tween are refused.
+    run(&mut s, "layer.set_depth", json!({"layer": home.0, "depth": 40}));
+    run(&mut s, "edit.select_all", json!({}));
+    let v = run(&mut s, "modify.distribute_to_layers", json!({}));
+    let first = anicraft_doc::LayerId(v["layers"][0].as_u64().unwrap_or(0));
+    assert_eq!(s.timeline().layer(first).map(|l| l.depth), Some(40.0));
+    run(&mut s, "edit.undo", json!({}));
+    run(&mut s, "layer.set_opacity", json!({"layer": home.0, "opacity": 50}));
+    run(&mut s, "edit.select_all", json!({}));
+    let e = s.execute("modify.distribute_to_layers", &json!({})).expect_err("a faded layer");
+    assert!(e.to_string().contains("opacity"), "{e}");
+    run(&mut s, "layer.set_opacity", json!({"layer": home.0, "opacity": 100}));
+    run(&mut s, "timeline.insert_frame", json!({"layer": home.0, "frame": 0, "count": 9}));
+    run(&mut s, "timeline.insert_keyframe", json!({"layer": home.0, "frame": 10}));
+    run(&mut s, "timeline.create_tween", json!({"layer": home.0, "frame": 0}));
+    run(&mut s, "timeline.goto", json!({"frame": 10}));
+    run(&mut s, "edit.select_all", json!({}));
+    let e = s.execute("modify.distribute_to_layers", &json!({})).expect_err("the end of a tween");
+    assert!(e.to_string().contains("tweened"), "{e}");
+}
+
 /// #301, #297: a raw rectangle (one fill and one stroke per side, ADR 0042) aligns, distributes,
 /// turns and scales as one shape, so its outline stays on its fill.
 #[test]
