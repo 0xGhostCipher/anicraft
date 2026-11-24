@@ -109,7 +109,7 @@ impl Panel {
             Panel::Timeline | Panel::MotionEditor => [900.0, 320.0],
             Panel::Actions => [460.0, 520.0],
             Panel::Output => [520.0, 300.0],
-            Panel::Align => [300.0, 140.0],
+            Panel::Align => [300.0, 184.0],
             Panel::Swatches => [300.0, 300.0],
             Panel::LayerDepth => [440.0, 260.0],
             // Two columns of tools.
@@ -740,7 +740,7 @@ pub fn built_in(key: &str) -> Option<Layout> {
         // Today's layout: Properties, Align, Library with the Movie Explorer, History on the
         // right; the timeline and the Motion Editor below the stage.
         "essentials" => Layout {
-            right: zone(vec![Group::of(&[Panel::Properties], 6.4), Group::of(&[Panel::Align], 1.3), Group::of(&[Panel::Library, Panel::MovieExplorer], 3.2), Group::of(&[Panel::History], 1.4)], None),
+            right: zone(vec![Group::of(&[Panel::Properties], 5.8), Group::of(&[Panel::Align], 1.9), Group::of(&[Panel::Library, Panel::MovieExplorer], 3.2), Group::of(&[Panel::History], 1.4)], None),
             bottom: zone(vec![Group::of(&[Panel::Timeline, Panel::MotionEditor], 1.0)], None),
             ..Layout::default()
         },
