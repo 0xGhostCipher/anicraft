@@ -2021,7 +2021,10 @@ fn header(app: &mut App, ui: &mut egui::Ui) {
             ui.spacing_mut().interact_size.x = digits as f32 * face.size * 0.62 + 2.0 * FIELD_PAD;
             ui.style_mut().override_font_id = Some(face);
             ui.visuals_mut().override_text_color = Some(T.accent_text);
-            ui.add(egui::DragValue::new(&mut go).range(1..=app.s.frame_count().max(1)).speed(0.25))
+            // A playhead on an empty cell past the last frame (a click there, #567) is shown as
+            // it is: clamping it into the range would count as an edit and pull the playhead back,
+            // dropping the cell's selection.
+            ui.add(egui::DragValue::new(&mut go).range(1..=app.s.frame_count().max(1)).clamp_existing_to_range(false).speed(0.25))
         })
         .inner
         .named(tr!("Current frame"))
@@ -2501,6 +2504,25 @@ mod tests {
         frame(&ctx, &mut app, vec![button(at(6), false, Modifiers::NONE)], Modifiers::NONE);
         settle(&ctx, &mut app);
         assert_eq!((app.s.frame, app.frame_sel.map(|s| s.frames())), (6, Some((3, 6))), "and stays when let go");
+    }
+
+    /// #567: a click on an empty cell, past the last frame a layer has, selects that cell and
+    /// shows it selected, as a click on a frame does.
+    #[test]
+    fn a_click_on_an_empty_cell_selects_it() {
+        let ctx = egui::Context::default();
+        let mut app = App::with_context(&ctx, anicraft_engine::Session::default(), Some(std::path::PathBuf::from("unused.png")));
+        app.show_panel(crate::dock::Panel::Timeline);
+        let layer = app.s.layer;
+        app.run("timeline.insert_frame", json!({"layer": layer.0, "frame": 0, "count": 7}));
+        app.s.set_frame(0);
+        settle(&ctx, &mut app);
+        let Some((cells, x0, cell_w, scroll)) = ctx.data(|d| d.get_temp::<(egui::Rect, f32, f32, f32)>(egui::Id::new("tl_geometry"))) else { panic!("the timeline drew") };
+        let at = |f: u32| pos2(x0 + (f as f32 - scroll) * cell_w + cell_w * 0.5, cells.center().y);
+        let past = app.s.frame_count() + 4;
+        click(&ctx, &mut app, at(past), Modifiers::NONE);
+        assert_eq!(app.frame_sel.map(|s| s.frames()), Some((past, past)), "the empty cell is selected");
+        assert_eq!(app.s.frame, past, "and the playhead is on it");
     }
 
     #[test]
