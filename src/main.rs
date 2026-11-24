@@ -529,3 +529,5 @@ mod long_stroke_tests;
 mod ink;
 #[cfg(test)]
 mod zoom_tests;
+#[cfg(test)]
+mod stage_budget_tests;
