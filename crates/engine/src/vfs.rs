@@ -209,6 +209,7 @@ pub fn read(path: &Path) -> io::Result<Vec<u8>> {
 /// Reads at most `limit` bytes of the file, and one more when it holds them: a result
 /// longer than `limit` says the file is over it, without the rest being read.
 pub fn read_bounded(path: &Path, limit: u64) -> io::Result<Vec<u8>> {
+    check(path, Access::Read)?;
     let limit = limit.saturating_add(1);
     match mem(|m| m.read_at_most(path, limit)) {
         Some(r) => r,
