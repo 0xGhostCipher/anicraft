@@ -63,7 +63,7 @@ pub fn specs() -> Vec<CommandSpec> {
             true,
             move_layer_to,
         ),
-        c("layer.toggle_mask", "Mask", "Modify/Timeline", None, "{layer?} turns the layer into a mask over the layer below, or back into a normal layer. A new mask is locked, as in Animate: unlocked, its edge shows on the stage in the layer colour, to pick and reshape it", true, toggle_mask),
+        c("layer.toggle_mask", "Mask", "Modify/Timeline", None, "{layer?} turns the layer into a mask over the layer below, or back into a normal layer. A new mask is locked: unlocked, its edge shows on the stage in the layer colour, to pick and reshape it", true, toggle_mask),
         c("layer.set_type", "Layer Type", "", None, "{type: normal|mask|masked|guide|guided, layer?}", true, set_layer_type),
         c("layer.add_motion_guide", "Add Classic Motion Guide", "Insert/Timeline", None, "{layer?}", true, add_motion_guide),
     ]

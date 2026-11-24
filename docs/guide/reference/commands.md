@@ -165,7 +165,7 @@ This page is generated from the command registry, so it always matches the versi
 - **Move Layer Down** `layer.move_down` · Modify › Timeline · changes the document
   Parameters: `{layer?}`
 - **Mask** `layer.toggle_mask` · Modify › Timeline · changes the document
-  Parameters: `{layer?} turns the layer into a mask over the layer below, or back into a normal layer. A new mask is locked, as in Animate: unlocked, its edge shows on the stage in the layer colour, to pick and reshape it`
+  Parameters: `{layer?} turns the layer into a mask over the layer below, or back into a normal layer. A new mask is locked: unlocked, its edge shows on the stage in the layer colour, to pick and reshape it`
 - **Layer Properties** `layer.set_properties` · Modify › Timeline · changes the document
   Parameters: `{layer?, name?, type?: normal|mask|masked|guide|guided, mask?: coverage|alpha|luminance (a mask layer's mask type), color?, outline?: bool (view as outlines), height?: 100|200|300, opacity?: 0..100 (percent), visible?, locked?, onion?} sets several at once, as one undo step; answers with the layer's properties`
 - **Remove Camera** `camera.remove` · Modify › Timeline · changes the document
