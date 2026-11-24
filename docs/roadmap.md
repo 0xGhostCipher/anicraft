@@ -134,7 +134,7 @@ with `gh pr list --state open`). The states:
 * **declined**: we won't take it, and why.
 * **held**: we can't decide yet, and what we are waiting for.
 
-As of 2026-11-20 (27 open):
+As of 2026-11-24 (46 open):
 
 | PR | What | Id | State | What it still needs, or what happened |
 |---|---|---|---|---|
@@ -165,6 +165,25 @@ As of 2026-11-20 (27 open):
 | [#145](https://github.com/storytold/anicraft/issues/145) | Reject signs in XML numeric character references | (none) | **held** | XML reading moved to `craft-xml`, and the PR's diff is now an unrelated line in the Lottie writer. Waiting for its author to retitle it or close it. |
 | [#390](https://github.com/storytold/anicraft/issues/390) | Move every craft-libs pin to one commit | T-01 | **planned** (team) | Merges when the team picks the `rev`; a `rev` move is its own PR. |
 | [#225](https://github.com/storytold/anicraft/issues/225) | Lock workflow actions through a lock file | T-02 | **planned** (team) | Changes requested: the lock records nothing for reusable-workflow callers, so a lint rule was switched off too widely. |
+| [#594](https://github.com/storytold/anicraft/issues/594) | Closing the window no longer crashes on macOS (egui and eframe 0.37) | P-001 | **planned** | Diagnosis checked: the abort is AccessKit's macOS adapter putting the view's class back under key-value observing, fixed upstream (AccessKit/accesskit#835, in accesskit_macos 0.27.2), not the tab close flow of [ADR 0112](adr/0112-several-documents-open-at-once.md) or the GPU recovery of [ADR 0092](adr/0092-surviving-gpu-failures-and-motion-editor-filter-tracks.md). Needs `cargo deny` on the new crates, every other open shell change ported to egui 0.37's names, and a look at the taller text fields. |
+| [#596](https://github.com/storytold/anicraft/issues/596) | An imported Animate file keeps its name on its tab and in the title | P-006 | **planned** | Needs its changelog conflict resolved and the path it resolves to go through `engine::vfs`. |
+| [#590](https://github.com/storytold/anicraft/issues/590) | Stage zoom measured in device pixels ([#565](https://github.com/storytold/anicraft/issues/565)) | P-029 | **planned** | Needs a rebase over the stage changes on `main`. |
+| [#588](https://github.com/storytold/anicraft/issues/588) | Hide Edges without clearing the selection ([#298](https://github.com/storytold/anicraft/issues/298)) | P-017 | **planned** | The checked state for screen readers belongs to every toggling menu item, not this one alone. |
+| [#587](https://github.com/storytold/anicraft/issues/587) | Optionally fit the stage to an imported SVG ([#155](https://github.com/storytold/anicraft/issues/155)) | P-038 | **planned** | The command parameter only; a choice in the interface stays in P-038. |
+| [#584](https://github.com/storytold/anicraft/issues/584) | View only the active layer's row ([#529](https://github.com/storytold/anicraft/issues/529)) | P-050 | **planned** | Needs a rebase over the timeline header changes; several picked layers stay for later. |
+| [#583](https://github.com/storytold/anicraft/issues/583) | Next and Previous Frame stop at the ends ([#561](https://github.com/storytold/anicraft/issues/561)) | P-009 | **planned** | Ready. |
+| [#582](https://github.com/storytold/anicraft/issues/582) | A press selects at once and the playhead follows a drag ([#561](https://github.com/storytold/anicraft/issues/561)) | P-009 | **planned** | Ready. |
+| [#581](https://github.com/storytold/anicraft/issues/581) | PNG frames and sequences can export transparent ([#536](https://github.com/storytold/anicraft/issues/536)) | P-036 | **planned** | Needs a rebase over `cmds_file.rs`. |
+| [#580](https://github.com/storytold/anicraft/issues/580) | The marquee takes the objects it touches ([#522](https://github.com/storytold/anicraft/issues/522)) | P-017 | **planned** | Ready. |
+| [#579](https://github.com/storytold/anicraft/issues/579) | Distribute to Layers ([#517](https://github.com/storytold/anicraft/issues/517)) | P-021 | **planned** | Ready; raw shapes and Distribute to Keyframes stay in P-021. |
+| [#578](https://github.com/storytold/anicraft/issues/578) | Match Size and Space Evenly in Align ([#566](https://github.com/storytold/anicraft/issues/566)) | P-017 | **planned** | Ready; meets [#574](https://github.com/storytold/anicraft/issues/574) in `selected_units`. |
+| [#577](https://github.com/storytold/anicraft/issues/577) | Each filter in Properties is a card that folds ([#533](https://github.com/storytold/anicraft/issues/533), [#534](https://github.com/storytold/anicraft/issues/534)) | P-010 | **planned** | Ready. |
+| [#576](https://github.com/storytold/anicraft/issues/576) | Raw shapes moved from Properties merge when deselected ([#571](https://github.com/storytold/anicraft/issues/571)) | P-010 | **planned** | Checked against [ADR 0122](adr/0122-a-moved-raw-selection-merges-when-it-is-deselected.md): it floats the shapes as a stage move does. |
+| [#575](https://github.com/storytold/anicraft/issues/575) | To Stage inside a symbol aligns to the symbol's own space ([#568](https://github.com/storytold/anicraft/issues/568)) | P-017 | **planned** | A group opened inside a symbol must count as inside the symbol too. |
+| [#574](https://github.com/storytold/anicraft/issues/574) | Align and distribute line up outlines, not stroke edges ([#569](https://github.com/storytold/anicraft/issues/569)) | P-017 | **planned** | Ready. |
+| [#573](https://github.com/storytold/anicraft/issues/573) | A click on an empty cell past a layer's frames selects it ([#567](https://github.com/storytold/anicraft/issues/567)) | P-009 | **planned** | Ready. |
+| [#572](https://github.com/storytold/anicraft/issues/572) | A swatch picked closes the colour picker ([#570](https://github.com/storytold/anicraft/issues/570)) | P-025 | **planned** | Ready. |
+| [#562](https://github.com/storytold/anicraft/issues/562) | A line to a fill from Shape properties ([#530](https://github.com/storytold/anicraft/issues/530)) | P-020 | **planned** | `main` has the command (Modify › Shape › Convert Lines to Fills, [ADR 0109](adr/0109-shape-commands-picker-eyedropper-and-transformation-origins.md)); this adds the button where the reference app has one. |
 
 ## Feature requests and where they are
 
