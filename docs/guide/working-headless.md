@@ -21,13 +21,16 @@ On macOS, press ⌘ where this guide says Ctrl, and ⌥ where it says Alt.
 Run it with no arguments, or with `--help`, to see every subcommand. `anicraft-cli --version`
 prints the version.
 
-Two rules hold everywhere:
+Three rules hold everywhere:
 
 * Subcommands that open a document accept a `.anicraft` file, an Animate `.fla` or `.xfl`
   file, an XFL folder, or `--sample` for the built-in sample animation. See
   [Converting Animate files](#converting-animate-files) to save an import as `.anicraft`.
 * **Frame flags on the command line are 1-based**, as on the timeline: `--frame 1` is the first
   frame. Frame numbers inside JSON params are 0-based, as everywhere in the engine.
+* **An option a subcommand doesn't know is an error**, with exit code 2 and the subcommand's
+  usage, before anything is opened or written. A mistyped `--frmae 12` never renders frame 1
+  as if you had asked for it.
 
 ## Rendering
 

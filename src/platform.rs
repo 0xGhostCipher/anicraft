@@ -1252,12 +1252,17 @@ mod tests {
         assert!(reads_file("file.open") && reads_file("file.import") && !reads_file("file.save"));
     }
 
+    /// The pickers show a sound exactly when the importer reads it: a name it reads but the
+    /// picker hides (`.wave` and `.oga` were) can't be chosen, and one it shows but can't read
+    /// fails after the choice.
     #[test]
     fn import_filters_include_supported_sound_aliases() {
         for cmd in ["file.import", "file.import_to_library"] {
             let (_, extensions) = filters(cmd);
-            assert!(extensions.contains(&"wave"), "{cmd} should accept .wave");
-            assert!(extensions.contains(&"oga"), "{cmd} should accept .oga");
+            for ext in ["wav", "wave", "ogg", "oga", "vorbis", "mp3", "aif", "flac", "m4a"] {
+                let read = anicraft_engine::cmds_sound::is_sound(Path::new(&format!("take.{ext}")));
+                assert_eq!(extensions.contains(&ext), read, "{cmd} and .{ext}");
+            }
         }
     }
 
