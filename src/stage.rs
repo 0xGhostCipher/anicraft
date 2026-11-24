@@ -262,6 +262,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
     // The drawing surface: Ctrl+F6 lands here, and screen readers hear the tool in hand.
     crate::a11y::anchor(ui, crate::a11y::Region::Stage, canvas, &resp);
     let ppp = ui.ctx().pixels_per_point();
+    let show_edges = !app.s.aids.hide_edges;
     let size = vec2(app.s.doc.stage.width as f32, app.s.doc.stage.height as f32);
     // Still as fitted (nobody zoomed or panned since) but the canvas changed size: fit again, as
     // Fit in Window stays fitted when the window or the interface scale changes.
@@ -1143,7 +1144,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
 
         // While a background render catches up with a drag, outline where the selection is now,
         // so the artwork never seems to lag the pointer.
-        if ready < keys.len() && !preview && matches!(app.drag, Drag::Move { .. } | Drag::SnapMove { .. } | Drag::Transform { .. } | Drag::Bend { .. } | Drag::RawPoint { .. } | Drag::RawHandle { .. }) {
+        if show_edges && ready < keys.len() && !preview && matches!(app.drag, Drag::Move { .. } | Drag::SnapMove { .. } | Drag::Transform { .. } | Drag::Bend { .. } | Drag::RawPoint { .. } | Drag::RawHandle { .. }) {
             let to_px = Affine::translate(origin.x, origin.y).mul(&Affine::scale(zoom, zoom));
             let dl = app.s.display_list();
             let stroke = Stroke::new(1.5, T.selection);
@@ -1198,7 +1199,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
     crate::warp_tool::draw(app, &painter, xf);
     let sel_stroke = Stroke::new(1.0, T.selection);
     let raw = raw_ids(app);
-    if app.tool == Tool::Select && app.drag == Drag::None
+    if show_edges && app.tool == Tool::Select && app.drag == Drag::None
         && !multi
         && !preview
         && app.palette.is_none()
@@ -1217,7 +1218,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
     let enveloped = crate::shape_envelope::shown(app).is_some();
     // Selected raw fills and strokes (ADRs 0031, 0041) show an
     // Animate-style stipple overlay instead of a bounding box.
-    if app.tool == Tool::Select && !preview {
+    if show_edges && app.tool == Tool::Select && !preview {
         let gap = dot_gap_points(ppp);
         let to_px = Affine::translate(origin.x, origin.y)
             .mul(&Affine::scale(zoom, zoom));
@@ -1318,7 +1319,8 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
         crate::onion::stage_badge(app, &painter, canvas);
     }
     // Every selected element, on whichever layer it is (ADR 0044).
-    for (layer, e) in app.s.selected_elements() {
+    let marked = if show_edges { app.s.selected_elements() } else { Vec::new() };
+    for (layer, e) in marked {
         let id = e.id;
         let b = app.s.element_bounds_on(layer, id);
         if b.is_empty() {
@@ -5516,5 +5518,31 @@ mod pointer_tests {
         }
         // Two separate clicks stay two clicks: the fill alone.
         assert_eq!(double_click(0.7).s.selection.len(), 1);
+    }
+}
+
+#[cfg(test)]
+mod hide_edges_tests {
+    use super::*;
+
+    #[test]
+    fn hide_edges_removes_a_selection_box_and_keeps_transform_handles() {
+        let ctx = egui::Context::default();
+        let session = anicraft_engine::Session::default();
+        let mut app = App::with_context(&ctx, session, Some(std::path::PathBuf::from("unused.png")));
+        app.s.execute("draw.rect", &serde_json::json!({"x": 160, "y": 80, "w": 100, "h": 60})).unwrap();
+        app.tool = Tool::Rect;
+        let marks = |app: &mut App| {
+            let input = egui::RawInput { screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(1600.0, 940.0))), ..Default::default() };
+            let mut frame = ctx.run_ui(input, |ui| show(app, ui));
+            frame.textures_delta.clear();
+            frame.shapes.iter().filter(|s| matches!(&s.shape, egui::Shape::Rect(r) if r.stroke.color == T.selection)).count()
+        };
+        assert!(marks(&mut app) > 0, "a drawing tool shows the selection box before Hide Edges");
+        assert!(app.run("view.hide_edges", serde_json::json!({})).is_some());
+        assert_eq!(marks(&mut app), 0, "the box is hidden");
+        assert!(!app.s.selection.is_empty(), "the drawing is still selected");
+        app.tool = Tool::Transform;
+        assert!(marks(&mut app) > 0, "Free Transform still shows its handles");
     }
 }

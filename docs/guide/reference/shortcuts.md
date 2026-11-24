@@ -81,6 +81,7 @@ This page is generated from the editor's shortcut map, so it always matches the 
 |---|---|---|
 | Snapping › Snap to Objects | Ctrl+Shift+/, Ctrl+Shift+? | ⇧⌘/, ⇧⌘? |
 | Rulers | Ctrl+Alt+Shift+R | ⌥⇧⌘R |
+| Hide Edges | Ctrl+Shift+E | ⇧⌘E |
 | Grid › Show Grid | Ctrl+' | ⌘' |
 | Grid › Snap to Grid | Ctrl+Shift+' | ⇧⌘' |
 | Grid › Edit Grid… | Ctrl+Alt+G | ⌥⌘G |

@@ -100,6 +100,8 @@ This page is generated from the command registry, so it always matches the versi
   Parameters: ``{on?: bool} (default: toggle) dragged points and selections, and the points the Line, Rectangle, Oval, PolyStar and Pen tools draw, snap to points, lines and fill edges (while it is off, the `snap` params of element.translate, raw.move_point and draw.snap only snap to guides, the grid and pixels, as View › Guides, Grid and Snapping say)``
 - **Rulers** `view.rulers` · **Ctrl+Alt+Shift+R** (macOS **⌥⇧⌘R**)
   Parameters: `{on?: bool} (default: toggle) rulers along the stage's top and left edges, in stage pixels from its top-left corner; drag from one to make a guide`
+- **Hide Edges** `view.hide_edges` · **Ctrl+Shift+E** (macOS **⇧⌘E**)
+  Parameters: `{on?: bool} (default: toggle) the stage selection marks: artwork, selection and active tool handles are kept`
 - **Show Grid** `view.grid_show` · View › Grid · **Ctrl+'** (macOS **⌘'**)
   Parameters: `{on?: bool} (default: toggle) the grid on the stage (never in pictures or exports)`
 - **Snap to Grid** `view.grid_snap` · View › Grid · **Ctrl+Shift+'** (macOS **⇧⌘'**)
@@ -570,7 +572,7 @@ These commands have no menu item: the panels, the stage and the timeline use the
 - **Delete Guide** `view.guide_delete` · changes the document
   Parameters: ``{index} removes this scene's guide `index`; refused while guides are locked``
 - **Rulers, Grid and Guides** `view.aids`
-  Parameters: `{} whether the rulers, grid and guides show and snap, the grid's and guides' settings, and this scene's guides [{axis, at}, ..]`
+  Parameters: `{} whether the rulers, grid and guides show and snap, whether selection edges are hidden, the grid's and guides' settings, and this scene's guides [{axis, at}, ..]`
 - **Combine Objects** `modify.combine` · changes the document
   Parameters: `{op: union|intersect|punch|crop} combines the selected shapes on the active layer, bottom to top as they are stacked (ADR 0073). union: one drawing object of everything (a group of the merged pieces when they have more than one colour or keep lines); intersect: the area every one covers, in the topmost's fill and stroke; punch: the topmost's area cut out of each of the others; crop: each of the others cut to the topmost's area. Punch and crop remove the topmost. A result of one fill (or one line) is a drawing object, one of several is a group of raw shapes → {op, created}`
 - **List Library** `library.items`

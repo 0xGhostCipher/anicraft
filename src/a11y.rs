@@ -664,6 +664,24 @@ mod tests {
     }
 
     #[test]
+    fn hide_edges_menu_item_exposes_its_checked_state() {
+        use egui::accesskit::Toggled;
+        let (_, mut app, ctx) = tree(|_, _| {});
+        let checked = |app: &mut App| {
+            let mut output = ctx.run_ui(input(1.0), |ui| crate::menus::cmd_item(app, ui, "view.hide_edges"));
+            output.textures_delta.clear();
+            let tree = output.platform_output.accesskit_update.expect("AccessKit tree");
+            let item = tree.nodes.iter().map(|(_, node)| node).find(|node| node.label() == Some("Hide Edges")).expect("named Hide Edges item");
+            assert_eq!(item.role(), Role::MenuItemCheckBox);
+            assert!(item.keyboard_shortcut().is_some());
+            item.toggled()
+        };
+        assert_eq!(checked(&mut app), Some(Toggled::False));
+        app.run("view.hide_edges", serde_json::json!({}));
+        assert_eq!(checked(&mut app), Some(Toggled::True));
+    }
+
+    #[test]
     fn access_keys_take_the_first_free_letter() {
         let keys = crate::menus::access_keys(&["File", "Edit", "View", "Insert", "Modify", "Commands", "Control", "Window", "Help"]);
         let letters: String = keys.iter().map(|k| k.map_or('-', |(_, c)| c)).collect();

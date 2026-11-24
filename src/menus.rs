@@ -495,6 +495,7 @@ fn checked(app: &App, id: &str) -> Option<bool> {
         "draw.object_drawing" => Some(app.s.style.object_drawing),
         // Rulers, grid and guides (ADR 0076).
         "view.rulers" => Some(app.s.aids.rulers),
+        "view.hide_edges" => Some(app.s.aids.hide_edges),
         "view.grid_show" => Some(app.s.aids.show_grid),
         "view.grid_snap" => Some(app.s.aids.snap_grid),
         "view.guides_show" => Some(app.s.aids.show_guides),
@@ -520,6 +521,17 @@ fn item(app: &mut App, ui: &mut egui::Ui, spec: &CommandSpec) {
     // What this build can't do stays in its usual place, dimmed, saying why (the web build).
     let missing = platform::unavailable(spec.id);
     let r = ui.add_enabled(enabled(app, spec.id) && missing.is_none(), button);
+    if spec.id == "view.hide_edges" {
+        use egui::accesskit::{Role, Toggled};
+        ui.ctx().accesskit_node_builder(r.id, |node| {
+            node.set_role(Role::MenuItemCheckBox);
+            node.set_label(crate::i18n::t_cmd(spec.id, spec.label).to_string());
+            node.set_toggled(if app.s.aids.hide_edges { Toggled::True } else { Toggled::False });
+            if let Some(key) = app.keymap.primary(spec.id) {
+                node.set_keyboard_shortcut(platform::shortcut_label(key));
+            }
+        });
+    }
     let r = match missing {
         Some(why) => r.on_disabled_hover_text(crate::i18n::t(why)),
         None => r,
