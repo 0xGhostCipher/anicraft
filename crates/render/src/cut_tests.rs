@@ -64,7 +64,7 @@ fn drawing() -> DisplayList {
     blob.quad_to(Vec2::new(-600.0, 360.0), Vec2::new(100.0, 100.0));
     blob.close();
     let items = vec![item(blob, Paint::Solid(Rgba::hex(0xffe9a8)), FillRule::NonZero), item(ribbons(24), Paint::Solid(Rgba::hex(0x202020)), FillRule::NonZero), over, line];
-    DisplayList { links: Vec::new(), clip_modes: Vec::new(), items, clip_parents: Vec::new(), groups: Vec::new() }
+    DisplayList { items, ..Default::default() }
 }
 
 /// A `size` px tile whose corner is at device pixel `(ox, oy)` of the stage at scale `z`.
@@ -132,7 +132,7 @@ fn masks_are_cut_without_changing_a_pixel() {
 #[test]
 fn a_tile_deep_inside_a_drawing_walks_fewer_edges_than_the_drawing_has() {
     let ink = item(ribbons(24), Paint::Solid(Rgba::BLACK), FillRule::NonZero);
-    let dl = DisplayList { links: Vec::new(), clip_modes: Vec::new(), items: vec![ink], clip_parents: Vec::new(), groups: Vec::new() };
+    let dl = DisplayList { items: vec![ink], ..Default::default() };
     let whole_stage = View { transform: Affine::IDENTITY, width: 1280, height: 720, background: None };
     let normal = render(&dl, &whole_stage).unwrap().1.edges;
     let mut before = 0;
