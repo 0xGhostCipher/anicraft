@@ -26,5 +26,7 @@ People who have contributed to AniCraft. The repository starts from one initial 
 * Dylan M. Taylor (dylanmtaylor): no caller-chosen ffmpeg over serve and MCP, bounded request lines, safer XFL folder reads.
 * Agapenor (Agapenordev): XFL folder paths with backslashes, the frame limit on loaded documents, the report behind the evaluation allowance and what it counts as work (#13).
 * rcoenen: Animate's shape hints (`morphHintsList`), default text line spacing and default dash gap, from files Animate saved.
+* Hagai Baram (hrb9): the Hebrew fallback face, `iw` read as Hebrew, and right-to-left language detection (#486).
+* SoldierPePe: text that mixes directions and letters from a fallback face (#39, #40).
 * Hagai Baram (hrb9): the Hebrew fallback face, `iw` read as Hebrew, and right-to-left language detection, private-use tags included (#486).
 * FredApps: a test that linked artwork survives SVG export and re-import (#500).
