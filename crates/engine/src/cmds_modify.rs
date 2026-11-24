@@ -492,7 +492,7 @@ fn transform_origin(s: &mut Session, p: &Value) -> Result<Value> {
 ///   transformed about its centre in both modes.
 pub fn transform_origins(s: &Session, mode: TransformOrigin) -> Vec<(Vec<Item>, Vec2)> {
     let els: std::collections::HashMap<Item, Arc<Element>> = s.selected_elements().into_iter().map(|(l, e)| ((l, e.id), e)).collect();
-    selected_units(s)
+    selected_units(s, false)
         .into_iter()
         .map(|(items, bounds)| {
             let members: Vec<&Arc<Element>> = items.iter().filter_map(|i| els.get(i)).collect();
@@ -689,30 +689,34 @@ fn translate_each(s: &mut Session, moves: &[(Item, Vec2)]) -> Result<usize> {
 /// selected object on its own, and each raw drawing as one (#301). A raw drawing is the selected
 /// raw pieces on a layer that touch, such as a fill and the strokes on its edges (ADR 0042), so a
 /// shape keeps its outline where it goes.
-fn selected_units(s: &Session) -> Vec<Unit> {
+///
+/// With `outlines`, a unit's bounds are where its outlines' points are, without the width of
+/// its strokes (#569): what align and distribute line up. Otherwise they are what it covers.
+fn selected_units(s: &Session, outlines: bool) -> Vec<Unit> {
     let mut units: Vec<Unit> = Vec::new();
-    let mut raw: Vec<(LayerId, Vec<Item>, Vec<Rect>)> = Vec::new();
+    // Per layer: each raw piece, what it covers (which says which touch) and its own bounds.
+    type Piece = (Item, Rect, Rect);
+    let mut raw: Vec<(LayerId, Vec<Piece>)> = Vec::new();
     for (l, e) in s.selected_elements() {
         let b = s.element_bounds_on(l, e.id);
         if b.is_empty() {
             continue;
         }
+        let own = if outlines { s.element_outline_bounds_on(l, e.id) } else { b };
         if crate::merge::mergeable(&e).is_none() {
-            units.push((vec![(l, e.id)], b));
+            units.push((vec![(l, e.id)], own));
             continue;
         }
-        match raw.iter_mut().find(|(k, ..)| *k == l) {
-            Some((_, ids, boxes)) => {
-                ids.push((l, e.id));
-                boxes.push(b);
-            }
-            None => raw.push((l, vec![(l, e.id)], vec![b])),
+        match raw.iter_mut().find(|(k, _)| *k == l) {
+            Some((_, pieces)) => pieces.push(((l, e.id), b, own)),
+            None => raw.push((l, vec![((l, e.id), b, own)])),
         }
     }
-    for (_, ids, boxes) in raw {
+    for (_, pieces) in raw {
+        let boxes: Vec<Rect> = pieces.iter().map(|p| p.1).collect();
         for group in crate::merge::touching_groups(&boxes) {
-            let items: Vec<Item> = group.iter().filter_map(|&i| ids.get(i).copied()).collect();
-            let b = group.iter().filter_map(|&i| boxes.get(i)).fold(Rect::EMPTY, |r, b| r.union(b));
+            let items: Vec<Item> = group.iter().filter_map(|&i| pieces.get(i).map(|p| p.0)).collect();
+            let b = group.iter().filter_map(|&i| pieces.get(i)).fold(Rect::EMPTY, |r, p| r.union(&p.2));
             units.push((items, b));
         }
     }
@@ -730,7 +734,7 @@ fn stage_in_edit_space(s: &Session) -> Rect {
 }
 
 fn align(s: &mut Session, p: &Value, edge: Edge) -> Result<Value> {
-    let units = selected_units(s);
+    let units = selected_units(s, true);
     if units.is_empty() {
         return Err(EngineError::State("nothing is selected".into()));
     }
@@ -750,7 +754,7 @@ fn align(s: &mut Session, p: &Value, edge: Edge) -> Result<Value> {
 /// about its top-left corner to the largest one's width and/or height, or the stage's.
 /// Objects with no extent along a matched side (a straight line along the other) keep it.
 fn match_size(s: &mut Session, p: &Value, width: bool, height: bool) -> Result<Value> {
-    let units = selected_units(s);
+    let units = selected_units(s, true);
     if units.is_empty() {
         return Err(EngineError::State("nothing is selected".into()));
     }
@@ -777,7 +781,7 @@ fn match_size(s: &mut Session, p: &Value, width: bool, height: bool) -> Result<V
 /// Space Evenly (#566): the objects between the first and the last (by their left or top
 /// edges) move so every gap between neighbours is the same; the outer two stay put.
 fn space(s: &mut Session, horizontal: bool) -> Result<Value> {
-    let mut units = selected_units(s);
+    let mut units = selected_units(s, true);
     if units.len() < 3 {
         return Err(EngineError::State("select at least three elements to space evenly".into()));
     }
@@ -810,7 +814,7 @@ fn space(s: &mut Session, horizontal: bool) -> Result<Value> {
 }
 
 fn distribute(s: &mut Session, horizontal: bool) -> Result<Value> {
-    let mut units = selected_units(s);
+    let mut units = selected_units(s, true);
     if units.len() < 3 {
         return Err(EngineError::State("select at least three elements to distribute".into()));
     }

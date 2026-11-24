@@ -447,7 +447,9 @@ fn a_raw_drawing_aligns_distributes_and_turns_as_one() {
     run(&mut s, "edit.select_all", json!({}));
     run(&mut s, "align.left", json!({}));
     assert!(same(&layout(&s), &shape));
-    assert!(s.selection_bounds().min.x.abs() < 1e-3, "{:?}", s.selection_bounds());
+    // Its outline goes to the stage's edge, with its stroke over it (#569).
+    let outline = s.selected_elements().iter().fold(Rect::EMPTY, |r, (l, e)| r.union(&s.element_outline_bounds_on(*l, e.id)));
+    assert!(outline.min.x.abs() < 1e-3 && s.selection_bounds().min.x < outline.min.x, "{outline:?} {:?}", s.selection_bounds());
 
     // The Properties panel's Rotation and Scale fields: about the drawing's centre, as Rotate 90°
     // does.
@@ -497,6 +499,34 @@ fn align_to_stage_inside_a_symbol_centres_on_its_registration_point() {
     run(&mut s, "align.hcenter", json!({"to_stage": true}));
     let c = s.selection_bounds().center();
     assert!((c.x - s.doc.stage.width as f32 / 2.0).abs() < 0.01, "{c:?}");
+}
+
+/// #569: align lines up where a shape's outline is, not the edge of its stroke, so a thick
+/// stroke hangs over the edge it is aligned to, and changing its width moves nothing.
+#[test]
+fn align_lines_up_outlines_not_stroke_edges() {
+    use anicraft_geom::Rect;
+    for object in [false, true] {
+        let mut s = Session::default();
+        run(&mut s, "draw.rect", json!({"x": 100, "y": 100, "w": 200, "h": 100, "fill": "#3366ff", "stroke": "#000000", "stroke_width": 16, "object": object}));
+        run(&mut s, "edit.select_all", json!({}));
+        let outline = |s: &Session| s.selected_elements().iter().fold(Rect::EMPTY, |r, (l, e)| r.union(&s.element_outline_bounds_on(*l, e.id)));
+        let covered = |s: &Session| s.selected_elements().iter().fold(Rect::EMPTY, |r, (l, e)| r.union(&s.element_bounds_on(*l, e.id)));
+        run(&mut s, "align.left", json!({"to_stage": true}));
+        run(&mut s, "align.top", json!({"to_stage": true}));
+        let (o, c) = (outline(&s), covered(&s));
+        assert!(o.min.x.abs() < 0.01 && o.min.y.abs() < 0.01, "the outline's corner is on the stage's (object: {object}): {o:?}");
+        assert!(c.min.x < o.min.x && c.min.y < o.min.y, "the stroke hangs over the edge (object: {object})");
+    }
+    // A turned outline is measured by its own points, not by its unturned box turned with it.
+    let mut s = Session::default();
+    run(&mut s, "draw.ellipse", json!({"x": 100, "y": 100, "w": 200, "h": 40, "stroke": null, "object": true}));
+    run(&mut s, "edit.select_all", json!({}));
+    run(&mut s, "element.set_transform", json!({"rotation": 45}));
+    let (l, e) = s.selected_elements()[0].clone();
+    let outline = s.element_outline_bounds_on(l, e.id);
+    let boxed = s.display_list().items.iter().filter(|i| i.element == e.id).fold(Rect::EMPTY, |r, i| r.union(&i.path.bounds().transformed(&i.transform)));
+    assert!(outline.width() < boxed.width() - 1.0, "{outline:?} inside {boxed:?}");
 }
 
 #[test]
