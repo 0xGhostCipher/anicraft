@@ -173,3 +173,21 @@ fn advance_at_the_last_frame_stays_in_range() {
     let _ = s.execute("timeline.insert_keyframe", &json!({"advance": true}));
     assert!(s.frame <= MAX_FRAME);
 }
+
+/// #561: Next and Previous Frame (`.` and `,`) stop at the last and the first frame instead of
+/// going round to the other end.
+#[test]
+fn stepping_stops_at_the_ends() {
+    let mut s = Session::default();
+    let l = s.layer;
+    run(&mut s, "timeline.insert_frame", json!({"layer": l.0, "frame": 0, "count": 4}));
+    let last = s.frame_count() - 1;
+    run(&mut s, "timeline.goto", json!({"frame": last}));
+    run(&mut s, "timeline.next_frame", json!({}));
+    assert_eq!(s.frame, last, "the last frame stays");
+    run(&mut s, "timeline.goto", json!({"frame": 0}));
+    run(&mut s, "timeline.prev_frame", json!({}));
+    assert_eq!(s.frame, 0, "the first frame stays");
+    run(&mut s, "timeline.next_frame", json!({}));
+    assert_eq!(s.frame, 1, "in between, one frame on");
+}
