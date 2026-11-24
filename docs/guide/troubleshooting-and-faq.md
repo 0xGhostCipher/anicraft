@@ -233,8 +233,9 @@ a report after opening. Motion tweens from Animate files are not imported yet. S
 
 ### Can it save back to `.fla`?
 
-No. AniCraft saves its own `.anicraft` format, and an opened Animate file comes in as a new,
-untitled document, so saving never overwrites the original.
+No. AniCraft saves its own `.anicraft` format. An opened Animate file keeps its name, marked
+as imported, but saving always asks for a new `.anicraft` name, so it never overwrites the
+original.
 
 ### Can it export SWF?
 

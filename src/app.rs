@@ -3958,8 +3958,8 @@ impl App {
         }
         let prompt = match id {
             "file.open" => Some((tr_noop!("Open document"), "path", "animation.anicraft".to_string())),
-            "file.save" if self.s.path.is_none() => Some((tr_noop!("Save document as"), "path", "animation.anicraft".to_string())),
-            "file.save_as" => Some((tr_noop!("Save document as"), "path", self.s.path.as_ref().map_or_else(|| "animation.anicraft".to_string(), |p| p.display().to_string()))),
+            "file.save" if self.s.path.is_none() => Some((tr_noop!("Save document as"), "path", self.save_suggestion())),
+            "file.save_as" => Some((tr_noop!("Save document as"), "path", self.save_suggestion())),
             "layer.rename" => Some((tr_noop!("Rename layer"), "name", self.s.active_layer().map_or_else(String::new, |l| l.name.clone()))),
             "scene.rename" => Some((tr_noop!("Rename scene"), "name", self.s.doc.scenes.get(self.s.scene).map_or_else(String::new, |s| s.name.clone()))),
             "file.export_png" => Some((tr_noop!("Export frame as PNG"), "path", format!("frame_{:04}.png", self.s.frame + 1))),
@@ -4041,6 +4041,16 @@ impl App {
             return;
         }
         self.request(id, json!({}));
+    }
+
+    /// The name Save As offers: the document's own file, or for an unsaved import an
+    /// `.anicraft` of the same name beside the Animate file (ADR 0009), else a placeholder.
+    pub(crate) fn save_suggestion(&self) -> String {
+        match (&self.s.path, &self.s.imported) {
+            (Some(p), _) => p.display().to_string(),
+            (None, Some(import)) => import.save_as.display().to_string(),
+            (None, None) => "animation.anicraft".to_string(),
+        }
     }
 
     /// The stage point at the centre of the visible canvas.
@@ -4494,8 +4504,7 @@ impl App {
     }
 
     fn update_title(&mut self, ctx: &egui::Context) {
-        let name = crate::tabs::active_name(self);
-        let title = format!("AniCraft — {name}{}", if self.s.is_dirty() { " •" } else { "" }); // i18n-exempt: the product name and the file's
+        let title = crate::tabs::window_title(self);
         if title != self.title {
             ctx.send_viewport_cmd(egui::ViewportCommand::Title(title.clone()));
             self.title = title;
