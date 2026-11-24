@@ -1713,7 +1713,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
             for (icon, id, tip) in [
                 (Icon::ChevronDown, "layer.move_down", tr!("Move layer down")),
                 (Icon::ChevronUp, "layer.move_up", tr!("Move layer up")),
-                (Icon::FolderPlus, "layer.new_folder", tr!("New folder above the active layer; several selected layers go into it (Ctrl-click or Shift-click their names)")),
+                (Icon::FolderPlus, "layer.new_folder", tr!("New folder above the active layer (several selected layers go into it)")),
             ] {
                 if footer_button(ui, icon, tip, true) {
                     app.request(id, json!({}));
