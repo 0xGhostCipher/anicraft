@@ -48,9 +48,9 @@ shaders or SDK code).
 
 | File | Use | Author | Source | Licence |
 |---|---|---|---|---|
-| `crates/xfl/tests/corpus/` (12 XFL packages: XML, `.xfl` proxies, a publish-settings file in `scripts/`, `bitmaps/LIBRARY/art/checker.png` and `sunset.jpg`) | XFL import corpus (never shipped in the app) | AniCraft contributors | Original work, written by hand from the public description of the XFL format; the two images made for it (a 16×16 checker drawn in a script, and a 32×16 ramp encoded to JPEG with ffmpeg) | MIT OR Apache-2.0 |
+| `crates/xfl/tests/corpus/` (13 XFL packages: XML, `.xfl` proxies, a publish-settings file in `scripts/`, `bitmaps/LIBRARY/art/checker.png` and `sunset.jpg`) | XFL import corpus (never shipped in the app) | AniCraft contributors | Original work, written by hand from the public description of the XFL format; the two images made for it (a 16×16 checker drawn in a script, and a 32×16 ramp encoded to JPEG with ffmpeg) | MIT OR Apache-2.0 |
 | `crates/xfl/tests/corpus/sounds/` and `video/` media (`beep.wav`, `theme.aif`, `voice.wav`, `bin/M 3 1.dat`, `screen.flv`, `bin/M 4 2.dat`; `tone.mp3` is a copy of the audio crate's fixture below) | XFL sound and video import corpus (never shipped in the app) | AniCraft contributors | Original work, made by a script for these tests: an 880 Hz beep, an AIFF header, one block of silent IMA ADPCM, bytes in no known format, a 64×48 four-colour Screen Video key frame, an FLV header naming On2 VP6 (ADR 0086) | MIT OR Apache-2.0 |
-| `crates/xfl/tests/corpus/*/golden/*.png` (20 frames, 160×90) | Golden renders of the corpus | AniCraft contributors | Original work: AniCraft's own CPU renders of the corpus (`UPDATE_GOLDENS=1`) | MIT OR Apache-2.0 |
+| `crates/xfl/tests/corpus/*/golden/*.png` (21 frames, 160×90) | Golden renders of the corpus | AniCraft contributors | Original work: AniCraft's own CPU renders of the corpus (`UPDATE_GOLDENS=1`) | MIT OR Apache-2.0 |
 | `crates/audio/tests/data/tone.ogg`, `tone.mp3` | Decoder tests (never shipped in the app) | AniCraft contributors | Generated for these tests: half a second of a 440 Hz sine made by ffmpeg's `sine` source, encoded with libvorbis and libmp3lame | MIT OR Apache-2.0 |
 
 ### Optional build input: craft-fonts (not files in this repo)
