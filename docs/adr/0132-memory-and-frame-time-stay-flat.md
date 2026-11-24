@@ -16,13 +16,13 @@ after drawing with the Brush (#477). An earlier fix cut the web build's picture 
 
 We measured before changing anything (`docs/performance.md` has the tables):
 
-* **Drawing a stage tile costs the same at every zoom.** A 1600 × 900 view takes 8 to 10 ms on
-  the CPU oracle from 100 % to 6400 %, also for a drawing of 64 merged brush strokes. The
-  cost is the pixels. So "re-tessellation at deep zoom" was not the stutter on a fast machine.
+* **On many threads, drawing a stage view costs about the same at every zoom.** A 1600 × 900
+  view takes 6 to 9 ms on the CPU oracle from 100 % to 6400 % on a 32-thread machine, also for
+  a drawing of 64 merged brush strokes: there the cost is the pixels.
 * **But the work per tile grew with the zoom and with the whole drawing.** A tile prepared
-  every edge of every item that touched it: 42,000 edges for the view at 100 %, 306,000 at
-  3200 %, all but a few off the tile. For a drawing of hundreds of strokes that term overtakes
-  the pixels.
+  every edge of every item that touched it: 42,700 edges for the view at 100 %, 281,300 at
+  6400 %, all but a few off the tile. On one thread, as the browser draws, the view took
+  9.0 ms at 100 % and 33.5 ms at 6400 %.
 * **The cache filled with pictures nobody could ask for again.** A drag makes a new document
   state on every pointer move; each state's tiles were kept until the least recently used
   fell out of a 768 MB budget (384 MB more on the GPU, 192 tile textures in the shell). A
@@ -112,9 +112,10 @@ scenes cut and whole at five zooms and fourteen tile positions each and compares
 pixmaps for equality. The GPU stage starts from the same prepared fills (ADR 0019), so it
 bins fewer edges too; its parity tests are unchanged.
 
-What is left is linear in the path per tile (transforming each segment and testing its hull),
-about a tenth of the old cost at deep zoom. A spatial index over a path's segments would make
-it follow the visible part alone; not yet.
+What is left is linear in the path per tile (transforming each segment and testing its hull):
+preparing a view at 6400 % of a 64-stroke drawing went from 3.3 ms to 1.3 ms, and drawing it
+on one thread from 33.5 ms to 13.0 ms. A spatial index over a path's segments would make it
+follow the visible part alone; not yet.
 
 ## Consequences
 
