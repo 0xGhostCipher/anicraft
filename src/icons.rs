@@ -53,6 +53,11 @@ pub enum Icon {
     AlignBottom,
     DistributeH,
     DistributeV,
+    MatchWidth,
+    MatchHeight,
+    MatchSize,
+    SpaceH,
+    SpaceV,
     Mask,
     Masked,
     Folder,
@@ -94,7 +99,7 @@ pub enum Icon {
 
 impl Icon {
     #[cfg(test)]
-    pub const ALL: [Icon; 76] = [
+    pub const ALL: [Icon; 81] = [
         Icon::PanelProperties,
         Icon::PanelSwatches,
         Icon::PanelLibrary,
@@ -140,6 +145,11 @@ impl Icon {
         Icon::AlignBottom,
         Icon::DistributeH,
         Icon::DistributeV,
+        Icon::MatchWidth,
+        Icon::MatchHeight,
+        Icon::MatchSize,
+        Icon::SpaceH,
+        Icon::SpaceV,
         Icon::Select,
         Icon::Subselect,
         Icon::Transform,
@@ -241,6 +251,11 @@ impl Icon {
             Icon::AlignBottom => ("anicraft-align-bottom", false),
             Icon::DistributeH => ("anicraft-distribute-h", false),
             Icon::DistributeV => ("anicraft-distribute-v", false),
+            Icon::MatchWidth => ("anicraft-match-width", false),
+            Icon::MatchHeight => ("anicraft-match-height", false),
+            Icon::MatchSize => ("anicraft-match-size", false),
+            Icon::SpaceH => ("anicraft-space-h", false),
+            Icon::SpaceV => ("anicraft-space-v", false),
             // Layer types: a stencil (mask) and the area inside it (masked).
             Icon::Mask => ("anicraft-mask", false),
             Icon::Masked => ("anicraft-masked", false),
@@ -337,6 +352,11 @@ static FILES: &[(&str, &str)] = &[
     ("anicraft-align-bottom", include_str!("../assets/icons/anicraft-align-bottom.svg")),
     ("anicraft-distribute-h", include_str!("../assets/icons/anicraft-distribute-h.svg")),
     ("anicraft-distribute-v", include_str!("../assets/icons/anicraft-distribute-v.svg")),
+    ("anicraft-match-width", include_str!("../assets/icons/anicraft-match-width.svg")),
+    ("anicraft-match-height", include_str!("../assets/icons/anicraft-match-height.svg")),
+    ("anicraft-match-size", include_str!("../assets/icons/anicraft-match-size.svg")),
+    ("anicraft-space-h", include_str!("../assets/icons/anicraft-space-h.svg")),
+    ("anicraft-space-v", include_str!("../assets/icons/anicraft-space-v.svg")),
     ("anicraft-mask", include_str!("../assets/icons/anicraft-mask.svg")),
     ("anicraft-width", include_str!("../assets/icons/anicraft-width.svg")),
     ("anicraft-gradient-transform", include_str!("../assets/icons/anicraft-gradient-transform.svg")),

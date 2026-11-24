@@ -68,7 +68,7 @@ not this table, says what matters most.
 | Timeline panel | **done** | See Timeline. |
 | Library panel | **done** | See Symbols and Library. |
 | Colour and Swatches panels | **done** | See Colour. |
-| Align panel | **done** | Align, distribute, To Stage. Missing: Match Size and Space (P-017). |
+| Align panel | **done** | Align, distribute, space evenly, match size, To Stage. |
 | Transform and Info panels | **partial** | Position, scale, rotation, skew and the transformation point are rows in Properties; there is no separate Transform panel with Duplicate and Transform, and no Info panel with the pointer's colour and position (P-050). |
 | History panel | **done** | With saved commands ([ADR 0097](adr/0097-command-macros.md)). |
 | Scene panel | **done** | A scene menu on the edit bar and Modify › Scene ([ADR 0011](adr/0011-scenes.md)). |
@@ -143,7 +143,7 @@ not this table, says what matters most.
 | Combine Objects: Union, Intersect, Punch, Crop | **done** | [ADR 0073](adr/0073-groups-combine-objects-and-selection-modifiers.md). One layer at a time. |
 | Arrange (front, back, forward, backward) | **done** | |
 | Align, distribute | **done** | |
-| Match Size, Space evenly | **missing** | P-017. |
+| Match Size, Space evenly | **done** | `align.match_width`, `align.match_height`, `align.match_size`, `align.space_h`, `align.space_v` (#566). |
 | Transform: rotate 90°, flip, remove transform, scale and rotate by numbers | **done** | |
 | Envelope | **done** | [ADR 0080](adr/0080-drawing-parity-leftovers.md). Shapes and drawing objects only. |
 | Distort | **missing** | P-020. |

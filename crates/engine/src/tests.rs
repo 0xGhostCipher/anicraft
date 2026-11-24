@@ -347,6 +347,61 @@ fn distribute_to_layers_gives_each_object_its_own_layer() {
     assert!(e.to_string().contains("tweened"), "{e}");
 }
 
+/// #566: Match Size makes every selected object the largest one's size (or the stage's),
+/// each keeping its top-left corner; Space Evenly makes the gaps between neighbours equal,
+/// leaving the outer two where they are.
+#[test]
+fn match_size_and_space_evenly() {
+    let mut s = Session::default();
+    for (x, y, w, h) in [(10, 50, 20, 40), (200, 10, 60, 10), (90, 120, 30, 30)] {
+        run(&mut s, "draw.rect", json!({"x": x, "y": y, "w": w, "h": h, "stroke": null}));
+    }
+    run(&mut s, "edit.select_all", json!({}));
+    let boxes = |s: &Session| s.selection.ids().map(|id| s.element_bounds(id)).collect::<Vec<_>>();
+    let before = boxes(&s);
+    run(&mut s, "align.match_width", json!({}));
+    let after = boxes(&s);
+    let widest = before.iter().map(|b| b.width()).fold(0.0, f32::max);
+    for (a, b) in after.iter().zip(&before) {
+        assert!((a.width() - widest).abs() < 1e-3 && (a.height() - b.height()).abs() < 1e-3, "as wide as the widest, as tall as before: {a:?}");
+        assert!((a.min - b.min).length() < 1e-3, "the left and top edges stay");
+    }
+    run(&mut s, "align.match_size", json!({"to_stage": true}));
+    let (w, h) = (s.doc.stage.width as f32, s.doc.stage.height as f32);
+    assert!(boxes(&s).iter().all(|b| (b.width() - w).abs() < 1e-2 && (b.height() - h).abs() < 1e-2), "the stage's size");
+    run(&mut s, "edit.undo", json!({}));
+    run(&mut s, "edit.undo", json!({}));
+
+    // Space evenly: equal gaps between neighbours across, the outer two unmoved.
+    run(&mut s, "align.space_h", json!({}));
+    let mut b = boxes(&s);
+    b.sort_by(|p, q| p.min.x.total_cmp(&q.min.x));
+    let gaps: Vec<f32> = b.windows(2).map(|w| w[1].min.x - w[0].max.x).collect();
+    assert!((gaps[0] - gaps[1]).abs() < 1e-3, "{gaps:?}");
+    let mut was = before.clone();
+    was.sort_by(|p, q| p.min.x.total_cmp(&q.min.x));
+    assert!((b[0].min.x - was[0].min.x).abs() < 1e-3 && (b[2].max.x - was[2].max.x).abs() < 1e-3, "the outer two stay");
+    run(&mut s, "align.space_v", json!({}));
+    let mut b = boxes(&s);
+    b.sort_by(|p, q| p.min.y.total_cmp(&q.min.y));
+    let gaps: Vec<f32> = b.windows(2).map(|w| w[1].min.y - w[0].max.y).collect();
+    assert!((gaps[0] - gaps[1]).abs() < 1e-3, "{gaps:?}");
+    // Two objects have no gap between others to share.
+    run(&mut s, "edit.deselect", json!({}));
+    let ids: Vec<u64> = s.visible_elements().iter().take(2).map(|e| e.id.0).collect();
+    run(&mut s, "element.select", json!({"ids": ids}));
+    assert!(s.execute("align.space_h", &json!({})).is_err());
+    // One long object over two short ones: no even spacing keeps their order, so nothing moves.
+    let mut s = Session::default();
+    for (x, w) in [(0, 200), (20, 20), (80, 20)] {
+        run(&mut s, "draw.rect", json!({"x": x, "y": 0, "w": w, "h": 10, "stroke": null, "object": true}));
+    }
+    run(&mut s, "edit.select_all", json!({}));
+    let before = boxes(&s);
+    assert!(s.execute("align.space_h", &json!({})).is_err());
+    assert_eq!(boxes(&s), before);
+}
+
 /// #301, #297: a raw rectangle (one fill and one stroke per side, ADR 0042) aligns, distributes,
 /// turns and scales as one shape, so its outline stays on its fill.
 #[test]

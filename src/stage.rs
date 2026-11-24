@@ -970,7 +970,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                 }
             });
             ui.menu_button(tr!("Align"), |ui| {
-                for id in ["align.left", "align.hcenter", "align.right", "align.top", "align.vcenter", "align.bottom", "align.distribute_h", "align.distribute_v"] {
+                for id in ["align.left", "align.hcenter", "align.right", "align.top", "align.vcenter", "align.bottom", "align.distribute_h", "align.distribute_v", "align.space_h", "align.space_v", "align.match_width", "align.match_height", "align.match_size"] {
                     crate::menus::cmd_item(app, ui, id);
                 }
             });

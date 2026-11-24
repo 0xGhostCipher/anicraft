@@ -56,6 +56,11 @@ pub fn specs() -> Vec<CommandSpec> {
         c("align.bottom", "Bottom", "Modify/Align", Some("Ctrl+Alt+6"), "{to_stage?}", true, |s, p| align(s, p, Edge::Bottom)),
         c("align.distribute_h", "Distribute Horizontal Centers", "Modify/Align", None, "{}", true, |s, _| distribute(s, true)),
         c("align.distribute_v", "Distribute Vertical Centers", "Modify/Align", None, "{}", true, |s, _| distribute(s, false)),
+        c("align.match_width", "Match Width", "Modify/Align", None, "{to_stage?} sets each selected object's width to the widest one's (to_stage: the stage's width), keeping its height and its left edge; an object with no width (a vertical line) keeps none", true, |s, p| match_size(s, p, true, false)),
+        c("align.match_height", "Match Height", "Modify/Align", None, "{to_stage?} sets each selected object's height to the tallest one's (to_stage: the stage's height), keeping its width and its top edge; an object with no height (a horizontal line) keeps none", true, |s, p| match_size(s, p, false, true)),
+        c("align.match_size", "Match Width and Height", "Modify/Align", None, "{to_stage?} sets each selected object's width to the widest one's and its height to the tallest one's, which may be two different objects (to_stage: the stage's width and height), keeping its top-left corner; a side an object has no extent along stays as it is", true, |s, p| match_size(s, p, true, true)),
+        c("align.space_h", "Space Evenly Horizontally", "Modify/Align", None, "{} moves the selected objects (three or more) so the gaps between them across are equal; the first and last (by their left edges) stay where they are. Refused when the objects overlap too much to keep their order", true, |s, _| space(s, true)),
+        c("align.space_v", "Space Evenly Vertically", "Modify/Align", None, "{} moves the selected objects (three or more) so the gaps between them down are equal; the first and last (by their top edges) stay where they are. Refused when the objects overlap too much to keep their order", true, |s, _| space(s, false)),
     ]
 }
 
@@ -729,6 +734,69 @@ fn align(s: &mut Session, p: &Value, edge: Edge) -> Result<Value> {
     let moves = moves_for(&units, target, edge);
     let n = translate_each(s, &moves)?;
     Ok(json!({"moved": n, "to_stage": to_stage}))
+}
+
+/// Match Size (#566): each selected object (a raw drawing as one, as align takes them) scaled
+/// about its top-left corner to the largest one's width and/or height, or the stage's.
+/// Objects with no extent along a matched side (a straight line along the other) keep it.
+fn match_size(s: &mut Session, p: &Value, width: bool, height: bool) -> Result<Value> {
+    let units = selected_units(s);
+    if units.is_empty() {
+        return Err(EngineError::State("nothing is selected".into()));
+    }
+    let to_stage = opt_bool(p, "to_stage")?.unwrap_or(false);
+    let (w, h) = if to_stage {
+        (s.doc.stage.width as f32, s.doc.stage.height as f32)
+    } else {
+        units.iter().fold((0.0f32, 0.0f32), |(w, h), (_, b)| (w.max(b.width()), h.max(b.height())))
+    };
+    const MIN: f32 = 1e-3;
+    let mut by: std::collections::HashMap<Item, Affine> = std::collections::HashMap::new();
+    for (items, b) in units {
+        let sx = if width && b.width() > MIN { w / b.width() } else { 1.0 };
+        let sy = if height && b.height() > MIN { h / b.height() } else { 1.0 };
+        let m = Affine::translate(b.min.x, b.min.y).mul(&Affine::scale(sx, sy)).mul(&Affine::translate(-b.min.x, -b.min.y));
+        by.extend(items.into_iter().map(|i| (i, m)));
+    }
+    s.each_layer(true, |s| {
+        let layer = s.layer;
+        Ok(json!({"transformed": apply_each(s, |id| by.get(&(layer, id)).copied().unwrap_or(Affine::IDENTITY))?}))
+    })
+}
+
+/// Space Evenly (#566): the objects between the first and the last (by their left or top
+/// edges) move so every gap between neighbours is the same; the outer two stay put.
+fn space(s: &mut Session, horizontal: bool) -> Result<Value> {
+    let mut units = selected_units(s);
+    if units.len() < 3 {
+        return Err(EngineError::State("select at least three elements to space evenly".into()));
+    }
+    // Where an object starts along the axis, and how long it is.
+    let lo = |b: &Rect| if horizontal { (b.min.x, b.width()) } else { (b.min.y, b.height()) };
+    units.sort_by(|a, b| lo(&a.1).0.total_cmp(&lo(&b.1).0));
+    let (Some(first), Some(last)) = (units.first(), units.last()) else { return Ok(json!({"moved": 0})) };
+    let (start, _) = lo(&first.1);
+    let (last_at, last_len) = lo(&last.1);
+    // In f64, so rounding doesn't add up over many objects and move the last one.
+    let end = f64::from(last_at) + f64::from(last_len);
+    let total: f64 = units.iter().map(|u| f64::from(lo(&u.1).1)).sum();
+    let gap = (end - f64::from(start) - total) / (units.len() - 1) as f64;
+    // A gap so negative that an object would pass the next one (one long object over short
+    // ones) has no even spacing that keeps their order: refuse rather than shuffle them.
+    if units.iter().take(units.len() - 1).any(|u| f64::from(lo(&u.1).1) + gap < 0.0) {
+        return Err(EngineError::State("these objects overlap too much to space evenly in their order".into()));
+    }
+    let mut at = f64::from(start);
+    let mut moves: Vec<(Item, Vec2)> = Vec::new();
+    for (items, b) in &units {
+        let (l, n) = lo(b);
+        let d = (at - f64::from(l)) as f32;
+        let d = if horizontal { Vec2::new(d, 0.0) } else { Vec2::new(0.0, d) };
+        moves.extend(items.iter().map(|id| (*id, d)));
+        at += f64::from(n) + gap;
+    }
+    let n = translate_each(s, &moves)?;
+    Ok(json!({"moved": n}))
 }
 
 fn distribute(s: &mut Session, horizontal: bool) -> Result<Value> {
