@@ -284,6 +284,7 @@ version = "0.3.0"
 dependencies = [
  "anicraft-doc",
  "anicraft-engine",
+ "anicraft-fla",
  "anicraft-geom",
  "anicraft-guide",
  "anicraft-render",
@@ -311,6 +312,7 @@ name = "anicraft-engine"
 version = "0.3.0"
 dependencies = [
  "anicraft-doc",
+ "anicraft-fla",
  "anicraft-geom",
  "anicraft-plugins",
  "anicraft-render",
@@ -333,6 +335,30 @@ dependencies = [
  "wasm-bindgen-test",
  "wat",
  "web-time",
+]
+
+[[package]]
+name = "anicraft-fla"
+version = "0.3.0"
+dependencies = [
+ "anicraft-doc",
+ "anicraft-flamedia",
+ "anicraft-geom",
+ "anicraft-text",
+ "anicraft-xml",
+ "craft-cfb",
+ "craft-xfl",
+ "craft-xml 0.1.0 (git+https://github.com/storytold/craft-libs?rev=b67b9f90c50091a3090f93fa054c34e409edba11)",
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "anicraft-flamedia"
+version = "0.3.0"
+dependencies = [
+ "craft-audio",
+ "miniz_oxide 0.8.9",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -424,6 +450,7 @@ name = "anicraft-xfl"
 version = "0.3.0"
 dependencies = [
  "anicraft-doc",
+ "anicraft-flamedia",
  "anicraft-geom",
  "anicraft-text",
  "anicraft-xml",
@@ -1240,6 +1267,11 @@ dependencies = [
  "symphonia",
  "thiserror 2.0.21",
 ]
+
+[[package]]
+name = "craft-cfb"
+version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?rev=b67b9f90c50091a3090f93fa054c34e409edba11#b67b9f90c50091a3090f93fa054c34e409edba11"
 
 [[package]]
 name = "craft-codepage"
