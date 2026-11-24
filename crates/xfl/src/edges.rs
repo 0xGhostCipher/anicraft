@@ -62,15 +62,17 @@ pub fn parse_runs(s: &str) -> Parsed {
         let (run, tail) = rest.split_at(end);
         rest = tail;
         let drawn = run.bytes().filter(|b| matches!(b, b'|' | b'/' | b'[' | b']')).count();
-        let read = craft_xfl::edges::parse_edge_segments(run);
         let room = craft_xfl::edges::MAX_EDGE_SEGMENTS.saturating_sub(out.segs.len());
+        if room == 0 {
+            // Full: what the runs still to come would draw is left out, and counted undecoded.
+            out.unread += usize::from(drawn > 0);
+            continue;
+        }
+        let read = craft_xfl::edges::parse_edge_segments(run);
         if read.len() < drawn || read.len() > room {
             out.unread += 1;
         }
         out.segs.extend(read.into_iter().take(room).map(|segment| Seg { from: point(segment.from), ctrl: segment.control.map(point), to: point(segment.to) }));
-        if room == 0 {
-            break;
-        }
     }
     out
 }

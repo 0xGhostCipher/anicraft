@@ -7,9 +7,10 @@
   * A stroke in a style AniCraft doesn't know was dropped, and the report still said
     "Imported everything in the file". It is now drawn as a solid line with its weight, colour,
     caps and joints, and counted.
-  * One unreadable command in a shape's outline lost everything after it on that edge. It now
-    costs only its own stretch: the parts after it are drawn, and the report counts the part
-    left out.
+  * One unreadable command in a shape's outline lost everything after it on that edge. An
+    outline is written as runs, each starting at its own point: the command now costs the
+    rest of its own run only, the runs after it are drawn, and the report counts the run that
+    was cut short.
   * The report also counts fills whose outline has a gap (they are closed straight across,
     which can fill in more than the fill covered), fills of a kind AniCraft doesn't know, and
     lines and fills in a style their shape doesn't have.
