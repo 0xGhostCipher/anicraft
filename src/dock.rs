@@ -109,7 +109,7 @@ impl Panel {
             Panel::Timeline | Panel::MotionEditor => [900.0, 320.0],
             Panel::Actions => [460.0, 520.0],
             Panel::Output => [520.0, 300.0],
-            Panel::Align => [300.0, 184.0],
+            Panel::Align => [300.0, 140.0],
             Panel::Swatches => [300.0, 300.0],
             Panel::LayerDepth => [440.0, 260.0],
             // Two columns of tools.
