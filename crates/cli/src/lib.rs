@@ -133,7 +133,8 @@ pub const USAGE_EXIT: i32 = 2;
 
 /// The exit code for an error from [`run`].
 pub fn exit_code(error: &str) -> i32 {
-    if error.starts_with(ROOTS_REQUIRED) || error.starts_with("--automation-") || error.starts_with("flag --automation-") { USAGE_EXIT } else { 1 }
+    let unknown_option = error.strip_prefix(UNKNOWN_OPTION).is_some_and(|rest| rest.split_whitespace().nth(1) == Some("option"));
+    if unknown_option || error.starts_with(ROOTS_REQUIRED) || error.starts_with("--automation-") || error.starts_with("flag --automation-") { USAGE_EXIT } else { 1 }
 }
 
 /// The folders given with `--automation-read-root` (once or more) and `--automation-write-root`
@@ -247,6 +248,41 @@ pub fn subcommand_usage(cmd: &str) -> Option<String> {
     (!out.is_empty()).then(|| format!("USAGE:{out}"))
 }
 
+/// The options a subcommand reads, beyond `--plugins`, which every one takes. `None` for a name
+/// that is no subcommand.
+fn options_of(cmd: &str) -> Option<&'static [&'static str]> {
+    Some(match cmd {
+        "render" => &["out", "frame", "scale"],
+        "render-seq" => &["out-dir", "from", "to", "scale"],
+        "gif" => &["out", "from", "to", "scale", "overwrite"],
+        "apng" | "webp" => &["out", "from", "to", "scale", "overwrite", "loop", "background"],
+        "export" => &["format", "out", "from", "to", "frame", "options", "overwrite"],
+        "run" | "exec" => &["save"],
+        "new" => &["out", "width", "height", "fps"],
+        "guide" => &["out", "limit", "json"],
+        "bench" => &["layers", "shapes", "frames", "check", "stroke", "stroke-file"],
+        "serve" => &["automation-read-root", "automation-write-root"],
+        "mcp" => &["automation-read-root", "automation-write-root", "bridge"],
+        "info" | "formats" | "commands" | "version" | "--version" | "-V" => &[],
+        _ => return None,
+    })
+}
+
+/// How the error starts when a subcommand is given an option it doesn't read.
+const UNKNOWN_OPTION: &str = "unknown ";
+
+/// Refuses an option the subcommand doesn't read, before anything is opened or written: a
+/// mistyped `--frmae 12` was dropped, and frame 1 written as if it had been asked for.
+fn check_options(cmd: &str, a: &Args) -> Result<(), String> {
+    let Some(known) = options_of(cmd) else { return Ok(()) };
+    match a.flags.iter().find(|(key, _)| key != "plugins" && !known.contains(&key.as_str())) {
+        Some((key, _)) => Err(format!("{UNKNOWN_OPTION}{cmd} option --{key}
+
+{}", subcommand_usage(cmd).unwrap_or_default())),
+        None => Ok(()),
+    }
+}
+
 /// Runs the CLI; returns the text to print on success.
 pub fn run(argv: &[String]) -> Result<String, String> {
     let Some((cmd, rest)) = argv.split_first() else { return Ok(USAGE.to_string()) };
@@ -260,6 +296,7 @@ pub fn run(argv: &[String]) -> Result<String, String> {
         return subcommand_usage(cmd).ok_or_else(|| format!("unknown subcommand '{cmd}'\n\n{USAGE}"));
     }
     let a = Args::parse(rest)?;
+    check_options(cmd, &a)?;
     let src = a.positional.first().map(String::as_str);
     match cmd.as_str() {
         // The release packaging smoke-tests every build with this (packaging/, ADR 0026).
@@ -297,9 +334,6 @@ pub fn run(argv: &[String]) -> Result<String, String> {
             serde_json::to_string_pretty(&s.info()).map_err(|e| e.to_string())
         }
         "render" => {
-            if let Some((key, _)) = a.flags.iter().find(|(key, _)| !matches!(key.as_str(), "out" | "frame" | "scale" | "plugins")) {
-                return Err(format!("unknown render option --{key}"));
-            }
             let mut s = session(&a, Some(src.ok_or("render needs a file or --sample")?))?;
             let out = a.flag("out").ok_or("render needs --out <file.png>")?;
             let mut p = json!({"path": out, "frame": one_based(&a, "frame")?.unwrap_or(0)});
@@ -968,7 +1002,44 @@ pub(crate) mod tests {
     #[test]
     fn render_rejects_unknown_options_before_opening_the_document() {
         let argv = ["render", "missing.anicraft", "--frmae", "12"].map(str::to_owned);
-        assert_eq!(run(&argv).unwrap_err(), "unknown render option --frmae");
+        let e = run(&argv).unwrap_err();
+        assert!(e.starts_with("unknown render option --frmae
+"), "{e}");
+        assert!(e.contains("[--frame N]"), "the error shows what render takes: {e}");
+        assert_eq!(exit_code(&e), USAGE_EXIT);
+    }
+
+    /// Every subcommand refuses an option it would drop, and none refuses one its usage names.
+    #[test]
+    fn every_subcommand_refuses_an_option_it_does_not_read() {
+        let named = |cmd: &str| -> Vec<String> {
+            let usage = subcommand_usage(cmd).unwrap_or_else(|| panic!("{cmd} has a usage entry"));
+            // `--release` is cargo's, in the note on how to run the benchmark.
+            let mut found: Vec<String> = Vec::new();
+            // The entry lines and the bracketed lines under them; the notes beside them are prose.
+            let syntax = usage.lines().filter(|l| l.starts_with("  anicraft-cli ") || l.trim_start().starts_with("[--"));
+            for word in syntax.flat_map(|l| l.split(|c: char| !(c.is_ascii_alphanumeric() || c == '-'))) {
+                if let Some(name) = word.strip_prefix("--").filter(|n| !n.is_empty() && !matches!(*n, "sample" | "plugins" | "version" | "release"))
+                    && !found.iter().any(|f| f == name)
+                {
+                    found.push(name.to_string());
+                }
+            }
+            found
+        };
+        for cmd in ["info", "render", "render-seq", "gif", "apng", "webp", "export", "formats", "commands", "run", "exec", "new", "guide", "bench", "serve", "mcp"] {
+            let known = options_of(cmd).unwrap_or_else(|| panic!("{cmd} is a subcommand"));
+            for name in named(cmd) {
+                assert!(known.contains(&name.as_str()), "{cmd} --{name} is in the usage but would be refused");
+            }
+            for name in known {
+                assert!(named(cmd).iter().any(|n| n == name), "{cmd} takes --{name}, which its usage doesn't name");
+            }
+            let argv = [cmd, "--no-such-option", "1", "--plugins", "nowhere"].map(str::to_owned);
+            let e = run(&argv).unwrap_err();
+            assert!(e.starts_with(&format!("unknown {cmd} option --no-such-option")), "{cmd}: {e}");
+        }
+        assert!(run(&["nope".to_string(), "--x".into(), "1".into()]).unwrap_err().starts_with("unknown subcommand"), "a wrong name is still the error for a wrong name");
     }
 
     #[test]
