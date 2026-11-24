@@ -476,6 +476,29 @@ fn a_raw_drawing_aligns_distributes_and_turns_as_one() {
     assert!(same(&layout(&s), &layout(&fresh)) && (s.selection_bounds().min - fresh.selection_bounds().min).length() < 0.01, "back where it was");
 }
 
+/// #568: inside a symbol, To Stage aligns to the symbol's own space: centring puts the
+/// artwork's centre on the symbol's registration point, not the middle of the document's stage.
+#[test]
+fn align_to_stage_inside_a_symbol_centres_on_its_registration_point() {
+    let mut s = Session::default();
+    run(&mut s, "draw.rect", json!({"x": 40, "y": 60, "w": 100, "h": 100, "stroke": null}));
+    run(&mut s, "edit.select_all", json!({}));
+    run(&mut s, "modify.convert_to_symbol", json!({"name": "Box"}));
+    let inst = s.selection.ids().next().unwrap();
+    run(&mut s, "symbol.edit", json!({"id": inst.0}));
+    run(&mut s, "edit.select_all", json!({}));
+    run(&mut s, "align.hcenter", json!({"to_stage": true}));
+    run(&mut s, "align.vcenter", json!({"to_stage": true}));
+    let c = s.selection_bounds().center();
+    assert!(c.x.abs() < 0.01 && c.y.abs() < 0.01, "centred on the registration point: {c:?}");
+    // On the stage itself, To Stage is still the document's stage.
+    run(&mut s, "symbol.exit", json!({"all": true}));
+    run(&mut s, "edit.select_all", json!({}));
+    run(&mut s, "align.hcenter", json!({"to_stage": true}));
+    let c = s.selection_bounds().center();
+    assert!((c.x - s.doc.stage.width as f32 / 2.0).abs() < 0.01, "{c:?}");
+}
+
 #[test]
 fn svg_frame_export_writes_vectors_and_asks_before_replacing() {
     let dir = std::env::temp_dir().join(format!("anicraft-svg-{}", std::process::id()));
