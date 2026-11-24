@@ -1682,6 +1682,24 @@ impl App {
             }
             Some("animator") => self.switch_workspace("animator"),
             Some("designer") => self.switch_workspace("designer"),
+            Some("layerselect") => {
+                // Timeline and panel fixes together (ADR 0131): a new mask (locked, so no edge in
+                // the layer colour on the stage, #429), more layers than rows (the count in the
+                // header, clear of its buttons, #523), three layers picked with Shift and one with
+                // Ctrl (#512), and the Movie Explorer using its pane's height (#513).
+                if let Some(sun) = self.s.timeline().layers.iter().find(|l| l.name == "Sun").map(|l| l.id.0) {
+                    self.run("layer.toggle_mask", json!({"layer": sun}));
+                }
+                self.run("layer.select", json!({"index": 0}));
+                for _ in 0..9 {
+                    self.run("layer.new", json!({}));
+                }
+                self.run("layer.select", json!({"index": 1}));
+                self.run("layer.select", json!({"index": 3, "add": "range"}));
+                self.run("layer.select", json!({"index": 5, "add": "toggle"}));
+                crate::movie_explorer::open(self);
+                crate::movie_explorer::expand_to(self, 2);
+            }
             Some("explorer") => {
                 // The Movie Explorer tab (ADR 0058), its first rows open: scene, layers, keyframes
                 // and the instances on them, opening into their symbols.
