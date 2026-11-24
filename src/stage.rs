@@ -788,7 +788,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
             Drag::MultiMarquee { start, cur } => crate::onion::marquee(app, start, cur, shift),
             Drag::Marquee { start, cur } => {
                 // The parts of raw fills and strokes under it, cut at its edges, and the objects
-                // wholly inside it (ADR 0041).
+                // it touches (ADR 0041, #522).
                 app.run("raw.select_rect", json!({"x0": start.x, "y0": start.y, "x1": cur.x, "y1": cur.y, "add": shift}));
             }
             Drag::Shape { start, cur } => create_shape(app, start, cur),
