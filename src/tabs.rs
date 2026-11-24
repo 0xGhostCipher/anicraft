@@ -206,7 +206,10 @@ impl Tabs {
 /// A document's name on its tab: the file's, the Animate file's it was imported from (ADR 0009),
 /// or "Untitled" (numbered from the second on).
 fn name_of(untitled: u32, s: &Session) -> String {
-    match s.path.as_deref().or(s.imported.as_ref().map(|i| i.source.as_path())).and_then(Path::file_name) {
+    // An import is named after what was opened, or after its folder when that path has no
+    // name of its own ("walk/sub/..").
+    let imported = s.imported.as_ref().and_then(|i| i.source.file_name().or_else(|| i.package.file_name()));
+    match s.path.as_deref().and_then(Path::file_name).or(imported) {
         Some(n) => n.to_string_lossy().into_owned(),
         None if untitled <= 1 => tr!("Untitled").to_string(),
         None => tr!("Untitled {n}", n = untitled),

@@ -101,6 +101,10 @@ fn an_import_is_named_after_its_animate_file_until_it_is_saved() {
     assert_eq!(spoken(t), "primitives, imported");
     assert_eq!(window_title(&app), "AniCraft — primitives (imported)");
     assert_eq!(app.save_suggestion(), corpus.join("primitives.anicraft").display().to_string(), "beside the XFL folder");
+    // Reached through "..", it is still named after its folder.
+    let (_, mut other) = self::app();
+    other.request("file.open", json!({"path": folder.join("golden").join("..").display().to_string()}));
+    assert_eq!(names(&other), ["primitives"]);
     // A new document is "Untitled": the import has a name of its own.
     app.request("file.new", json!({}));
     assert_eq!(names(&app), ["primitives", "Untitled"]);

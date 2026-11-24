@@ -204,11 +204,15 @@ impl Import {
     /// The import of `source`, as the disk has it now.
     pub fn of(source: &std::path::Path) -> Import {
         let package = import_package(source);
-        // "." or "walk/sub/.." has no name of its own: resolve it, or the suggestion would land
-        // inside the package as "animation.anicraft".
+        // "." or "walk/sub/.." has no name of its own, and nor does the empty folder a bare
+        // "walk.xfl" is in: resolve it, or the suggestion would land inside the package as
+        // "animation.anicraft".
         let package = match package.file_name() {
             Some(_) => package,
-            None => std::fs::canonicalize(&package).unwrap_or(package),
+            None => {
+                let here = if package.as_os_str().is_empty() { std::path::Path::new(".") } else { package.as_path() };
+                std::fs::canonicalize(here).unwrap_or(package)
+            }
         };
         // A folder's whole name ("walk.v2" stays "walk.v2"); a file's without its extension.
         let name = if crate::vfs::is_dir(&package) { package.file_name() } else { package.file_stem() };
