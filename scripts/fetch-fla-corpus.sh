@@ -13,7 +13,7 @@ DIR="${1:?usage: scripts/fetch-fla-corpus.sh <folder>}"
 mkdir -p "$DIR"
 
 sha256() {
-  if command -v sha256sum >/dev/null; then sha256sum "$1" | cut -d' ' -f1; else shasum -a 256 "$1" | cut -d' ' -f1; fi
+  if command -v sha256sum >/dev/null; then sha256sum < "$1" | cut -d' ' -f1; else shasum -a 256 < "$1" | cut -d' ' -f1; fi
 }
 
 while IFS=$'\t' read -r sha file url unpack _licence title; do
