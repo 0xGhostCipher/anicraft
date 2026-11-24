@@ -279,13 +279,7 @@ fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Args, String> {
                     Some("light") => (Some(theme::Palette::Light), None),
                     Some("high-contrast") => (Some(theme::Palette::HighContrast), None),
                     Some(file) if file.to_ascii_lowercase().ends_with(".json") => (None, Some(PathBuf::from(file))),
-                    // i18n-exempt: a console message
-                    other => {
-                        return Err(format!(
-                            "--theme takes dark (graphite), light, high-contrast or a theme file (.json), not {}",
-                            other.unwrap_or("nothing")
-                        ));
-                    }
+                    other => return Err(format!("--theme takes dark (graphite), light, high-contrast or a theme file (.json), not {}", other.unwrap_or("nothing"))), // i18n-exempt: a console message
                 };
                 out.look.theme = palette;
                 out.look.theme_file = file;
