@@ -12,11 +12,32 @@
 //! 05
 //! edge count  u32 (the edges that draw; a decode must find exactly this many)
 //! fills       u16 n, n × fill
-//! strokes     u16 n, n × { RGBA, u16 width (twips), 10 bytes ([0..2] dash length,
-//!                          [2..4] dash gap or stroke type, [6] cap, [7] join,
-//!                          [9] miter limit), fill }
+//! strokes     u16 n, n × { RGBA, u16 width (twips), 10 style bytes, fill }
 //! edges       records up to a 00 byte
 //! ```
+//!
+//! A stroke's ten style bytes:
+//!
+//! ```text
+//! [0..2]  u16 dash   a dashed line's dash length, in twips (0: not dashed)
+//! [2..4]  u16        dashed: the gap length in twips · otherwise (pattern << 4) | type
+//! [4]     00         (zero in every corpus stroke)
+//! [5]     00 or 03   not understood (no effect on the drawing found)
+//! [6]     cap        00 none, 01 round, 02 square
+//! [7]     join       00 miter, 01 round, 02 bevel
+//! [8]     00         (zero in every corpus stroke)
+//! [9]     miter limit (00: the default 3)
+//! ```
+//!
+//! A dash length marks a dashed line (XFL's `DashedStroke` `dash1`, `dash2`; Animate's
+//! default is 6 and 6 px). Otherwise the low four bits of the second field are the stroke
+//! type, in the order of Animate's stroke style list: 0 solid, 2 dotted, 5 hatched (both
+//! seen in the corpus), with 3 and 4 presumably ragged and stipple. A dotted line's pattern
+//! is its dot spacing in tenths of a pixel (`0x1E2`: type 2, 30 → `dotSpace="3"`); a
+//! hatched line's packs its hatch settings (not decoded). Ragged, stipple and hatched lines
+//! draw solid, as the XFL importer draws them; a type or byte 4 or 8 not seen in the corpus
+//! is a style not decoded yet, drawn solid. Both are counted. Hairlines are a width of one
+//! twip.
 //!
 //! A fill is RGBA, a kind byte (00 solid, 10 linear, 12 radial) and a byte not yet
 //! understood; a gradient adds its matrix (as above), a stop count (u8), the focal point
@@ -34,7 +55,7 @@
 //! to the anchor. The pen starts at the origin.
 
 use anicraft_doc::stroke_style::{DEFAULT_MITER_LIMIT, MAX_MITER_LIMIT, MIN_MITER_LIMIT};
-use anicraft_doc::{Cap, GradientStop, Join, Paint, Rgba, Shape, Stroke, StrokeStyle, MAX_FOCAL};
+use anicraft_doc::{Cap, Dash, GradientStop, Join, Paint, Rgba, Shape, Stroke, StrokeStyle, MAX_FOCAL};
 use anicraft_geom::{Affine, FillRule, Path, Vec2};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -81,6 +102,9 @@ pub struct ShapeRecord {
     /// Fill styles in index order (`None`: a gradient without stops, which draws nothing).
     pub fills: Vec<Option<Paint>>,
     pub strokes: Vec<Stroke>,
+    /// Each stroke's kind as stored, in the same order (the drawn [`Stroke`] holds what
+    /// AniCraft draws of it).
+    pub stroke_kinds: Vec<StrokeKind>,
     pub edges: Vec<Edge>,
     /// What was drawn the nearest way AniCraft can, as report kinds.
     pub approximations: Vec<&'static str>,
@@ -199,36 +223,60 @@ fn fill(r: &mut Reader, approximations: &mut Vec<&'static str>) -> Result<Option
     }
 }
 
-/// What a stroke's style bytes ask for that is drawn solid here, as a report kind. A dash
-/// length in bytes 0–1 marks a dashed line; otherwise the low four bits of bytes 2–3 are
-/// the stroke type, in the order of Animate's stroke style list (0 solid, 2 dotted, 3 ragged,
-/// 4 stipple, 5 hatched). Bytes 4 and 8 are zero in every corpus stroke.
-pub(crate) fn unsupported_style(style: &[u8; 10]) -> Option<&'static str> {
-    if style[4] != 0 || style[8] != 0 {
-        return Some("stroke styles not decoded yet (drawn solid)");
+/// A stroke's kind and pattern, from its style bytes (the module docs give the layout).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum StrokeKind {
+    Solid,
+    /// Dash and gap lengths, in pixels.
+    Dashed { dash: f32, gap: f32 },
+    /// Dot spacing, in pixels.
+    Dotted { spacing: f32 },
+    /// Types 3, 4 and 5 (drawn solid): their patterns aren't decoded.
+    Ragged,
+    Stipple,
+    Hatched,
+    /// A type or style byte not seen in the corpus (drawn solid).
+    Unknown,
+}
+
+impl StrokeKind {
+    pub fn of(style: &[u8; 10]) -> StrokeKind {
+        if style[4] != 0 || style[8] != 0 {
+            return StrokeKind::Unknown;
+        }
+        let dash = u16::from_le_bytes([style[0], style[1]]);
+        let field = u16::from_le_bytes([style[2], style[3]]);
+        if dash != 0 {
+            return StrokeKind::Dashed { dash: dash as f32 / 20.0, gap: field as f32 / 20.0 };
+        }
+        match (field & 0xF, field >> 4) {
+            (0, 0) => StrokeKind::Solid,
+            (2, spacing) => StrokeKind::Dotted { spacing: spacing as f32 / 10.0 },
+            (3, _) => StrokeKind::Ragged,
+            (4, _) => StrokeKind::Stipple,
+            (5, _) => StrokeKind::Hatched,
+            _ => StrokeKind::Unknown,
+        }
     }
-    let dash = u16::from_le_bytes([style[0], style[1]]);
-    let field = u16::from_le_bytes([style[2], style[3]]);
-    if dash != 0 {
-        return Some("dashed and dotted strokes (drawn solid)");
-    }
-    match (field & 0xF, field >> 4) {
-        (0, 0) => None,
-        (2, _) => Some("dashed and dotted strokes (drawn solid)"),
-        (3..=5, _) => Some("ragged, stipple and hatched strokes (drawn solid)"),
-        _ => Some("stroke styles not decoded yet (drawn solid)"),
+
+    /// The pattern AniCraft draws (`None`: a solid line), and what the drawing leaves out.
+    pub fn dash(self) -> (Option<Dash>, Option<&'static str>) {
+        match self {
+            StrokeKind::Solid => (None, None),
+            StrokeKind::Dashed { dash, gap } => (Dash::dashed(dash, gap), None),
+            StrokeKind::Dotted { spacing } => (Dash::dotted(spacing), None),
+            StrokeKind::Ragged | StrokeKind::Stipple | StrokeKind::Hatched => (None, Some("ragged, stipple and hatched strokes (drawn solid)")),
+            StrokeKind::Unknown => (None, Some("stroke styles not decoded yet (drawn solid)")),
+        }
     }
 }
 
-/// A stroke style: RGBA, width in twips, ten bytes of style (cap at 6, join at 7, miter
-/// limit at 9), then the stroke's own fill (for a solid stroke, its colour again).
-fn stroke(r: &mut Reader, approximations: &mut Vec<&'static str>) -> Result<Stroke, ShapeError> {
+/// A stroke style: RGBA, width in twips, ten bytes of style (dash and gap, cap, join, miter
+/// limit), then the stroke's own fill (for a solid stroke, its colour again).
+fn stroke(r: &mut Reader, approximations: &mut Vec<&'static str>) -> Result<(Stroke, StrokeKind), ShapeError> {
     let mut color = rgba(r.bytes()?);
     let width = (r.u16()? as f32 / 20.0).clamp(0.05, 1000.0);
     let style: [u8; 10] = r.bytes()?;
-    if let Some(kind) = unsupported_style(&style) {
-        approximations.push(kind);
-    }
     let cap = match style[6] {
         0 => Cap::Butt,
         2 => Cap::Square,
@@ -243,6 +291,9 @@ fn stroke(r: &mut Reader, approximations: &mut Vec<&'static str>) -> Result<Stro
         0 => DEFAULT_MITER_LIMIT,
         m => (m as f32).clamp(MIN_MITER_LIMIT, MAX_MITER_LIMIT),
     };
+    let kind = StrokeKind::of(&style);
+    let (dash, left_out) = kind.dash();
+    approximations.extend(left_out);
     match fill(r, approximations)? {
         Some(Paint::Solid(_)) | None => {}
         Some(gradient) => {
@@ -250,7 +301,7 @@ fn stroke(r: &mut Reader, approximations: &mut Vec<&'static str>) -> Result<Stro
             color = gradient.primary_color();
         }
     }
-    Ok(Stroke::new(color, width).with_style(StrokeStyle { cap, join, miter_limit, dash: None }))
+    Ok((Stroke::new(color, width).with_style(StrokeStyle { cap, join, miter_limit, dash }), kind))
 }
 
 /// Decodes the shape body whose matrix ends at `at` (the offset of its `05` byte).
@@ -290,8 +341,11 @@ fn decode_in(r: &mut Reader) -> Result<ShapeRecord, ShapeError> {
         return Err(ShapeError::TooLarge);
     }
     let mut strokes = Vec::with_capacity(stroke_count.min(64));
+    let mut stroke_kinds = Vec::with_capacity(stroke_count.min(64));
     for _ in 0..stroke_count {
-        strokes.push(stroke(r, &mut approximations)?);
+        let (stroke, kind) = stroke(r, &mut approximations)?;
+        strokes.push(stroke);
+        stroke_kinds.push(kind);
     }
     let mut edges = Vec::with_capacity(count.min(4096));
     let (mut pen, mut styles) = ((0i64, 0i64), (0u16, 0u16, 0u16));
@@ -327,7 +381,7 @@ fn decode_in(r: &mut Reader) -> Result<ShapeRecord, ShapeError> {
     if edges.len() != count {
         return Err(ShapeError::Count);
     }
-    Ok(ShapeRecord { matrix, fills, strokes, edges, approximations, end: r.at })
+    Ok(ShapeRecord { matrix, fills, strokes, stroke_kinds, edges, approximations, end: r.at })
 }
 
 /// The shape body behind an object whose class tag or name ends at `at`: the 15-byte

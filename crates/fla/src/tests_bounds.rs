@@ -372,6 +372,7 @@ fn crowded_shape(seed: u64, edges: usize) -> ShapeRecord {
         matrix: Affine::IDENTITY,
         fills: vec![solid(0.25), None, solid(0.75)], // edges name style 4 too: listed by none
         strokes: vec![Stroke::new(Rgba::new(0.0, 0.0, 1.0, 1.0), 1.0), Stroke::new(Rgba::new(0.0, 1.0, 0.0, 1.0), 2.0)],
+        stroke_kinds: vec![crate::shape::StrokeKind::Solid; 2],
         edges: list,
         approximations: Vec::new(),
         end: 0,

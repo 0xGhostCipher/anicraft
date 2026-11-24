@@ -1018,3 +1018,100 @@ fn the_corpus_library_folders_match_the_twins() {
     assert!(mismatches.is_empty(), "{} library differences", mismatches.len());
     assert!(folders >= 30 && items >= 300);
 }
+
+/// One patterned stroke as compared: its kind ("dashed", "dotted", or the twin's element
+/// name for kinds AniCraft draws solid), colour, width and pattern (in tenths of a pixel).
+type PatternCmp = (String, String, i64, Vec<i64>);
+
+fn tenths(v: f32) -> i64 {
+    (v * 10.0).round() as i64
+}
+
+/// Every non-solid stroke style in the twin's XML (stage and library), as compared.
+fn twin_patterned_strokes(twin: &std::path::Path) -> Vec<PatternCmp> {
+    let mut out = Vec::new();
+    for member in twin_members(twin).into_iter().filter(|m| m.ends_with(".xml")) {
+        let Some(xml) = twin_member(twin, &member) else { continue };
+        let Ok(dom) = craft_xfl::document::Document::parse(&xml) else { continue };
+        for el in dom.root().descendants().filter(|e| local(&e.name) == "StrokeStyle").flat_map(|e| e.elements()) {
+            let kind = local(&el.name);
+            if !kind.ends_with("Stroke") || kind == "SolidStroke" {
+                continue;
+            }
+            let num = |k: &str| el.attr(k).and_then(|v| v.trim().parse::<f32>().ok());
+            let colour = el.descendants().find(|c| local(&c.name) == "SolidColor").map_or_else(
+                || "gradient".to_string(),
+                |c| format!("{}/{}", c.attr("color").unwrap_or("#000000").to_ascii_uppercase(), tenths(c.attr("alpha").and_then(|a| a.parse().ok()).unwrap_or(1.0))),
+            );
+            let width = tenths(num("weight").unwrap_or(1.0));
+            // Animate writes `dash1`/`dash2` only when they differ from its defaults; the
+            // legacy bytes of the twins' default-dashed strokes say those are 6 and 6.
+            let (name, pattern) = match kind {
+                "DashedStroke" => ("dashed", vec![tenths(num("dash1").unwrap_or(6.0)), tenths(num("dash2").unwrap_or(6.0))]),
+                "DottedStroke" => ("dotted", vec![tenths(num("dotSpace").unwrap_or(0.0))]),
+                other => (other, Vec::new()),
+            };
+            out.push((name.to_string(), colour, width, pattern));
+        }
+    }
+    out.sort();
+    out
+}
+
+/// Every non-solid stroke style in the legacy file's shape records, as compared.
+fn legacy_patterned_strokes(data: &[u8]) -> Vec<PatternCmp> {
+    use anicraft_fla::shape::StrokeKind;
+    let file = anicraft_fla::cfb::Compound::new(data).expect("opens");
+    let mut out = Vec::new();
+    for s in anicraft_fla::dump(data).expect("lists streams") {
+        let Ok(bytes) = file.stream(&s.path) else { continue };
+        for record in anicraft_fla::shape::find_all(&bytes) {
+            for (stroke, kind) in record.strokes.iter().zip(&record.stroke_kinds) {
+                let c = stroke.color;
+                let byte = |v: f32| (v * 255.0).round() as u8;
+                let colour = format!("#{:02X}{:02X}{:02X}/{}", byte(c.r), byte(c.g), byte(c.b), tenths((byte(c.a) as f32 / 255.0 * 100.0).round() / 100.0));
+                let (name, pattern) = match *kind {
+                    StrokeKind::Solid => continue,
+                    StrokeKind::Dashed { dash, gap } => ("dashed", vec![tenths(dash), tenths(gap)]),
+                    StrokeKind::Dotted { spacing } => ("dotted", vec![tenths(spacing)]),
+                    StrokeKind::Ragged => ("RaggedStroke", Vec::new()),
+                    StrokeKind::Stipple => ("StippleStroke", Vec::new()),
+                    StrokeKind::Hatched => ("HatchedStroke", Vec::new()),
+                    StrokeKind::Unknown => ("undecoded", Vec::new()),
+                };
+                // What is drawn follows the kind: dashes and dots as decoded, the rest solid.
+                let drawn = kind.dash().0;
+                assert_eq!(stroke.style.dash, drawn, "{name}");
+                out.push((name.to_string(), colour, tenths(stroke.width), pattern));
+            }
+        }
+    }
+    out.sort();
+    out
+}
+
+#[test]
+fn the_corpus_dashed_and_dotted_strokes_match_the_twins() {
+    let Some(dir) = corpus() else { return };
+    let (mut compared, mut mismatches) = (0usize, Vec::new());
+    for (legacy, twin) in TWINS {
+        let (legacy_path, twin_path) = (dir.join(legacy), dir.join(twin));
+        if !legacy_path.exists() || !twin_path.exists() {
+            continue;
+        }
+        let got = legacy_patterned_strokes(&std::fs::read(&legacy_path).expect("reads"));
+        let want = twin_patterned_strokes(&twin_path);
+        compared += want.len();
+        if got != want {
+            mismatches.push(format!("{legacy}: {got:?}\n    twin {want:?}"));
+        }
+    }
+    eprintln!("patterned strokes: {compared} twin strokes compared");
+    for m in &mismatches {
+        eprintln!("  {m}");
+    }
+    assert!(mismatches.is_empty(), "{} files differ", mismatches.len());
+    // 11 dotted (kinefox, giskard, magnebot, rabbit), 8 dashed (mademoiselle, robokit) and 4
+    // hatched (robokit) when written.
+    assert!(compared >= 23, "expected the corpus's dotted and dashed strokes, compared {compared}");
+}
