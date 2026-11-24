@@ -224,6 +224,11 @@ impl<'a> Reader<'a> {
     /// the corpus's strings read `FF FE FF <u8>` and, from 255 units, `FF FE FF FF <u16>`.
     /// Unmarked strings are 8-bit (read as Latin-1).
     fn cstring(&mut self) -> Result<String, TextError> {
+        let (wide, len) = self.cstring_head()?;
+        Ok(if wide { String::from_utf16_lossy(&self.units(len)?) } else { self.take(len)?.iter().map(|&b| b as char).collect() })
+    }
+    /// A `CArchive` string's head: whether it is UTF-16, and its length in characters.
+    fn cstring_head(&mut self) -> Result<(bool, usize), TextError> {
         let mut wide = false;
         let len = loop {
             let b = self.u8()?;
@@ -246,7 +251,7 @@ impl<'a> Reader<'a> {
         if len > MAX_STRING {
             return Err(TextError::TooLarge);
         }
-        Ok(if wide { String::from_utf16_lossy(&self.units(len)?) } else { self.take(len)?.iter().map(|&b| b as char).collect() })
+        Ok((wide, len))
     }
 }
 
@@ -257,6 +262,15 @@ pub fn cstring(data: &[u8], at: usize) -> Result<(String, usize), TextError> {
     let mut r = Reader { data, at };
     let s = r.cstring()?;
     Ok((s, r.at))
+}
+
+/// Where the `CArchive` string at `at` ends, read from its head alone: nothing is decoded, so
+/// a scan can step over a string, or refuse a long one, without paying for its characters.
+pub fn cstring_end(data: &[u8], at: usize) -> Result<usize, TextError> {
+    let mut r = Reader { data, at };
+    let (wide, len) = r.cstring_head()?;
+    r.take(if wide { len.checked_mul(2).ok_or(TextError::TooLarge)? } else { len })?;
+    Ok(r.at)
 }
 
 fn note(approximations: &mut Vec<&'static str>, what: &'static str) {
@@ -338,7 +352,18 @@ fn block<'a>(r: &mut Reader<'a>, approximations: &mut Vec<&'static str>) -> Resu
 
 /// Decodes the text record whose head (the `04` byte behind its class tag) is at `at`.
 pub fn decode(data: &[u8], at: usize) -> Result<TextRecord, TextError> {
+    decode_counted(data, at).0
+}
+
+/// [`decode`], and how many bytes it read, whether it decoded or not: what the object walker
+/// charges a trial against its stream's work budget.
+pub(crate) fn decode_counted(data: &[u8], at: usize) -> (Result<TextRecord, TextError>, usize) {
     let mut r = Reader { data, at };
+    let record = decode_in(&mut r, at);
+    (record, r.at.saturating_sub(at))
+}
+
+fn decode_in(r: &mut Reader, at: usize) -> Result<TextRecord, TextError> {
     let head: [u8; HEAD] = r.bytes()?;
     if head[0] != 0x04 || head[2..4] != [0, 0] || head[12..14] != [0, 0] || head[14] != 0x0D {
         return Err(TextError::NotText);
@@ -367,7 +392,7 @@ pub fn decode(data: &[u8], at: usize) -> Result<TextRecord, TextError> {
     // The stored runs, the 512-unit pieces of one run merged back as they come.
     let mut merged: Vec<(Vec<u16>, RunStyle, &[u8])> = Vec::new();
     if field_flags & NO_CHARACTERS != 0 {
-        let (style, raw) = block(&mut r, &mut approximations)?;
+        let (style, raw) = block(r, &mut approximations)?;
         if r.u16()? != 0 {
             return Err(TextError::Unclosed);
         }
@@ -384,7 +409,7 @@ pub fn decode(data: &[u8], at: usize) -> Result<TextRecord, TextError> {
             if stored > MAX_STORED_RUNS || total > MAX_UNITS {
                 return Err(TextError::TooLarge);
             }
-            let (style, raw) = block(&mut r, &mut approximations)?;
+            let (style, raw) = block(r, &mut approximations)?;
             let units = r.units(n)?;
             match merged.last_mut() {
                 Some(last) if !last.0.is_empty() && last.0.len() % CHUNK == 0 && last.2 == raw => last.0.extend(units),

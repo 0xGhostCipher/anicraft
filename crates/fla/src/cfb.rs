@@ -155,6 +155,11 @@ impl<'a> Compound<'a> {
         self.read_entry(entry)
     }
 
+    /// The size of the stream at a full path, without reading it.
+    pub fn stream_size(&self, path: &str) -> Option<u64> {
+        self.streams.get(path).and_then(|&i| self.entries.get(i)).map(|e| e.size)
+    }
+
     /// Reads the stream one of [`Compound::entries`] is: its own bytes, even when another
     /// entry of a damaged file has the same path.
     pub fn read_entry(&self, entry: &Entry) -> Result<Vec<u8>, Error> {

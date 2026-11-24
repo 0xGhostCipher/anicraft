@@ -29,7 +29,10 @@ pub type ItemId = (u32, u32);
 /// The root's id.
 pub const ROOT: ItemId = (0, 0);
 /// Most folders and media items read.
-const MAX_ITEMS: usize = 1 << 14;
+pub const MAX_ITEMS: usize = 1 << 14;
+/// The longest name a library record's string may be, in bytes as stored: a longer string is
+/// no name, and is refused from its head alone, before anything is decoded.
+const MAX_NAME_BYTES: usize = 8192;
 /// Longest stream name (UTF-16 units).
 const MAX_STREAM_NAME: usize = 64;
 
@@ -89,10 +92,21 @@ impl<'a> Reader<'a> {
     fn expect(&mut self, v: u32) -> Option<()> {
         (self.u32()? == v).then_some(())
     }
+    /// A name: a string of at most [`MAX_NAME_BYTES`], refused before it is decoded when longer.
     fn string(&mut self) -> Option<String> {
+        let end = crate::text::cstring_end(self.d, self.at).ok()?;
+        if end.saturating_sub(self.at) > MAX_NAME_BYTES {
+            return None;
+        }
         let (s, end) = crate::text::cstring(self.d, self.at).ok()?;
         self.at = end;
         Some(s)
+    }
+    /// Steps over a string by its head alone: a candidate that turns out not to be a record
+    /// costs the scan nothing for the strings it claimed to hold.
+    fn skip_string(&mut self) -> Option<()> {
+        self.at = crate::text::cstring_end(self.d, self.at).ok()?;
+        Some(())
     }
     /// The identity block: u32 6, u32 1, parent id, u32 1, own id.
     fn identity(&mut self) -> Option<(ItemId, ItemId)> {
@@ -124,10 +138,13 @@ pub fn folders(contents: &[u8]) -> Vec<Folder> {
         if contents.get(i..i + 7) == Some(&[0x04, 0x00, 0x00, 0x00, 0xFF, 0xFE, 0xFF][..]) {
             let mut r = Reader { d: contents, at: i + 4 };
             let folder = (|| {
-                let name = r.string()?;
+                // The name is decoded only once the record behind it checks out.
+                let name_at = r.at;
+                r.skip_string()?;
                 let (parent, id) = r.identity()?;
                 r.expect(0)?;
                 r.expect(7)?;
+                let name = Reader { d: contents, at: name_at }.string()?;
                 let name = name.trim().to_string();
                 (!name.is_empty() && id != ROOT && !name.contains('/')).then_some(Folder { name, parent, id })
             })();
@@ -176,7 +193,7 @@ pub fn folder_paths(folders: &[Folder]) -> HashMap<ItemId, String> {
 /// byte at `after` (the type byte's offset + 1), with a string, `u32 1` and the identity block.
 pub fn symbol_parent(contents: &[u8], after: usize) -> Option<ItemId> {
     let mut r = Reader { d: contents, at: after };
-    r.string()?;
+    r.skip_string()?;
     r.expect(1)?;
     r.identity().map(|(parent, _)| parent)
 }
@@ -229,11 +246,14 @@ pub fn media_items(contents: &[u8], has_stream: impl Fn(&str) -> bool) -> (Vec<M
 fn media_at(contents: &[u8], at: usize, declared: Option<MediaKind>) -> Option<(MediaItem, usize)> {
     let mut r = Reader { d: contents, at };
     let stream = r.stream_name()?;
-    let name = r.string()?;
+    // The name is decoded only once the record behind it checks out.
+    let name_at = r.at;
+    r.skip_string()?;
     let id = r.u16()?;
-    r.string()?; // the source file's path
+    r.skip_string()?; // the source file's path
     r.u32()?; // its import time
     let (parent, _) = r.identity()?;
+    let name = Reader { d: contents, at: name_at }.string()?;
     let mut item = MediaItem { kind: declared, stream, name: name.chars().take(256).collect(), id, parent, sound: None };
     let identity_end = r.at;
     // The common settings, then the class's own.
@@ -242,19 +262,19 @@ fn media_at(contents: &[u8], at: usize, declared: Option<MediaKind>) -> Option<(
         r.expect(7)?;
         r.u8()?;
         for _ in 0..3 {
-            r.string()?;
+            r.skip_string()?;
         }
         r.u8()?;
         r.expect(2)?;
         for _ in 0..2 {
-            r.string()?;
+            r.skip_string()?;
         }
         r.take(8)?;
         r.expect(1)?;
         r.expect(0)?;
         r.expect(u32::MAX)?;
         r.u8()?;
-        r.string()?;
+        r.skip_string()?;
         r.u8()?;
         r.expect(1)?;
         match r.u8()? {

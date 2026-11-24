@@ -255,7 +255,19 @@ fn stroke(r: &mut Reader, approximations: &mut Vec<&'static str>) -> Result<Stro
 
 /// Decodes the shape body whose matrix ends at `at` (the offset of its `05` byte).
 pub fn decode(data: &[u8], at: usize) -> Result<ShapeRecord, ShapeError> {
-    let mut r = Reader { data, at: at.checked_sub(MATRIX).ok_or(ShapeError::NotShape)? };
+    decode_counted(data, at).0
+}
+
+/// [`decode`], and how many bytes it read, whether it decoded or not: what the object walker
+/// charges a trial against its stream's work budget.
+pub(crate) fn decode_counted(data: &[u8], at: usize) -> (Result<ShapeRecord, ShapeError>, usize) {
+    let Some(start) = at.checked_sub(MATRIX) else { return (Err(ShapeError::NotShape), 0) };
+    let mut r = Reader { data, at: start };
+    let record = decode_in(&mut r);
+    (record, r.at.saturating_sub(start))
+}
+
+fn decode_in(r: &mut Reader) -> Result<ShapeRecord, ShapeError> {
     let matrix = r.matrix()?;
     if r.u8()? != 0x05 {
         return Err(ShapeError::NotShape);
@@ -271,7 +283,7 @@ pub fn decode(data: &[u8], at: usize) -> Result<ShapeRecord, ShapeError> {
     }
     let mut fills = Vec::with_capacity(fill_count.min(64));
     for _ in 0..fill_count {
-        fills.push(fill(&mut r, &mut approximations)?);
+        fills.push(fill(r, &mut approximations)?);
     }
     let stroke_count = r.u16()? as usize;
     if stroke_count > MAX_STYLES {
@@ -279,7 +291,7 @@ pub fn decode(data: &[u8], at: usize) -> Result<ShapeRecord, ShapeError> {
     }
     let mut strokes = Vec::with_capacity(stroke_count.min(64));
     for _ in 0..stroke_count {
-        strokes.push(stroke(&mut r, &mut approximations)?);
+        strokes.push(stroke(r, &mut approximations)?);
     }
     let mut edges = Vec::with_capacity(count.min(4096));
     let (mut pen, mut styles) = ((0i64, 0i64), (0u16, 0u16, 0u16));

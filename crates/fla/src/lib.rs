@@ -76,10 +76,14 @@ pub fn dump_only(data: &[u8], only: Option<&str>) -> Result<Vec<StreamDump>, cfb
     // One tag budget for the whole file: several directory entries may share one chain, so a
     // budget per stream would let a small file hold millions of tags.
     let mut tags_left = records::MAX_TAGS;
+    // And one reading allowance, of twice the file's size, for the same reason: each stream
+    // of a file Flash wrote is its own bytes, so together they are smaller than the file.
+    let mut bytes_left = (data.len() as u64).saturating_mul(2);
     for entry in file.entries() {
         if entry.kind != cfb::Kind::Stream || only.is_some_and(|p| p != entry.path) {
             continue;
         }
+        bytes_left = bytes_left.checked_sub(entry.size).ok_or_else(|| cfb::Error::OverLimit("its streams add up to more than twice the file's size".to_string()))?;
         let bytes = file.read_entry(entry)?;
         let scan = records::scan_tags_max(&bytes, tags_left);
         tags_left = tags_left.saturating_sub(scan.tags.len());

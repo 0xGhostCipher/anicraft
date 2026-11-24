@@ -70,8 +70,12 @@ pub const MAX_OBJECTS: usize = 1 << 20;
 const MAX_DEPTH: usize = 64;
 /// Longest string read, in UTF-16 units.
 const MAX_STRING: usize = 1 << 20;
-/// Bytes scanned while skipping undecoded objects, per stream.
-const SCAN_BUDGET: usize = 256 << 20;
+/// A stream's work budget: every byte read (again after a rolled-back trial, too) and every
+/// byte scanned while skipping undecoded objects is charged, so decoding a stream costs at
+/// most this many times its length (and a little, for the smallest streams). A stream Flash
+/// wrote is read about once; the room is for the trial parses of what isn't decoded yet.
+const WORK_PER_BYTE: usize = 64;
+const WORK_FLOOR: usize = 1 << 16;
 /// Trial parses while skipping, per stream.
 const MAX_TRIALS: usize = 1 << 16;
 /// Most envelope points, persistent-data entries, guides or ease anchors in one list.
@@ -256,23 +260,18 @@ impl Graph {
     pub fn node(&self, i: usize) -> Option<&Node> {
         self.nodes.get(i)
     }
-    /// How many of the page's children didn't decode as anything (recovery skipped them): the
-    /// layers [`Graph::layers`] can't list.
+    /// How many of the page's children aren't layers (recovery skipped them, or they are
+    /// objects of another kind): what [`Graph::layers`] can't list.
     pub fn skipped_layers(&self) -> usize {
         let Some(Node::Page { layers }) = self.nodes.get(self.root) else { return 0 };
-        layers.iter().filter(|&&l| matches!(self.nodes.get(l), Some(Node::Skipped(_)))).count()
+        layers.iter().filter(|&&l| !matches!(self.nodes.get(l), Some(Node::Layer(_)))).count()
     }
 
     /// The layers, bottom first, each once.
     pub fn layers(&self) -> Vec<usize> {
         let Some(Node::Page { layers }) = self.nodes.get(self.root) else { return Vec::new() };
-        let mut out: Vec<usize> = Vec::with_capacity(layers.len());
-        for &l in layers {
-            if matches!(self.nodes.get(l), Some(Node::Layer(_))) && !out.contains(&l) {
-                out.push(l);
-            }
-        }
-        out
+        let mut seen = std::collections::HashSet::new();
+        layers.iter().copied().filter(|&l| matches!(self.nodes.get(l), Some(Node::Layer(_))) && seen.insert(l)).collect()
     }
 }
 
@@ -328,10 +327,15 @@ struct Base {
 
 /// Decodes an item stream's object graph (its first byte, then the page object).
 pub fn parse(data: &[u8]) -> Result<Graph, Bad> {
+    parse_within(data, data.len().saturating_mul(WORK_PER_BYTE).saturating_add(WORK_FLOOR))
+}
+
+/// [`parse`] with a work budget of `budget` bytes (tests try small ones).
+pub(crate) fn parse_within(data: &[u8], budget: usize) -> Result<Graph, Bad> {
     if data.first() != Some(&0x01) {
         return Err(Bad);
     }
-    let mut p = Parser { d: data, at: 1, map: vec![Entry::Null], classes: Vec::new(), nodes: Vec::new(), depth: 0, budget: SCAN_BUDGET, trials: 0, resyncs: 0 };
+    let mut p = Parser { d: data, at: 1, map: vec![Entry::Null], classes: Vec::new(), nodes: Vec::new(), depth: 0, budget, trials: 0, resyncs: 0 };
     let root = p.obj(None)?.ok_or(Bad)?;
     if !matches!(p.nodes.get(root), Some(Node::Page { .. })) {
         return Err(Bad);
@@ -340,7 +344,13 @@ pub fn parse(data: &[u8]) -> Result<Graph, Bad> {
 }
 
 impl<'a> Parser<'a> {
+    /// Charges `n` bytes of reading, and the read itself, against the stream's work budget.
+    fn charge(&mut self, n: usize) -> R<()> {
+        self.budget = self.budget.checked_sub(n.saturating_add(1)).ok_or(Bad)?;
+        Ok(())
+    }
     fn take(&mut self, n: usize) -> R<&'a [u8]> {
+        self.charge(n)?;
         let end = self.at.checked_add(n).ok_or(Bad)?;
         let s = self.d.get(self.at..end).ok_or(Bad)?;
         self.at = end;
@@ -614,10 +624,9 @@ impl<'a> Parser<'a> {
                 self.number_declarations(&mut numbered_to, i);
                 let numbered = self.snap();
                 self.at = i;
+                // What a trial reads is charged as it reads, whether it parses or is rolled
+                // back (a hostile stream can't make the skipping quadratic).
                 let ok = matches!(self.obj(parent), Ok(Some(_)));
-                // What a trial reads counts against the budget too (a hostile stream can't
-                // make the skipping quadratic).
-                self.budget = self.budget.saturating_sub(self.at.saturating_sub(i));
                 self.restore(numbered);
                 if ok {
                     self.at = i;
@@ -746,7 +755,10 @@ impl<'a> Parser<'a> {
     /// A shape body, or why it didn't decode.
     fn shape_body_or_why(&mut self) -> Result<ShapeRecord, shape::ShapeError> {
         let at05 = self.at.checked_add(24).ok_or(shape::ShapeError::Truncated)?;
-        let record = shape::decode(self.d, at05)?;
+        // A shape that doesn't decode is charged what it read, too.
+        let (record, read) = shape::decode_counted(self.d, at05);
+        self.charge(read).map_err(|_| shape::ShapeError::TooLarge)?;
+        let record = record?;
         self.at = record.end;
         let n = self.u32().map_err(|_| shape::ShapeError::Truncated)? as usize;
         if n > shape::MAX_EDGES {
@@ -802,7 +814,6 @@ impl<'a> Parser<'a> {
             let snap = self.snap();
             self.at = i;
             let ok = self.frame_tail().is_ok() && self.continues_at(self.at, Some(KIND_LAYER));
-            self.budget = self.budget.saturating_sub(self.at.saturating_sub(i));
             self.restore(snap);
             if ok {
                 self.at = i;
@@ -898,10 +909,13 @@ impl<'a> Parser<'a> {
     /// A text record (its head here), decoded by [`crate::text`]; one in a layout not seen,
     /// or that doesn't end where its parent continues, is skipped.
     fn text(&mut self, parent: Option<u8>) -> R<Node> {
-        if let Ok(t) = crate::text::decode(self.d, self.at)
+        // A text that doesn't decode, or doesn't end where its parent continues, is charged
+        // what it read, too.
+        let (decoded, read) = crate::text::decode_counted(self.d, self.at);
+        self.charge(read)?;
+        if let Ok(t) = decoded
             && self.continues_at(t.end, parent)
         {
-            self.budget = self.budget.saturating_sub(t.end.saturating_sub(self.at));
             self.at = t.end;
             return Ok(Node::Text(Box::new(t)));
         }

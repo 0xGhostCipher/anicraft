@@ -301,6 +301,7 @@ fn stream_names_with_spaces_and_digits_round_trip() {
 pub(crate) fn synthetic_contents() -> Vec<u8> {
     let utf16 = |s: &str| -> Vec<u8> { s.encode_utf16().flat_map(|c| c.to_le_bytes()).collect() };
     let mut c = vec![0x3F, 0x01, 0x00, 0x00, 0x00];
+    c.extend(properties([0, 11_000, 0, 8_000], 24 << 16)); // a 550 x 400 stage at 24 fps
     c.extend_from_slice(&[0xFF, 0xFF, 0x01, 0x00]); // the record stream's marker
     c.extend_from_slice(&13u16.to_le_bytes()); // the record's name length
     c.extend_from_slice(b"CDocumentPage");
@@ -313,10 +314,25 @@ pub(crate) fn synthetic_contents() -> Vec<u8> {
     c.extend_from_slice(&[0x01, 0x80, 0x17, 0x08]);
     c.extend_from_slice(&utf16("Symbol 9"));
     c.extend_from_slice(&[0xFF, 0xFE, 0xFF, 0x08]);
-    c.extend_from_slice(&utf16("UFO mask"));
+    c.extend_from_slice(&utf16("Sky mask"));
     c.extend_from_slice(&9u32.to_le_bytes()); // its item id
     c.push(0x00); // a graphic
     c.extend_from_slice(&[0u8; 8]);
+    c
+}
+
+/// The document properties around `legacyLineSpacing`: the stage rectangle (left, right,
+/// top, bottom in twips) 74 bytes before the property's name, the background 21 and the
+/// frame rate (16.16) 13 bytes before it.
+pub(crate) fn properties(rect: [i32; 4], fps: i32) -> Vec<u8> {
+    let mut c = vec![0u8; 74];
+    for (k, v) in rect.iter().enumerate() {
+        c[4 * k..4 * k + 4].copy_from_slice(&v.to_le_bytes());
+    }
+    c[53..57].copy_from_slice(&[0x33, 0x66, 0x99, 0xFF]);
+    c[61..65].copy_from_slice(&fps.to_le_bytes());
+    c.extend([0xFF, 0xFE, 0xFF, 17]);
+    c.extend("legacyLineSpacing".encode_utf16().flat_map(u16::to_le_bytes));
     c
 }
 
@@ -446,20 +462,19 @@ fn shape_head(matrix: [i32; 6], edge_count: u32) -> Vec<u8> {
 /// The layer-record tail that follows a shape in a library stream.
 const TAIL: [u8; 9] = [0x00, 0x80, 0x00, 0x00, 0x00, 0x80, 0x00, 0x00, 0x03];
 
-/// A `CPicShape` record holding the corpus's smallest shape's geometry (Symbol 123, "UFO
-/// mask"): a 10.9 × 11.2 px rectangle, white fill at 31 % opacity, its matrix scaled by
-/// 65535/65536 and translated to (26.9, −1.55). The bytes are written from the decoded
-/// grammar (ADR 0120), not copied from any file.
+/// A `CPicShape` record of our own making: a 12 × 8 px rectangle, a blue fill at half
+/// opacity, its matrix scaled by a half and translated to (15, −7). The bytes are written from
+/// the decoded grammar (ADR 0120); neither they nor the values come from any file.
 fn synthetic_shape_record() -> Vec<u8> {
-    let mut d = shape_head([0xFFFF, 0, 0, 0xFFFF, 538, -31], 4);
+    let mut d = shape_head([0x8000, 0, 0, 0x8000, 300, -140], 4);
     d.extend_from_slice(&1u16.to_le_bytes()); // one fill:
-    d.extend_from_slice(&[0xFF, 0xFF, 0xFF, 0x50, 0x00, 0x00]); // white at 80/255, solid
+    d.extend_from_slice(&[0x20, 0x80, 0xC0, 0x80, 0x00, 0x00]); // blue at 128/255, solid
     d.extend_from_slice(&0u16.to_le_bytes()); // no strokes
-    // The right-hand fill 1, a move to (−429, −81) twips, then four straight edges.
-    edge(&mut d, Some(Styles::Narrow(0, 0, 1)), Some(Pt::Half(-858, -162)), None, Some(Pt::Half(0, 448)));
-    edge(&mut d, None, None, None, Some(Pt::Half(-436, 0)));
-    edge(&mut d, None, None, None, Some(Pt::Half(0, -448)));
-    edge(&mut d, None, None, None, Some(Pt::Half(436, 0)));
+    // The right-hand fill 1, a move to (200, 100) twips, then four straight edges.
+    edge(&mut d, Some(Styles::Narrow(0, 0, 1)), Some(Pt::Half(400, 200)), None, Some(Pt::Half(0, 320)));
+    edge(&mut d, None, None, None, Some(Pt::Half(-480, 0)));
+    edge(&mut d, None, None, None, Some(Pt::Half(0, -320)));
+    edge(&mut d, None, None, None, Some(Pt::Half(480, 0)));
     d.push(0x00); // the edge list's end
     d.extend_from_slice(&TAIL);
     d
@@ -493,7 +508,7 @@ fn library_shapes(record: Vec<u8>) -> (Vec<std::sync::Arc<anicraft_doc::Element>
     use super::doc;
     let payloads = vec![("Contents", synthetic_contents()), ("P 1 1", synthetic_page()), ("Symbol 9", one_frame_stream(&record_body(&record)))];
     let (document, report) = doc::import(&write(&payloads)).expect("opens");
-    let elements = document.library.iter().find(|s| s.name == "UFO mask")
+    let elements = document.library.iter().find(|s| s.name == "Sky mask")
         .map(|symbol| symbol.timeline.layers[0].keyframes[0].elements.clone())
         .unwrap_or_default();
     (elements, report)
@@ -534,20 +549,20 @@ fn a_straight_edged_shape_decodes_with_its_geometry_and_fill() {
     let (elements, report) = library_shapes(synthetic_shape_record());
     assert_eq!(elements.len(), 1, "the rectangle decodes as one shape");
     let shape = shape_of(&elements[0]);
-    // The fill: white at 80/255.
+    // The fill: at 128/255.
     let Some(anicraft_doc::Paint::Solid(fill)) = shape.fill else { panic!("a solid fill") };
-    assert!((fill.a - 80.0 / 255.0).abs() < 0.001, "fill alpha {fill:?}");
-    // The matrix: 65535/65536 scale, translation (26.9, −1.55) px.
+    assert!((fill.a - 128.0 / 255.0).abs() < 0.001, "fill alpha {fill:?}");
+    // The matrix: a half scale, translation (15, −7) px.
     let m = elements[0].transform.m;
-    assert!(close(m[0], 65535.0 / 65536.0) && close(m[3], 65535.0 / 65536.0) && m[1] == 0.0 && m[2] == 0.0, "{m:?}");
-    assert!(close(m[4], 26.9) && close(m[5], -1.55), "{m:?}");
-    // The path: the rectangle's corners, (−429, −81) … (−647, 143) twips, as one closed loop.
+    assert!(close(m[0], 0.5) && close(m[3], 0.5) && m[1] == 0.0 && m[2] == 0.0, "{m:?}");
+    assert!(close(m[4], 15.0) && close(m[5], -7.0), "{m:?}");
+    // The path: the rectangle's corners, (200, 100) … (−40, 260) twips, as one closed loop.
     let points: Vec<_> = shape.path.cmds.iter().filter_map(|c| match *c {
         anicraft_geom::PathCmd::MoveTo(p) | anicraft_geom::PathCmd::LineTo(p) => Some((p.x, p.y)),
         anicraft_geom::PathCmd::Close => None,
         _ => panic!("straight edges only"),
     }).collect();
-    let want = [(-21.45, -4.05), (-21.45, 7.15), (-32.35, 7.15), (-32.35, -4.05), (-21.45, -4.05)];
+    let want = [(10.0, 5.0), (10.0, 13.0), (-2.0, 13.0), (-2.0, 5.0), (10.0, 5.0)];
     assert_eq!(points.len(), want.len(), "{points:?}");
     for (got, want) in points.iter().zip(want) {
         assert!(close(got.0, want.0) && close(got.1, want.1), "{points:?}");
@@ -1112,7 +1127,7 @@ fn a_synthetic_timeline_decodes_its_layers_keyframes_tweens_and_instances() {
     // The instance: its symbol, matrix, loop, first frame, colour, blend and moved point.
     let e = &first.elements[0];
     let ElementKind::Symbol { symbol, loop_mode, first_frame, blend, pivot, .. } = &e.kind else { panic!("an instance: {:?}", e.kind) };
-    assert_eq!(doc.symbol(*symbol).map(|s| s.name.as_str()), Some("UFO mask"));
+    assert_eq!(doc.symbol(*symbol).map(|s| s.name.as_str()), Some("Sky mask"));
     let want = [1.25, 0.5, -0.5, -0.5, 100.5, -20.25];
     for (got, want) in e.transform.m.iter().zip(want) {
         assert!((got - want).abs() < 1e-4, "{:?}", e.transform.m);
@@ -1129,7 +1144,7 @@ fn a_synthetic_timeline_decodes_its_layers_keyframes_tweens_and_instances() {
     assert_eq!(raw.len(), 1);
     assert!(matches!(&raw[0].kind, ElementKind::Shape(s) if s.merge));
     // The library symbol has its own timeline now, not just its first shape.
-    let sym = doc.library.iter().find(|s| s.name == "UFO mask").expect("the symbol");
+    let sym = doc.library.iter().find(|s| s.name == "Sky mask").expect("the symbol");
     let spans: Vec<(u32, u32)> = sym.timeline.layers[0].keyframes.iter().map(|k| (k.start, k.duration)).collect();
     assert_eq!(spans, [(0, 2), (2, 3)]);
     // The report: what was left out, by kind.
@@ -1455,7 +1470,7 @@ fn texts_bitmaps_buttons_sounds_scripts_and_hints_come_in_on_their_keyframes() {
     assert_eq!((s.name.as_str(), s.rate, s.channels, s.frames), ("beep", 44_100, 1, 4));
     assert_eq!(doc.entry_path(LibraryEntry::Item(LibraryItem::Sound(s.id))), "Art/Sounds/beep");
     let sym = &doc.library[0];
-    assert_eq!(doc.entry_path(LibraryEntry::Item(LibraryItem::Symbol(sym.id))), "Art/UFO mask");
+    assert_eq!(doc.entry_path(LibraryEntry::Item(LibraryItem::Symbol(sym.id))), "Art/Sky mask");
     // The objects: the dynamic text, the bitmap's rectangle, the named button.
     let k = &tl.layers[0].keyframes[0];
     assert_eq!(k.elements.len(), 3, "{:?}", k.elements.iter().map(|e| &e.kind).collect::<Vec<_>>());
@@ -1587,4 +1602,15 @@ fn a_scene_label_at_the_very_end_of_contents_is_found() {
     c.extend_from_slice(&utf16("A"));
     let (doc, _) = super::doc::import(&write(&[("Contents", c), ("P 1 1", synthetic_page())])).expect("the scene is found");
     assert_eq!(doc.scenes.iter().map(|s| s.name.as_str()).collect::<Vec<_>>(), ["A"]);
+}
+
+#[test]
+fn bitmaps_past_the_pixel_budget_are_left_out_by_their_header_and_named() {
+    let bitmap = bitmap_payload(2, 1, &[255, 255, 0, 0, 128, 128, 128, 128]);
+    let bytes = write(&[("Contents", media_contents()), ("P 1 1", media_page()), ("Symbol 9", one_frame_stream(&rectangle_body())), ("Media 1", bitmap)]);
+    let (doc, _) = super::doc::import_limited(&bytes, usize::MAX, usize::MAX, 2).expect("opens");
+    assert_eq!(doc.bitmaps.len(), 1, "two pixels fit a budget of two");
+    let (doc, report) = super::doc::import_limited(&bytes, usize::MAX, usize::MAX, 1).expect("opens");
+    assert!(doc.bitmaps.is_empty());
+    assert_eq!(report.names.get("bitmaps past the import's pixel budget (left out)").map(Vec::len), Some(1), "{:?}", report.names);
 }

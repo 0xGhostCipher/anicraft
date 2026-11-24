@@ -4,7 +4,7 @@
 //! `Contents` scans. Every byte here is written from the grammar in `crate::archive` and
 //! `crate::doc`, never taken from a corpus file.
 
-use crate::tests::{one_frame_stream, rectangle_body, scene, synthetic_contents, write, Ar, FrameSpec, InstSpec};
+use crate::tests::{one_frame_stream, properties, rectangle_body, scene, synthetic_contents, write, Ar, FrameSpec, InstSpec};
 use crate::text_tests::{record, units, Head, Style};
 use anicraft_doc::{Element, ElementKind};
 use std::sync::Arc;
@@ -287,19 +287,20 @@ fn three_fills(w: &mut Ar) {
 #[test]
 fn every_shape_a_record_emits_is_charged_against_the_object_allowance() {
     // Four uses of a three-fill drawing, in groups two levels deep: 11 objects visited and 12
-    // shapes emitted, 24 with the library's rectangle.
+    // shapes emitted, 24 with the library's rectangle, and the two keyframes they sit on.
     let file = || {
         let payloads = vec![("Contents", synthetic_contents()), ("P 1 1", page_with(|w| {
             shared(w, 2, three_fills);
         })), ("Symbol 9", one_frame_stream(&rectangle_body()))];
         write(&payloads)
     };
-    let (doc, report) = crate::doc::import_within(&file(), 24, usize::MAX).expect("opens");
+    let (doc, report) = crate::doc::import_within(&file(), 26, usize::MAX).expect("opens");
     assert_eq!(shapes_in(&scene(&doc).layers[0].keyframes[0].elements), 12);
     assert!(report.skipped.is_empty(), "{:?}", report.skipped);
-    // With room for 13, the visits alone (12 with the library's) would have fit and all 12
-    // shapes come in; the shapes count too, so they stop at the allowance and say so.
-    let (doc, report) = crate::doc::import_within(&file(), 13, usize::MAX).expect("opens");
+    // With room for 15, the visits alone (12 with the library's, and the two keyframes) would
+    // have fit and all 12 shapes come in; the shapes count too, so they stop at the allowance
+    // and say so.
+    let (doc, report) = crate::doc::import_within(&file(), 15, usize::MAX).expect("opens");
     let shapes = shapes_in(&scene(&doc).layers[0].keyframes[0].elements);
     assert_eq!(shapes, 6);
     assert!(skipped(&report, "objects past a million in one document (left out)") > 0, "{:?}", report.skipped);
@@ -382,21 +383,6 @@ fn a_scene_label_outside_ascii_advances_by_its_stored_units() {
     assert_eq!(scene_names(contents_with_scenes(&["Scene 1", "Scene 2"])), ["Scene 1", "Scene 2"]);
 }
 
-/// The document properties around `legacyLineSpacing`: the stage rectangle (left, right,
-/// top, bottom in twips) 74 bytes before the property's name, the background 21 and the
-/// frame rate (16.16) 13 bytes before it.
-fn properties(rect: [i32; 4], fps: i32) -> Vec<u8> {
-    let mut c = vec![0u8; 74];
-    for (k, v) in rect.iter().enumerate() {
-        c[4 * k..4 * k + 4].copy_from_slice(&v.to_le_bytes());
-    }
-    c[53..57].copy_from_slice(&[0x33, 0x66, 0x99, 0xFF]);
-    c[61..65].copy_from_slice(&fps.to_le_bytes());
-    c.extend([0xFF, 0xFE, 0xFF, 17]);
-    c.extend(utf16("legacyLineSpacing"));
-    c
-}
-
 #[test]
 fn a_stage_rectangle_of_extreme_edges_is_no_stage_and_never_overflows() {
     let s = crate::doc::stage(&properties([0, 11_000, 0, 8_000], 24 << 16)).expect("a stage");
@@ -447,4 +433,117 @@ fn keyframes_past_the_last_frame_are_left_out_not_stacked_on_it() {
     assert_eq!(unique, starts, "no two keyframes share a start: {starts:?}");
     assert!(starts.len() < 4, "{starts:?}");
     assert!(skipped(&report, "keyframes past frame 100,000 (left out)") > 0, "{:?}", report.skipped);
+}
+
+// The document-wide allowances: what a small hostile file can't multiply.
+
+/// The synthetic `Contents` listing the "Symbol 9" stream as `n` more library symbols.
+fn contents_naming_one_stream(n: u32) -> Vec<u8> {
+    let mut c = synthetic_contents();
+    for k in 0..n {
+        c.extend([0x01, 0x80, 0x17, 0x08]);
+        c.extend(utf16("Symbol 9"));
+        c.extend([0xFF, 0xFE, 0xFF, 0x04]);
+        c.extend(utf16("copy"));
+        c.extend((100 + k).to_le_bytes());
+        c.push(0x00);
+        c.extend([0u8; 8]);
+    }
+    c
+}
+
+#[test]
+fn one_stream_named_by_many_symbols_is_read_within_the_files_allowance() {
+    // A symbol stream of a few kilobytes that `Contents` lists thousands of times: reading and
+    // decoding it for each would cost far more than the file holds.
+    let stream = {
+        let mut w = Ar::new();
+        w.page(|w| {
+            for _ in 0..40 {
+                w.layer("artwork", 0, None, |w| w.frame(&rectangle_body(), &frame_spec(1), |_| {}));
+            }
+        });
+        w.out
+    };
+    let file = write(&[("Contents", contents_naming_one_stream(4000)), ("P 1 1", page_with(|_| {})), ("Symbol 9", stream.clone())]);
+    assert!(4000 * stream.len() > 2 * file.len(), "the fixture asks for more than its allowance");
+    let (doc, report) = crate::doc::import(&file).expect("opens");
+    let left_empty = skipped(&report, "library symbols past the import's reading budget (left empty)");
+    assert!(left_empty > 0, "{:?}", report.skipped);
+    let decoded = doc.library.iter().filter(|s| s.timeline.layers.len() == 40).count();
+    assert!(decoded > 0 && decoded * stream.len() <= 2 * file.len(), "{decoded} symbols decoded");
+    assert_eq!(decoded + left_empty, doc.library.len(), "every symbol is there, decoded or named as left empty");
+}
+
+#[test]
+fn keyframes_and_text_characters_are_charged_against_the_object_allowance() {
+    // Five empty keyframes: each is an object of the allowance, so three fit.
+    let frames = {
+        let mut w = Ar::new();
+        w.page(|w| {
+            w.layer("art", 0, None, |w| {
+                for _ in 0..5 {
+                    w.frame(&[], &frame_spec(1), |_| {});
+                }
+            });
+        });
+        w.out
+    };
+    // The library symbol's own keyframe takes one of the allowance first.
+    let (doc, report) = crate::doc::import_within(&write(&[("Contents", synthetic_contents()), ("P 1 1", frames), ("Symbol 9", one_frame_stream(&[]))]), 4, usize::MAX).expect("opens");
+    assert_eq!(scene(&doc).layers[0].keyframes.len(), 3);
+    assert!(skipped(&report, "objects past a million in one document (left out)") > 0, "{:?}", report.skipped);
+    // A text is charged its characters too: one of forty doesn't fit an allowance of twenty.
+    let text = |chars: &str| {
+        let chars = chars.to_string();
+        page_with(move |w| {
+            w.tag("CPicText");
+            let head = Head { matrix: [65536, 0, 0, 65536, 0, 0], bounds: [0, 2000, 0, 400], ..Head::default() };
+            w.out.extend(record(&head, &[(units(&chars), Style::default())]));
+        })
+    };
+    let texts = |page: Vec<u8>| {
+        let (doc, report) = crate::doc::import_within(&write(&[("Contents", synthetic_contents()), ("P 1 1", page), ("Symbol 9", one_frame_stream(&[]))]), 20, usize::MAX).expect("opens");
+        (scene(&doc).layers[0].keyframes[0].elements.len(), skipped(&report, "objects past a million in one document (left out)"))
+    };
+    assert_eq!(texts(text("short")), (1, 0));
+    let (kept, left_out) = texts(text(&"long ".repeat(8)));
+    assert!(kept == 0 && left_out > 0);
+}
+
+#[test]
+fn a_stream_is_charged_every_byte_it_reads_whichever_decoder_reads_it() {
+    // An item stream, one that is mostly a shape record, and one that is mostly a text: each
+    // decodes within a few times its length, and none within half of it, so the walker, the
+    // shape decoder and the text decoder all charge the stream's work budget.
+    let layers = {
+        let mut w = Ar::new();
+        w.page(|w| {
+            for _ in 0..20 {
+                w.layer("a layer with a name", 0, None, |w| w.frame(&[], &frame_spec(1), |_| {}));
+            }
+        });
+        w.out
+    };
+    let shape = one_frame_stream(&crate::tests::three_squares_body());
+    let text = page_with(|w| {
+        w.tag("CPicText");
+        let head = Head { matrix: [65536, 0, 0, 65536, 0, 0], bounds: [0, 2000, 0, 400], ..Head::default() };
+        w.out.extend(record(&head, &[(units(&"words ".repeat(100)), Style::default())]));
+    });
+    for stream in [layers, shape, text] {
+        assert!(crate::archive::parse_within(&stream, 4 * stream.len()).is_ok());
+        assert!(crate::archive::parse_within(&stream, stream.len() / 2).is_err());
+    }
+}
+
+#[test]
+fn a_document_without_stage_properties_says_the_defaults_are_used() {
+    let mut contents = synthetic_contents();
+    let name = utf16("legacyLineSpacing");
+    let at = contents.windows(name.len()).position(|w| w == name.as_slice()).expect("the property");
+    contents[at] ^= 0x20; // no longer that property's name
+    let (doc, report) = crate::doc::import(&write(&[("Contents", contents), ("P 1 1", page_with(|_| {})), ("Symbol 9", one_frame_stream(&[]))])).expect("opens");
+    assert_eq!(doc.stage, anicraft_doc::Stage::default());
+    assert_eq!(skipped(&report, "the stage's size, colour and frame rate (not found: the defaults are used)"), 1, "{:?}", report.skipped);
 }

@@ -58,6 +58,30 @@ const MAX_CONVERTED: usize = 1_000_000;
 /// keyframes is rebuilt on each, and its edges are the work: they are charged before the
 /// rebuild, so a compact stream can't make it repeat without end.
 const MAX_EDGES_BUILT: usize = 32_000_000;
+/// Most library symbols converted (the XFL importer's cap), and most scenes.
+const MAX_SYMBOLS: usize = 20_000;
+const MAX_SCENES: usize = 4_096;
+/// Most pixels the document's bitmaps may decode to together (the XFL importer's budget).
+const MAX_BITMAP_PIXELS: u64 = 256 * 1024 * 1024;
+
+/// Why a stream wasn't read.
+enum Unread {
+    Missing,
+    /// The document's reading allowance is spent.
+    OverBudget,
+}
+
+/// Reads a stream against the document's reading allowance, `left` bytes. The allowance is
+/// twice the file's size: each stream of a file Flash wrote is its own bytes, so together
+/// they are smaller than the file, while a hostile `Contents` may name one large stream as
+/// thousands of symbols, scenes or media items to have it read and decoded again for each.
+fn read_stream(file: &Compound, path: &str, left: &mut u64) -> Result<Vec<u8>, Unread> {
+    let size = file.stream_size(path).ok_or(Unread::Missing)?;
+    let Some(rest) = left.checked_sub(size) else { return Err(Unread::OverBudget) };
+    let bytes = file.stream(path).map_err(|_| Unread::Missing)?;
+    *left = rest;
+    Ok(bytes)
+}
 
 /// A scene as the document lists it: its page stream's name and the scene's label.
 struct Page {
@@ -108,14 +132,28 @@ pub fn import(data: &[u8]) -> Result<(Document, Report), ImportError> {
 /// `max_edges` shape edges, in place of [`MAX_CONVERTED`] and [`MAX_EDGES_BUILT`] (tests try
 /// small allowances).
 pub(crate) fn import_within(data: &[u8], max_converted: usize, max_edges: usize) -> Result<(Document, Report), ImportError> {
+    import_limited(data, max_converted, max_edges, MAX_BITMAP_PIXELS)
+}
+
+/// [`import_within`], its bitmaps decoding to at most `max_pixels` together in place of
+/// [`MAX_BITMAP_PIXELS`].
+pub(crate) fn import_limited(data: &[u8], max_converted: usize, max_edges: usize, max_pixels: u64) -> Result<(Document, Report), ImportError> {
     let file = Compound::new(data)?;
     let contents = file.stream("Contents")?;
     if contents.first() != Some(&CONTENTS_VERSION) {
         return Err(ImportError::UnsupportedVersion);
     }
     let mut report = Report::default();
-    let pages = pages(&contents)?;
-    let items = library_items(&contents);
+    let mut pages = pages(&contents)?;
+    if pages.len() > MAX_SCENES {
+        pages.truncate(MAX_SCENES);
+        report.skip("scenes past 4,096 (left out)");
+    }
+    let mut items = library_items(&contents);
+    if items.len() > MAX_SYMBOLS {
+        items.truncate(MAX_SYMBOLS);
+        report.skip("library symbols past 20,000 (left out)");
+    }
     if !items.is_empty() {
         report.keep("library names");
     }
@@ -123,9 +161,15 @@ pub(crate) fn import_within(data: &[u8], max_converted: usize, max_edges: usize)
     let mut doc = Document::default();
     doc.scenes.clear();
     doc.library.clear();
-    doc.stage = stage(&contents).unwrap_or_default();
+    doc.stage = stage(&contents).unwrap_or_else(|| {
+        report.skip("the stage's size, colour and frame rate (not found: the defaults are used)");
+        Stage::default()
+    });
     // The library's folders first (empty ones come across too, as in the XFL importer).
     let folder_list = library::folders(&contents);
+    if folder_list.len() >= library::MAX_ITEMS {
+        report.skip("library folders past the 16,384 an import reads (left out)");
+    }
     let folders = library::folder_paths(&folder_list);
     for f in &folder_list {
         if let Some(path) = folders.get(&f.id) {
@@ -140,7 +184,8 @@ pub(crate) fn import_within(data: &[u8], max_converted: usize, max_edges: usize)
         // As the XFL importer: ActionScript 3.0 unless the file says otherwise.
         _ => Language::ActionScript3,
     };
-    let (bitmaps, sounds) = media(&file, &contents, &folders, &mut doc, &mut report);
+    let mut streams_left = (data.len() as u64).saturating_mul(2);
+    let (bitmaps, sounds) = media(&file, &contents, &folders, &mut doc, &mut report, &mut streams_left, max_pixels);
     // Symbols first, so instances can refer to any of them.
     let mut symbols: HashMap<u32, SymbolId> = HashMap::new();
     let mut ids = Vec::with_capacity(items.len());
@@ -154,13 +199,17 @@ pub(crate) fn import_within(data: &[u8], max_converted: usize, max_edges: usize)
     let mut left = max_converted;
     let mut edges_left = max_edges;
     for (item, &id) in items.iter().zip(&ids) {
-        let timeline = match file.stream(&item.stream) {
+        let timeline = match read_stream(&file, &item.stream, &mut streams_left) {
             Ok(bytes) => {
                 let mut ctx = Ctx { doc: &mut doc, report: &mut report, symbols: &symbols, bitmaps: &bitmaps, sounds: &sounds, fonts, faces: &mut faces, language, left: &mut left, edges_left: &mut edges_left };
                 library_timeline(&bytes, &item.label, &mut ctx)
             }
-            Err(_) => {
-                report.skip_named("library symbols whose stream is missing", item.label.clone());
+            Err(why) => {
+                let what = match why {
+                    Unread::Missing => "library symbols whose stream is missing",
+                    Unread::OverBudget => "library symbols past the import's reading budget (left empty)",
+                };
+                report.skip_named(what, item.label.clone());
                 Timeline { layers: vec![Arc::new(Layer::new(LayerId(doc.alloc_id()), "Layer 1"))] }
             }
         };
@@ -175,7 +224,7 @@ pub(crate) fn import_within(data: &[u8], max_converted: usize, max_edges: usize)
     }
     for page in &pages {
         let mut timeline = Timeline::default();
-        match file.stream(&page.stream) {
+        match read_stream(&file, &page.stream, &mut streams_left) {
             Ok(bytes) => match archive::parse(&bytes) {
                 Ok(graph) => {
                     let mut ctx = Ctx { doc: &mut doc, report: &mut report, symbols: &symbols, bitmaps: &bitmaps, sounds: &sounds, fonts, faces: &mut faces, language, left: &mut left, edges_left: &mut edges_left };
@@ -189,7 +238,8 @@ pub(crate) fn import_within(data: &[u8], max_converted: usize, max_edges: usize)
                     }
                 }
             },
-            Err(_) => report.skip_named("scenes whose page stream is missing", page.label.clone()),
+            Err(Unread::Missing) => report.skip_named("scenes whose page stream is missing", page.label.clone()),
+            Err(Unread::OverBudget) => report.skip_named("scenes past the import's reading budget (left empty)", page.label.clone()),
         }
         if timeline.layers.is_empty() {
             timeline.layers.push(Arc::new(Layer::new(LayerId(doc.alloc_id()), "Layer 1")));
@@ -219,25 +269,47 @@ fn place_in_folder(doc: &mut Document, folders: &HashMap<ItemId, String>, parent
 /// a bitmap in Animate's own lossless layout, or a PNG or JPEG; a sound as raw 16-bit PCM of
 /// its item's format and sample count (it comes across as a WAV), or a WAV, Ogg Vorbis or MP3
 /// file. What doesn't decode is reported by name, with why.
-fn media(file: &Compound, contents: &[u8], folders: &HashMap<ItemId, String>, doc: &mut Document, report: &mut Report) -> (HashMap<u16, BitmapId>, HashMap<u16, SoundId>) {
+fn media(file: &Compound, contents: &[u8], folders: &HashMap<ItemId, String>, doc: &mut Document, report: &mut Report, streams_left: &mut u64, max_pixels: u64) -> (HashMap<u16, BitmapId>, HashMap<u16, SoundId>) {
     let streams: HashSet<String> = file.entries().iter().filter(|e| e.kind == crate::cfb::Kind::Stream).map(|e| e.path.clone()).collect();
     let (mut bitmaps, mut sounds) = (HashMap::new(), HashMap::new());
     let (items, missing) = library::media_items(contents, |s| streams.contains(s));
+    if items.len() + missing.len() >= library::MAX_ITEMS {
+        report.skip("media past the 16,384 items an import reads (left out)");
+    }
     for name in missing {
         report.skip_named("media whose stream is missing", name);
     }
+    let mut pixels_left = max_pixels;
     for item in items {
         if bitmaps.contains_key(&item.id) || sounds.contains_key(&item.id) {
+            report.skip_named("media listed twice under one id (the first kept)", item.name.clone());
             continue;
         }
         let shown = item.name.clone();
-        let Ok(bytes) = file.stream(&item.stream) else {
-            report.skip_named("media whose stream couldn't be read", shown);
-            continue;
+        let bytes = match read_stream(file, &item.stream, streams_left) {
+            Ok(bytes) => bytes,
+            Err(Unread::Missing) => {
+                report.skip_named("media whose stream couldn't be read", shown);
+                continue;
+            }
+            Err(Unread::OverBudget) => {
+                report.skip_named("media past the import's reading budget (left out)", shown);
+                continue;
+            }
         };
         let kind = item.kind.unwrap_or(if anicraft_flamedia::is_bitmap(&bytes) { MediaKind::Bitmap } else { MediaKind::Sound });
         match kind {
             MediaKind::Bitmap => {
+                // Refused by its header, before its pixels are decoded, once the document's
+                // bitmaps are past their pixel budget (a file image is charged once decoded).
+                let over = match anicraft_flamedia::bitmap_header(&bytes) {
+                    Ok(h) if anicraft_flamedia::is_bitmap(&bytes) => u64::from(h.width) * u64::from(h.height) > pixels_left,
+                    _ => pixels_left == 0,
+                };
+                if over {
+                    report.skip_named("bitmaps past the import's pixel budget (left out)", shown);
+                    continue;
+                }
                 let decoded = if anicraft_flamedia::is_bitmap(&bytes) {
                     anicraft_flamedia::decode_bitmap(&bytes).map_err(|e| e.to_string()).and_then(|px| {
                         Bitmap::from_rgba(BitmapId(0), item.name.clone(), px.width, px.height, px.rgba).ok_or_else(|| anicraft_flamedia::DatError::BadSize.to_string())
@@ -247,6 +319,7 @@ fn media(file: &Compound, contents: &[u8], folders: &HashMap<ItemId, String>, do
                 };
                 match decoded {
                     Ok(mut b) => {
+                        pixels_left = pixels_left.saturating_sub(u64::from(b.width) * u64::from(b.height));
                         b.id = BitmapId(doc.alloc_id());
                         b.smoothing = true;
                         bitmaps.insert(item.id, b.id);
@@ -303,7 +376,7 @@ fn library_timeline(bytes: &[u8], label: &str, ctx: &mut Ctx) -> Timeline {
         }
     }
     let (doc, report) = (&mut *ctx.doc, &mut *ctx.report);
-    let shapes = shapes(bytes, report);
+    let shapes = shapes(bytes, report, ctx.edges_left);
     let layer = Layer::new(LayerId(doc.alloc_id()), "artwork");
     if shapes.is_empty() {
         report.skip_named("library symbols whose timeline didn't decode", label.to_string());
@@ -370,6 +443,11 @@ fn build_timeline(graph: &Graph, ctx: &mut Ctx) -> Timeline {
             // A zero-length frame record holds nothing that shows (Animate drops it too).
             if duration == 0 {
                 continue;
+            }
+            // Charged with its script and hints: references may place one frame record on a
+            // layer many times over, and each placement is a keyframe with its own copies.
+            if !spend_n(ctx, 1 + frame.script.len() / 64 + frame.hints.len()) {
+                break;
             }
             if !frame.hints.is_empty() {
                 hints.insert(at, frame.hints.clone());
@@ -486,6 +564,9 @@ fn frame_sound(frame: &archive::FrameRec, ctx: &mut Ctx) -> Option<FrameSound> {
         .collect();
     // The format has no effect byte: an envelope plays as its points (as the XFL importer
     // reads an envelope without a preset name).
+    if frame.envelope.len() > anicraft_doc::sound::MAX_ENVELOPE_POINTS {
+        ctx.report.skip("sound envelope points past the most a sound holds (left out)");
+    }
     if !points.is_empty() {
         fs.effect = SoundEffect::Custom(anicraft_doc::sound::clean_points(&points));
     }
@@ -578,6 +659,11 @@ fn element(graph: &Graph, n: usize, ctx: &mut Ctx, out: &mut Vec<Arc<Element>>, 
             }
         }
         Some(Node::Text(t)) => {
+            // Charged by its characters as well: laying a text out costs by its length, and
+            // references may place one long record many times over.
+            if !spend_n(ctx, t.runs.iter().map(|r| r.text.len()).sum()) {
+                return;
+            }
             let id = ElementId(ctx.doc.alloc_id());
             if let Some(e) = t.to_element(id, ctx.fonts, ctx.faces, ctx.report) {
                 out.push(Arc::new(e));
@@ -656,7 +742,13 @@ fn shape_skip(why: shape::ShapeError) -> &'static str {
 /// Spends one of the document's [`MAX_CONVERTED`] objects; false, and reported, once they are
 /// spent.
 fn spend(ctx: &mut Ctx) -> bool {
-    let Some(left) = ctx.left.checked_sub(1) else {
+    spend_n(ctx, 1)
+}
+
+/// Spends `n` of the document's [`MAX_CONVERTED`] objects at once (a keyframe with its script,
+/// a text with its characters); false, and reported, when fewer are left.
+fn spend_n(ctx: &mut Ctx, n: usize) -> bool {
+    let Some(left) = ctx.left.checked_sub(n) else {
         ctx.report.skip("objects past a million in one document (left out)");
         return false;
     };
@@ -808,7 +900,7 @@ pub fn stage(contents: &[u8]) -> Option<Stage> {
 /// record (the object that names the class) as shape elements, one per fill style, then one
 /// per stroke style, carried by the record's matrix. A record that doesn't decode is left
 /// out whole and counted.
-fn shapes(bytes: &[u8], report: &mut Report) -> Vec<Element> {
+fn shapes(bytes: &[u8], report: &mut Report, edges_left: &mut usize) -> Vec<Element> {
     let Some(name) = find(bytes, b"CPicShape") else { return Vec::new() };
     let after = name + b"CPicShape".len();
     let decoded = match shape::body_after_tag(bytes, after) {
@@ -842,6 +934,13 @@ fn shapes(bytes: &[u8], report: &mut Report) -> Vec<Element> {
     for what in &record.approximations {
         report.skip(what);
     }
+    // Charged against the document's geometry budget, as the shapes on keyframes are: many
+    // library items may name this one stream.
+    let Some(left) = edges_left.checked_sub(record.edges.len()) else {
+        report.skip("shapes past the import's geometry budget (left out)");
+        return Vec::new();
+    };
+    *edges_left = left;
     let transform = record.matrix;
     record.shapes().into_iter().enumerate().map(|(i, s)| Element {
         id: ElementId(i as u64 + 1),
@@ -903,7 +1002,7 @@ fn pages(contents: &[u8]) -> Result<Vec<Page>, ImportError> {
 }
 
 /// The library: stream-name strings (`01 80 17` prefix) each followed by a label string
-/// (`ff fe ff`), e.g. `Symbol 125` → `UFO rays`, as (stream, label) pairs.
+/// (`ff fe ff`), e.g. `Symbol 9` → `Sky mask`, as (stream, label) pairs.
 pub fn library(contents: &[u8], report: &mut Report) -> Vec<(String, String)> {
     let items = library_items(contents);
     if !items.is_empty() {
