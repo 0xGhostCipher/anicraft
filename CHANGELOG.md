@@ -2,6 +2,28 @@
 
 ## Unreleased
 
+* **Memory and frame time stay flat** (M8, P-004, ADR 0132;
+  [#314](https://github.com/storytold/anicraft/issues/314),
+  [#477](https://github.com/storytold/anicraft/issues/477)).
+  * **Memory follows what is on screen, not how long you have been editing.** Dragging
+    something made a new picture of the stage on every pointer move, and each one stayed in
+    memory until hundreds of megabytes were in use (the "900 MB for a 24-frame move" of #314).
+    AniCraft now keeps the pictures of the document as it is and as it was one step ago, at
+    the zoom on screen and the one before, plus the frames you have played; a long drag or a
+    long zoom ends with the memory it started with.
+  * **Zooming with Ctrl+wheel or a pinch no longer redraws the stage for every step of the
+    zoom.** The picture on screen is scaled while the zoom changes and drawn sharp once it
+    rests. In the web version, which draws on the interface's own thread, this was the
+    stutter of #477; there, moving around the stage now also draws for at most 8 ms of a
+    frame and fills in the rest over the next frames.
+  * **Zoomed far into a large drawing, a stage tile no longer goes through the whole
+    drawing.** The parts of a filled shape above, below and to the right of the tile are left
+    out before drawing. The pictures are the same to the last bit (tests compare them).
+  * **What is on screen is drawn before look-ahead.** A visible tile used to wait for up to
+    31 tiles being drawn ahead around the view or along the timeline.
+  * One step further back in the undo history is redrawn when you return to it (a few
+    milliseconds) instead of being found in memory.
+
 * **A long Brush stroke no longer freezes the window** (M8, ADR 0129, #519, backlog P-003).
   * A stroke drawn for a long time, over itself again and again, took longer to turn into a
     shape the longer it was, and a part of it selected over the rest cost seconds on every
