@@ -23,6 +23,28 @@
     v0.2.1 did not take documents the system hands over; `main` has since ADR 0062. Not
     re-tested on a Mac here.
   * Not yet: the same recovery in the shared reader (storytold/craft-libs#3282).
+* **Text reads right: mixed directions, and letters from a fallback face** (M5, backlog P-008,
+  ADR 0130). With outside pull requests #39 and #40 by SoldierPePe, whose commits are merged
+  here and rebuilt on styled text.
+  * **Hebrew and Arabic with Latin words and numbers read the right way round.** Text follows
+    the Unicode bidi algorithm: a number or a Latin word inside right-to-left text keeps its
+    order ("2026" was drawn as "6202"), a right-to-left paragraph runs from the right, and a
+    wrapped one starts with its first words. Styled runs keep their style, colour and underline
+    through the reordering. It is the same in static text, text on a path and text fields, and
+    so in every export.
+  * **Letters your font doesn't have come from another font** instead of showing as boxes:
+    Arabic in Consolas, Japanese in Arial. The rest of the block keeps your font, a letter
+    takes its marks along, and the line keeps its height. `text.create` and `text.edit` say
+    which font lent the letters, and how many characters no installed font has.
+  * **In a text field in Test Movie, Left and Right move the caret the way they point** through
+    text that mixes directions, and a selection across a change of direction is highlighted in
+    its separate stretches.
+  * Arabic letters join across a change of style inside a word. Letter spacing follows a
+    letter with its marks instead of each glyph. A stretch of text in another script is shaped
+    with that script's rules.
+  * Not yet: a direction setting for a paragraph (it is the first letter's) and alignment to
+    its start; the typing field beside the stage still shows right-to-left text unordered
+    while the block on the stage is right; right-to-left text a script sets in the HTML page.
 * **A long Brush stroke no longer freezes the window** (M8, ADR 0129, #519, backlog P-003).
   * A stroke drawn for a long time, over itself again and again, took longer to turn into a
     shape the longer it was, and a part of it selected over the rest cost seconds on every

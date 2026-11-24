@@ -4685,15 +4685,17 @@ pub fn commit_text(app: &mut App) {
             let mut p = te.edit_params();
             p["x"] = json!(te.at.x);
             p["y"] = json!(te.at.y);
-            app.run("text.create", p);
+            if let Some(made) = app.run("text.create", p) {
+                app.text_note(&made);
+            }
         }
         Some(_) if te.text == te.original => {}
         Some(id) => {
             app.run("element.select", json!({"ids": [id.0]}));
             if te.text.trim().is_empty() {
                 app.run("edit.delete", json!({}));
-            } else {
-                app.run("text.edit", te.edit_params());
+            } else if let Some(edited) = app.run("text.edit", te.edit_params()) {
+                app.text_note(&edited);
             }
         }
     }
