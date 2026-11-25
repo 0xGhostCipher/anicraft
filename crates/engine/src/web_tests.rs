@@ -103,3 +103,17 @@ fn imports_read_picked_files() {
         assert!(err.contains(".fla"), "an XFL folder can't come from a browser: {err}");
     });
 }
+
+/// A bare "walk.xfl" stands for the current folder, as a path that resolves, so reopening it
+/// finds the tab its import has (ADR 0009). Run on the in-memory store, so the test needs no
+/// working directory of its own.
+#[test]
+fn a_bare_xfl_files_package_is_a_folder_that_resolves() {
+    in_browser(|| {
+        vfs::put(Path::new("DOMDocument.xml"), b"<DOMDocument/>".to_vec()).unwrap();
+        vfs::put(Path::new("walk.xfl"), b"PROXY".to_vec()).unwrap();
+        let package = crate::import_package(Path::new("walk.xfl"));
+        assert_eq!(package, Path::new("."), "the current folder, not an empty path");
+        assert_eq!(crate::import_package(Path::new("walk.fla")), Path::new("walk.fla"), "a file that isn't an XFL proxy is its own package");
+    });
+}

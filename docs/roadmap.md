@@ -64,11 +64,11 @@ the changelog.
 
 | Id | Goal | Parity area | Size | Needs | Lane |
 |---|---|---|---|---|---|
-| P-017 | Selecting as in the reference app: a marquee takes instances, groups and objects it touches ([#522](https://github.com/storytold/anicraft/issues/522)); Hide Edges ([#298](https://github.com/storytold/anicraft/issues/298)); a first-use hint that a fill and its outline are separate, with double-click selecting both ([#484](https://github.com/storytold/anicraft/issues/484), [#485](https://github.com/storytold/anicraft/issues/485), [#343](https://github.com/storytold/anicraft/issues/343)); Match Size and Space in Align | Tools, drawing model | S each | | stage |
+| P-017 | Selecting as in the reference app: a first-use hint that a fill and its outline are separate, with double-click selecting both ([#484](https://github.com/storytold/anicraft/issues/484), [#485](https://github.com/storytold/anicraft/issues/485), [#343](https://github.com/storytold/anicraft/issues/343)) | Tools, drawing model | S each | | stage |
 | P-018 | Lasso, Polygon and Magic Wand tools ([#515](https://github.com/storytold/anicraft/issues/515)) | Tools | M | | stage |
 | P-019 | Text is typed in its block on the stage, in its real font and alignment ([#303](https://github.com/storytold/anicraft/issues/303)) | Text | L | | text |
 | P-020 | Modify › Shape: Smooth, Straighten, Advanced Smooth and Optimize ([#510](https://github.com/storytold/anicraft/issues/510)); Distort; oval angles and primitive shapes | Drawing model | M | | geom |
-| P-021 | Timeline and symbol commands that are missing: Reverse Frames, Distribute to Layers and to Keyframes, convert a tween to frame-by-frame, a symbol to layers and back ([#517](https://github.com/storytold/anicraft/issues/517)), New Symbol (Ctrl+F8), copy and paste layers, comment and anchor labels, a loop range | Timeline, symbols | M (splits into S) | | timeline |
+| P-021 | Timeline and symbol commands that are missing: Reverse Frames, Distribute to Keyframes, Distribute to Layers for raw shapes, convert a tween to frame-by-frame, a symbol to layers and back ([#517](https://github.com/storytold/anicraft/issues/517)), New Symbol (Ctrl+F8), copy and paste layers, comment and anchor labels, a loop range | Timeline, symbols | M (splits into S) | | timeline |
 | P-022 | A sound's in and out points: trim handles in Edit Envelope, Split Audio ([#502](https://github.com/storytold/anicraft/issues/502)), read from Animate files | Sound | M | | audio |
 | P-023 | Motion tweens from Animate files come in as motion tweens, with curves, eases and paths | Import, tweens | L | | xfl |
 | P-024 | Tools panel: tools grouped under one button with a flyout, a panel that reflows as it widens ([#198](https://github.com/storytold/anicraft/issues/198)), tool keys as the reference app's ([#246](https://github.com/storytold/anicraft/issues/246), [#168](https://github.com/storytold/anicraft/issues/168)) | Workspace | M | | shell |
@@ -90,7 +90,7 @@ the changelog.
 | P-035 | The HTML page and Test Movie, complete: 9-slice, bent bitmaps, stream sounds after a go-to, links that click, masks in hit tests, scaling choices, a preloader; Test Movie full screen and zoom | Publishing, interactivity | M (splits) | | player |
 | P-036 | Publish formats: an animated SVG in one file (outside PR [#9](https://github.com/storytold/anicraft/issues/9)), SVG sequence and file name patterns in Publish Settings, JPEG, a texture atlas, publish settings read from Animate files, per-sound settings | Publishing | M (splits) | | engine |
 | P-037 | More formats in: AIFF, FLAC and ADPCM WAV sounds; GIF, BMP, WebP bitmaps; numbered images as frames | Import | S each | craft-libs readers | audio, doc |
-| P-038 | Vectors from the clipboard of other drawing apps ([#62](https://github.com/storytold/anicraft/issues/62)); match the stage to an imported SVG ([#155](https://github.com/storytold/anicraft/issues/155)); layered Photoshop files | Import | M | | engine |
+| P-038 | Vectors from the clipboard of other drawing apps ([#62](https://github.com/storytold/anicraft/issues/62)); a choice in the Import dialog to match the stage to an SVG (the command has it, [#155](https://github.com/storytold/anicraft/issues/155)); layered Photoshop files | Import | M | | engine |
 | P-039 | Binary `.fla` files from Flash 8 to CS4, with dashed and dotted strokes (outside PRs [#478](https://github.com/storytold/anicraft/issues/478), [#481](https://github.com/storytold/anicraft/issues/481); [#163](https://github.com/storytold/anicraft/issues/163), [#289](https://github.com/storytold/anicraft/issues/289)) | Import | L | the author's provenance answer | xfl |
 | P-040 | The Library across documents: another open document's Library, author-time shared items, Swap Bitmap for every use, linkage and compression on bitmaps and sounds, edit a bitmap outside | Symbols | M | | shell |
 | P-041 | Motion you can reuse: motion presets, copy and paste motion, Sync and Snap on classic tweens, an ease library shared between documents | Tweens | M | | timeline |
@@ -137,7 +137,7 @@ with `gh pr list --state open`). The states:
 * **declined**: we won't take it, and why.
 * **held**: we can't decide yet, and what we are waiting for.
 
-As of 2026-11-20 (27 open):
+As of 2026-11-24 (46 open):
 
 | PR | What | Id | State | What it still needs, or what happened |
 |---|---|---|---|---|
@@ -170,6 +170,25 @@ As of 2026-11-20 (27 open):
 | [#145](https://github.com/storytold/anicraft/issues/145) | Reject signs in XML numeric character references | (none) | **held** | XML reading moved to `craft-xml`, and the PR's diff is now an unrelated line in the Lottie writer. Waiting for its author to retitle it or close it. |
 | [#390](https://github.com/storytold/anicraft/issues/390) | Move every craft-libs pin to one commit | T-01 | **planned** (team) | Merges when the team picks the `rev`; a `rev` move is its own PR. |
 | [#225](https://github.com/storytold/anicraft/issues/225) | Lock workflow actions through a lock file | T-02 | **planned** (team) | Changes requested: the lock records nothing for reusable-workflow callers, so a lint rule was switched off too widely. |
+| [#594](https://github.com/storytold/anicraft/issues/594) | Closing the window no longer crashes on macOS (egui and eframe 0.37) | (done) | **superseded by** | Merged with its commits in the M8 batch ([ADR 0134](adr/0134-outside-parity-batch-zoom-outlines-and-egui-0-37.md)). The diagnosis holds: the abort is AccessKit's macOS adapter putting the view's class back under key-value observing (fixed upstream, AccessKit/accesskit#835, in accesskit_macos 0.27.2), not the tab close flow of [ADR 0112](adr/0112-several-documents-open-at-once.md) or the GPU recovery of [ADR 0092](adr/0092-surviving-gpu-failures-and-motion-editor-filter-tracks.md). `cargo deny` passes on the new crates. Not verified here: a run on a Mac (the author measured 0 aborts in 6 runs). |
+| [#596](https://github.com/storytold/anicraft/issues/596) | An imported Animate file keeps its name on its tab and in the title | (done) | **superseded by** | Merged with its commits; the path it resolves now goes through `engine::vfs`. Left: an autosaved copy of an unsaved import is restored as Untitled. |
+| [#590](https://github.com/storytold/anicraft/issues/590) | Stage zoom measured in device pixels ([#565](https://github.com/storytold/anicraft/issues/565)) | (done) | **superseded by** | Merged with its commits ([ADR 0134](adr/0134-outside-parity-batch-zoom-outlines-and-egui-0-37.md)). Left from [#565](https://github.com/storytold/anicraft/issues/565): handle sizes with a preference of their own. |
+| [#588](https://github.com/storytold/anicraft/issues/588) | Hide Edges without clearing the selection ([#298](https://github.com/storytold/anicraft/issues/298)) | (done) | **superseded by** | Merged with its commits; the check item's state for screen readers was made every toggling menu item's. |
+| [#587](https://github.com/storytold/anicraft/issues/587) | Optionally fit the stage to an imported SVG ([#155](https://github.com/storytold/anicraft/issues/155)) | (done) | **superseded by** | Merged with its commits. Left in P-038: the choice in the interface. |
+| [#584](https://github.com/storytold/anicraft/issues/584) | View only the active layer's row ([#529](https://github.com/storytold/anicraft/issues/529)) | (done) | **superseded by** | Merged with its commits. Left from [#529](https://github.com/storytold/anicraft/issues/529): several picked layers. |
+| [#583](https://github.com/storytold/anicraft/issues/583) | Next and Previous Frame stop at the ends ([#561](https://github.com/storytold/anicraft/issues/561)) | (done) | **superseded by** | Merged with its commit. |
+| [#582](https://github.com/storytold/anicraft/issues/582) | A press selects at once and the playhead follows a drag ([#561](https://github.com/storytold/anicraft/issues/561)) | (done) | **superseded by** | Merged with its commit. Left from [#561](https://github.com/storytold/anicraft/issues/561): whether the playhead may stand on an empty cell. |
+| [#581](https://github.com/storytold/anicraft/issues/581) | PNG frames and sequences can export transparent ([#536](https://github.com/storytold/anicraft/issues/536)) | (done) | **superseded by** | Merged with its commits, joined with the left-out note of [ADR 0128](adr/0128-one-work-allowance-and-frames-that-say-what-they-left-out.md). Left from [#536](https://github.com/storytold/anicraft/issues/536): a transparent GIF. |
+| [#580](https://github.com/storytold/anicraft/issues/580) | The marquee takes the objects it touches ([#522](https://github.com/storytold/anicraft/issues/522)) | (done) | **superseded by** | Merged with its commit. The reference app has a preference for this; ours is always on. |
+| [#579](https://github.com/storytold/anicraft/issues/579) | Distribute to Layers ([#517](https://github.com/storytold/anicraft/issues/517)) | (done) | **superseded by** | Merged with its commits. Left in P-021: raw shapes, and Distribute to Keyframes. |
+| [#578](https://github.com/storytold/anicraft/issues/578) | Match Size and Space Evenly in Align ([#566](https://github.com/storytold/anicraft/issues/566)) | (done) | **superseded by** | Merged with its commits; it measures outlines as align does, and the Align panel's default height shows the new row. |
+| [#577](https://github.com/storytold/anicraft/issues/577) | Each filter in Properties is a card that folds ([#533](https://github.com/storytold/anicraft/issues/533), [#534](https://github.com/storytold/anicraft/issues/534)) | (done) | **superseded by** | Merged with its commit. |
+| [#576](https://github.com/storytold/anicraft/issues/576) | Raw shapes moved from Properties merge when deselected ([#571](https://github.com/storytold/anicraft/issues/571)) | (done) | **superseded by** | Merged with its commits: it floats the shapes, as [ADR 0122](adr/0122-a-moved-raw-selection-merges-when-it-is-deselected.md) has a stage move do. |
+| [#575](https://github.com/storytold/anicraft/issues/575) | To Stage inside a symbol aligns to the symbol's own space ([#568](https://github.com/storytold/anicraft/issues/568)) | (done) | **superseded by** | Merged with its commit; a group opened inside a symbol counts as inside it. |
+| [#574](https://github.com/storytold/anicraft/issues/574) | Align and distribute line up outlines, not stroke edges ([#569](https://github.com/storytold/anicraft/issues/569)) | (done) | **superseded by** | Merged with its commits ([ADR 0134](adr/0134-outside-parity-batch-zoom-outlines-and-egui-0-37.md)). |
+| [#573](https://github.com/storytold/anicraft/issues/573) | A click on an empty cell past a layer's frames selects it ([#567](https://github.com/storytold/anicraft/issues/567)) | (done) | **superseded by** | Merged with its commit. |
+| [#572](https://github.com/storytold/anicraft/issues/572) | A swatch picked closes the colour picker ([#570](https://github.com/storytold/anicraft/issues/570)) | (done) | **superseded by** | Merged with its commit. |
+| [#562](https://github.com/storytold/anicraft/issues/562) | A line to a fill from Shape properties ([#530](https://github.com/storytold/anicraft/issues/530)) | (done) | **superseded by** | Merged with its commit: the command was there ([ADR 0109](adr/0109-shape-commands-picker-eyedropper-and-transformation-origins.md)); the button puts it where the reference app has it. |
 
 ## Feature requests and where they are
 
@@ -178,7 +197,7 @@ can close; the lead closes issues, not this page.
 
 | Issue | Asks for | Where |
 |---|---|---|
-| [#522](https://github.com/storytold/anicraft/issues/522) | Marquee selects what it touches | P-017 |
+| [#522](https://github.com/storytold/anicraft/issues/522) | Marquee selects what it touches | delivered |
 | [#298](https://github.com/storytold/anicraft/issues/298), [#343](https://github.com/storytold/anicraft/issues/343) | Selection marks while drawing | P-017 |
 | [#515](https://github.com/storytold/anicraft/issues/515) | Lasso | P-018 |
 | [#303](https://github.com/storytold/anicraft/issues/303) | Text typed on the stage | P-019 |
