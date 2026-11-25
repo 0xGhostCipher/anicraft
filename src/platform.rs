@@ -1064,8 +1064,8 @@ pub fn filters(cmd: &str) -> (&'static str, &'static [&'static str]) {
         "file.export_svg" => (tr_noop!("SVG image"), &["svg"]),
         "file.export_lottie" => (tr_noop!("Lottie animation"), &["json"]),
         "file.export_html" => (tr_noop!("Web page"), &["html", "htm"]),
-        "file.import" => (tr_noop!("Drawing, image or sound"), &["svg", "png", "jpg", "jpeg", "wav", "ogg", "mp3"]),
-        "file.import_to_library" => (tr_noop!("Sound, image or drawing"), &["wav", "ogg", "mp3", "png", "jpg", "jpeg", "svg"]),
+        "file.import" => (tr_noop!("Drawing, image or sound"), &["svg", "png", "jpg", "jpeg", "wav", "wave", "ogg", "oga", "mp3"]),
+        "file.import_to_library" => (tr_noop!("Sound, image or drawing"), &["wav", "wave", "ogg", "oga", "mp3", "png", "jpg", "jpeg", "svg"]),
         "file.export_audio" => (tr_noop!("WAV sound"), &["wav"]),
         "file.export_sprite_sheet" => (tr_noop!("PNG sprite sheet"), &["png"]),
         "file.export_video" => (tr_noop!("Video (WebM or MP4)"), &["webm", "mp4"]),
@@ -1416,6 +1416,20 @@ mod tests {
     fn the_desktop_runs_every_command() {
         assert!(anicraft_engine::commands().iter().all(|c| unavailable(c.id).is_none()));
         assert!(reads_file("file.open") && reads_file("file.import") && !reads_file("file.save"));
+    }
+
+    /// The pickers show a sound exactly when the importer reads it: a name it reads but the
+    /// picker hides (`.wave` and `.oga` were) can't be chosen, and one it shows but can't read
+    /// fails after the choice.
+    #[test]
+    fn import_filters_include_supported_sound_aliases() {
+        for cmd in ["file.import", "file.import_to_library"] {
+            let (_, extensions) = filters(cmd);
+            for ext in ["wav", "wave", "ogg", "oga", "vorbis", "mp3", "aif", "flac", "m4a"] {
+                let read = anicraft_engine::cmds_sound::is_sound(Path::new(&format!("take.{ext}")));
+                assert_eq!(extensions.contains(&ext), read, "{cmd} and .{ext}");
+            }
+        }
     }
 
     #[test]

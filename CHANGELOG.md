@@ -2,6 +2,30 @@
 
 ## Unreleased
 
+* **Small fixes from outside, second batch** (M8, backlog P-012 and P-016). Fifteen pull
+  requests by Mex (MMexicann), merged with their commits.
+  * **The command line says when an option is wrong.** `anicraft-cli render --frmae 12` wrote
+    frame 1 without a word; now every subcommand refuses an option it doesn't read, with its
+    usage and exit code 2, before anything is opened (outside PR #552, widened from `render` to
+    all of them). `export --out` wins over a `path` or `dir` inside `--options` (#542). `serve`
+    stops at a `quit` line that starts with a byte-order mark (#544). On the app's own command
+    line, the last `--theme` wins whether it names a built-in theme or a file (#556), and
+    `--open` and `--renderer` say they need a value instead of swallowing the next option (#554).
+  * **Cut Frames that fails leaves the clipboard alone** (#545): the frames copied before are
+    still there to paste.
+  * **F5 with a folder selected past the end of the timeline** says a folder holds no frames,
+    instead of giving the folder a keyframe (#548).
+  * **Deleting a scene before the one you are in keeps your place** (#541): the frame, the
+    layer, the selection and the symbol you are editing stay as they were.
+  * **A swatch dropped outside the grid stays where it was** (#553), and the drop mark shows
+    only where a drop would land.
+  * **An update waits for unsaved work in every tab**, not only the one in front (#540).
+  * **`.wave` and `.oga` files show in the import pickers** (#550); AniCraft already read them.
+  * **On macOS, a backslash in a file name is part of the name** in Recent Files and its
+    thumbnails, not a folder separator (#543).
+  * Docs: the README and the guide list the packages a release has (no 32-bit Windows build;
+    Arch Linux, RISC-V deb and rpm, FreeBSD ARM64) (#549); where a portable copy keeps its
+    settings (#551); `formats` and `export` in the headless chapter (#539).
 * **Nineteen outside pull requests: parity and editing fixes** (M8, ADR 0134). Their commits
   are merged here; what was added on top is said with each.
   * **Closing the window no longer crashes on macOS** (#594, rcoenen): see the entry below.
