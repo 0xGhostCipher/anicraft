@@ -256,6 +256,7 @@ dependencies = [
  "web-time",
  "winreg",
  "winresource",
+ "winsafe",
 ]
 
 [[package]]

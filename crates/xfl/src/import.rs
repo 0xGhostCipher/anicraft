@@ -105,7 +105,14 @@ const SHOWN_NAMES: usize = 3;
 
 impl Report {
     pub(crate) fn skip(&mut self, what: &str) {
-        *self.skipped.entry(what.to_string()).or_default() += 1;
+        self.skip_many(what, 1);
+    }
+    /// Counts `n` of `what` (none when `n` is 0).
+    pub(crate) fn skip_many(&mut self, what: &str, n: usize) {
+        if n > 0 {
+            let count = self.skipped.entry(what.to_string()).or_default();
+            *count = count.saturating_add(n);
+        }
     }
     /// Counts `what` and keeps the item's `name` for the report.
     pub(crate) fn skip_named(&mut self, what: &str, name: String) {
@@ -359,19 +366,23 @@ fn paint(def: &X, bitmaps: &HashMap<String, BitmapId>, report: &mut Report) -> O
             // which AniCraft draws as the image shown once).
             Some(Paint::Bitmap { bitmap, repeat: !fill.bitmap_is_clipped().unwrap_or(false), matrix })
         }
-        craft_xfl::shape::FillKind::Other => None,
+        // A paint AniCraft has no reading of: nothing says what colour it is, so the region is
+        // left empty and said (ADR 0133).
+        craft_xfl::shape::FillKind::Other => {
+            report.skip("fills of a kind AniCraft doesn't know (left out)");
+            None
+        }
     }
 }
 
 /// A stroke definition (`SolidStroke` and friends) as a stroke: weight, its fill colour, caps,
 /// joints and miter limit, and the dashes of `DashedStroke` and dots of `DottedStroke`
-/// (ADR 0046). Ragged, stipple and hatched strokes are drawn solid.
+/// (ADR 0046). Ragged, stipple and hatched strokes are drawn solid, and so is a stroke of a kind
+/// AniCraft doesn't know, with whatever weight, colour, caps and joints it gives (ADR 0133): a
+/// line drawn plainer than it was is nearer the artwork than no line.
 pub(crate) fn stroke(def: &X, bitmaps: &HashMap<String, BitmapId>, report: &mut Report) -> Option<Stroke> {
     let native = craft_xfl::shape::Stroke::new(def);
     use craft_xfl::shape::StrokeKind as NativeStroke;
-    if native.kind() == NativeStroke::Other {
-        return None;
-    }
     // Round caps and joints are the format's default, and a miter limit of 3.
     let cap = match native.caps().map(str::trim) {
         Some("none") => Cap::Butt,
@@ -390,6 +401,10 @@ pub(crate) fn stroke(def: &X, bitmaps: &HashMap<String, BitmapId>, report: &mut 
         NativeStroke::Dashed => Dash::dashed(native.dash1().unwrap_or(6.0), native.dash2().unwrap_or(6.0)),
         NativeStroke::Dotted => Dash::dotted(native.dot_space().unwrap_or(3.0)),
         NativeStroke::Solid => None,
+        NativeStroke::Other => {
+            report.skip("strokes of a kind AniCraft doesn't know (drawn solid)");
+            None
+        }
         _ => {
             report.skip("ragged, stipple and hatched strokes (drawn solid)");
             None
@@ -431,15 +446,27 @@ impl<'a> Builder<'a> {
             let stroke = style.definition().and_then(|definition| stroke(definition.element(), &self.bitmaps, &mut self.report));
             (style.index().unwrap_or(0), stroke)
         }).collect();
-        let edges: Vec<Edge> = schema.edges().map(|edge| Edge {
-            fill_left: edge.fill_style0().unwrap_or(0),
-            fill_right: edge.fill_style1().unwrap_or(0),
-            stroke: edge.stroke_style().unwrap_or(0),
-            segs: edge.encoded_segments().map(edges::parse).unwrap_or_default(),
+        // Whatever of the outline doesn't come across is counted, never dropped quietly (ADR
+        // 0133): a run the reader can't follow to its end, and a style an edge names that the
+        // shape doesn't have.
+        let mut unread = 0usize;
+        let edges: Vec<Edge> = schema.edges().map(|edge| {
+            let parsed = edge.encoded_segments().map(edges::parse_runs).unwrap_or_default();
+            unread = unread.saturating_add(parsed.unread);
+            Edge { fill_left: edge.fill_style0().unwrap_or(0), fill_right: edge.fill_style1().unwrap_or(0), stroke: edge.stroke_style().unwrap_or(0), segs: parsed.segs }
         }).collect();
+        self.report.skip_many("outline parts AniCraft couldn't read (left out)", unread);
+        let drawn = |e: &&Edge| !e.segs.is_empty();
+        let stray_strokes: BTreeSet<u32> = edges.iter().filter(drawn).map(|e| e.stroke).filter(|i| *i > 0 && !strokes.iter().any(|(index, _)| index == i)).collect();
+        self.report.skip_many("strokes in a style their shape doesn't have (left out)", stray_strokes.len());
+        let stray_fills: BTreeSet<u32> = edges.iter().filter(drawn).flat_map(|e| [e.fill_left, e.fill_right]).filter(|i| *i > 0 && !fills.iter().any(|(index, _)| index == i)).collect();
+        self.report.skip_many("fills in a style their shape doesn't have (left out)", stray_fills.len());
         for (index, p) in fills {
             let (Some(p), true) = (p, index > 0) else { continue };
-            let path = edges::fill_path(&edges, index);
+            let (path, gaps) = edges::fill_region(&edges, index);
+            // A fill's outline always closes in Animate's files; one that doesn't here has lost
+            // a part. It is closed straight across, which can cover more than the fill did.
+            self.report.skip_many("fills with a gap in their outline (closed straight across)", gaps);
             if !path.is_empty() {
                 out.push(self.element(ElementKind::Shape(Shape { path: Arc::new(path), fill: Some(p), stroke: None, fill_rule: FillRule::EvenOdd, merge, warp: None }), m, ColorEffect::default()));
             }
