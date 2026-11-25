@@ -35,3 +35,7 @@ People who have contributed to AniCraft. The repository starts from one initial 
 * SoldierPePe: text that mixes directions and letters from a fallback face (#39, #40).
 * Hagai Baram (hrb9): the Hebrew fallback face, `iw` read as Hebrew, and right-to-left language detection, private-use tags included (#486).
 * FredApps: a test that linked artwork survives SVG export and re-import (#500).
+* Ayberk A. (AyberkA0): View Only the Active Layer, frame stepping that stops at the ends, a press that selects at once, an empty cell that selects, transparent PNG frames, the marquee that takes what it touches, Distribute to Layers, Match Size and Space Evenly, filter cards that fold, raw shapes moved from Properties, To Stage inside a symbol, aligning by outlines, and a swatch that closes the picker (#572 to #584).
+* ViktorBystrov72: stage zoom measured in device pixels, Hide Edges, and fitting the stage to an imported SVG (#590, #588, #587).
+* Neel Patel (N-NeelPatel): Convert Lines to Fills in a shape's properties (#562).
+* rcoenen: an imported Animate file that keeps its name, and the macOS crash on closing the window, with the move to egui 0.37 (#596, #594).

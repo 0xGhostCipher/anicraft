@@ -26,6 +26,56 @@
   * Docs: the README and the guide list the packages a release has (no 32-bit Windows build;
     Arch Linux, RISC-V deb and rpm, FreeBSD ARM64) (#549); where a portable copy keeps its
     settings (#551); `formats` and `export` in the headless chapter (#539).
+* **Nineteen outside pull requests: parity and editing fixes** (M8, ADR 0134). Their commits
+  are merged here; what was added on top is said with each.
+  * **Closing the window no longer crashes on macOS** (#594, rcoenen): see the entry below.
+    Added: the rest of this batch ported to egui 0.37, and the pseudo-locale sweep knows the
+    names egui's colour mixer gives its own parts.
+  * **An imported Animate file keeps its name** (#596, rcoenen): see the entry below. Added:
+    the path it resolves goes through `engine::vfs`, so an agent's roots apply.
+  * **100 % zoom is one stage pixel on one screen pixel** (#590, ViktorBystrov72; #565),
+    whatever the display's scale or the interface scale; Fit in Window may go below 5 %.
+  * **View › Hide Edges** (Ctrl+Shift+E; #588, ViktorBystrov72; #298) hides the selection's
+    marks and keeps the selection. Added: every toggling menu item, not only this one, is a
+    check item with its state to a screen reader.
+  * **`file.import {match_stage: true}`** sets the stage to an imported SVG's size (#587,
+    ViktorBystrov72; #155).
+  * **Timeline** (AyberkA0): a button beside Layers shows only the active layer's row (#584,
+    #529); Next and Previous Frame stop at the ends instead of going round (#583), a press
+    selects at once and the playhead follows a drag (#582; both #561); a click on an empty
+    cell past a layer's frames selects it again (#573, #567).
+  * **Selecting and aligning** (AyberkA0): the marquee takes the instances, groups and objects
+    it touches (#580, #522); Match Width, Match Height, Match Width and Height, and Space
+    Evenly in the Align panel and Modify › Align (#578, #566); align and distribute line up
+    outlines, not stroke edges (#574, #569); To Stage inside a symbol aligns to its
+    registration point (#575, #568). Added: Match Size and Space Evenly measure outlines as
+    align does, a group opened inside a symbol counts as inside it, and the Align panel is
+    tall enough by default to show its new row.
+  * **Modify › Timeline › Distribute to Layers** (Ctrl+Shift+D; #579, AyberkA0; #517).
+  * **Export Frame as PNG and Export PNG Sequence take `background: false`** for real
+    transparency, also in Publish Settings (#581, AyberkA0; #536). Added: joined with the
+    note of what a frame left out (ADR 0128).
+  * **Properties** (AyberkA0): each filter is a card that folds (#577, #533, #534); raw shapes
+    moved, sized or turned by the fields merge when deselected, as after a drag (#576, #571);
+    a swatch picked closes the colour picker (#572, #570).
+  * **Convert Lines to Fills at the top of a shape's properties** (#562, Neel Patel; #530).
+
+* **An imported Animate file keeps its name** (ADR 0009 note; outside PR #596 by rcoenen): a `.fla`, `.xfl` or XFL folder
+  opens with its own name on its tab and in the window title instead of "Untitled", marked as
+  imported (a dim "Imported" on the tab, "(imported)" in the title, where it came from in the
+  tooltip). Saving still never writes over it: Save asks for a new name, suggesting an
+  `.anicraft` of the same name beside the original, and from then on the tab shows that file.
+  Opening the same Animate file again shows its tab. Save dialogs now open in the suggested
+  file's folder.
+
+* **Closing the window no longer crashes on macOS** (outside PR #594 by rcoenen). Quitting, closing the window and the end of
+  a `--screenshot` run could stop with `NSRangeException` (`Cannot remove an observer
+  <_NSTouchBarFinderObservation …> for the key path "nextResponder"`) and exit code 134. The
+  accessibility layer put the window's view back to its own class on close, after macOS had
+  given it another class to watch it for the Touch Bar. eframe and egui go to 0.37, which
+  brings AccessKit 0.27.2 with the fix (AccessKit/accesskit#835). Single-line text fields are now
+  as tall as the buttons beside them, as egui 0.37 draws them.
+
 * **An Animate drawing no longer loses lines without a word** (M4, ADR 0133, #498, #347,
   backlog P-006).
   * A stroke in a style AniCraft doesn't know was dropped, and the report still said
