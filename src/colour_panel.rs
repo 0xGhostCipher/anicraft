@@ -149,12 +149,10 @@ pub fn popup_for(ui: &egui::Ui, anchor: &Response, popup: Id, paint: Option<&Pai
     }
     let mut edit = None;
     // A click on the stage while this is open picks a colour there (the picker's eyedropper).
-    let shown = egui::Popup::menu(anchor).id(popup).close_behavior(crate::colour::close_behavior(ui.ctx())).show(|ui| {
+    egui::Popup::menu(anchor).id(popup).close_behavior(crate::colour::close_behavior(ui.ctx())).show(|ui| {
+        crate::colour::name_popup(ui, tr!("Fill colour picker"));
         edit = fill_picker(ui, popup, paint, bitmaps);
     });
-    if let Some(r) = shown {
-        crate::colour::name_popup(&r.response, tr!("Fill colour picker"));
-    }
     edit
 }
 

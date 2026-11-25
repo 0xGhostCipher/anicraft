@@ -71,6 +71,9 @@ So the fix is the version move, taken whole in this batch:
   listed as egui's in the pseudo-locale tests (`EGUI_OWN`); they are English until egui lets
   us name them or we draw a mixer of our own.
 * Single-line text fields are as tall as the buttons beside them.
+* A popup's response is no longer the node its controls hang under, so a name set on it
+  reached nobody. The colour pickers name their dialog on the popup's own `Ui`
+  (`colour::name_popup`), with the popup's place, which containers no longer carry.
 * New crates in `Cargo.lock` are MIT or MIT/Apache-2.0; `cargo deny check licenses bans
   sources` passes.
 

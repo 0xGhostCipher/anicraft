@@ -232,10 +232,11 @@ pub fn popup_for(ui: &egui::Ui, anchor: &Response, popup: Id, c: &mut [u8; 4], a
     }
     let mut changed = false;
     let shown = egui::Popup::menu(anchor).id(popup).close_behavior(close_behavior(ui.ctx())).show(|ui| {
+        name_popup(ui, tr!("Colour picker"));
         changed = picker(ui, popup, c, alpha, none, true);
     });
     match shown {
-        Some(r) => name_popup(&r.response, tr!("Colour picker")),
+        Some(_) => {}
         // A tap that reached the stage and closed the popup in one frame still picks.
         None => {
             if let Some(p) = take_picked(ui.ctx(), popup) {
@@ -247,11 +248,19 @@ pub fn popup_for(ui: &egui::Ui, anchor: &Response, popup: Id, c: &mut [u8; 4], a
     changed
 }
 
-/// Names a picker popup for screen readers: a dialog holding the picker's controls.
-pub(crate) fn name_popup(r: &Response, name: &str) {
-    r.ctx.accesskit_node_builder(r.id, |node| {
+/// Names a picker popup for screen readers: a dialog holding the picker's controls. Called
+/// first thing inside the popup, on its own `Ui`: that is the node its controls hang under
+/// (since egui 0.37 the popup's response is another node, with nothing in it).
+pub(crate) fn name_popup(ui: &egui::Ui, name: &str) {
+    // Where the popup was last frame: a container has no place of its own in the tree.
+    let at = ui.ctx().memory(|m| m.area_rect(ui.layer_id().id));
+    let scale = f64::from(ui.ctx().pixels_per_point());
+    ui.ctx().accesskit_node_builder(ui.unique_id(), |node| {
         node.set_role(egui::accesskit::Role::Dialog);
         node.set_label(name);
+        if let Some(r) = at {
+            node.set_bounds(egui::accesskit::Rect { x0: f64::from(r.min.x) * scale, y0: f64::from(r.min.y) * scale, x1: f64::from(r.max.x) * scale, y1: f64::from(r.max.y) * scale });
+        }
     });
 }
 
