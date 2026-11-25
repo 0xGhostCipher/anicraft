@@ -137,6 +137,9 @@ If the status bar ever says "Autosave failed", save your work by hand; AniCraft 
 Preferences, shortcuts, recent files, recovery copies, your templates and your plug-ins all live
 in one settings folder. Its path is shown at the bottom of the Preferences window.
 
+A [portable copy](getting-started.md#portable-copies) keeps its settings in a `data` folder beside
+AniCraft. If that folder can't be written to, AniCraft uses the standard settings folder below.
+
 | System | Settings folder |
 |---|---|
 | Windows | `%APPDATA%\AniCraft` |
@@ -235,8 +238,9 @@ a report after opening. Motion tweens from Animate files are not imported yet. S
 
 ### Can it save back to `.fla`?
 
-No. AniCraft saves its own `.anicraft` format, and an opened Animate file comes in as a new,
-untitled document, so saving never overwrites the original.
+No. AniCraft saves its own `.anicraft` format. An opened Animate file keeps its name, marked
+as imported, but saving always asks for a new `.anicraft` name, so it never overwrites the
+original.
 
 ### Can it export SWF?
 

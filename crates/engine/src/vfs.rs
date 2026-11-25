@@ -287,6 +287,16 @@ pub fn is_dir(path: &Path) -> bool {
     mem(|m| m.is_dir(path)).unwrap_or_else(|| path.is_dir())
 }
 
+/// `path` with its `.` and `..` parts and links resolved (`std::fs::canonicalize`), for a path
+/// an agent may probe. In memory, and where it can't be resolved, `None`: the caller keeps the
+/// path it has.
+pub fn canonicalize(path: &Path) -> Option<PathBuf> {
+    if check(path, Access::Probe).is_err() || in_memory() {
+        return None;
+    }
+    std::fs::canonicalize(path).ok()
+}
+
 /// Folders in memory exist through their files, so this only checks the name there.
 pub fn create_dir_all(path: &Path) -> io::Result<()> {
     check(path, Access::Write)?;

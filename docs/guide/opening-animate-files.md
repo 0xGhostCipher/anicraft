@@ -12,8 +12,8 @@ structure and from observation. On a Mac, read **⌘** wherever this chapter say
 
 1. Choose **File › Open…** (**Ctrl+O**, **⌘O** on macOS).
 2. Pick a `.fla` file, or the `.xfl` file inside an XFL folder.
-3. AniCraft opens it as a new, untitled document, and the status bar says what came across and
-   what didn't.
+3. AniCraft opens it as a new document named after the file, and the status bar says what came
+   across and what didn't.
 
 Other ways in:
 
@@ -31,9 +31,12 @@ folder can't be opened there.
 
 ## Saving: your Animate file is never touched
 
-An opened Animate file comes in **untitled**. When you save, AniCraft asks for a new name and
-writes an `.anicraft` document, so the original `.fla` or XFL is never overwritten. The status
-bar reminds you: "Save to keep it as an AniCraft document."
+An opened Animate file keeps its name on its tab and in the window title, marked
+**Imported**, but it has no AniCraft file yet. When you save, AniCraft asks for a new name,
+suggesting one beside the original (`walk.fla` suggests `walk.anicraft` in the same folder),
+and writes an `.anicraft` document, so the original `.fla` or XFL is never overwritten. The
+status bar reminds you: "Save to keep it as an AniCraft document." Once saved, the tab shows
+the `.anicraft` name. Hover over an imported tab to see which file it came from.
 
 AniCraft doesn't save back to `.fla` or XFL.
 

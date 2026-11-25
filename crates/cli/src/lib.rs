@@ -138,7 +138,9 @@ pub const USAGE_EXIT: i32 = 2;
 
 /// The exit code for an error from [`run`].
 pub fn exit_code(error: &str) -> i32 {
-    if error.starts_with(ROOTS_REQUIRED)
+    let unknown_option = error.strip_prefix(UNKNOWN_OPTION).is_some_and(|rest| rest.split_whitespace().nth(1) == Some("option"));
+    if unknown_option
+        || error.starts_with(ROOTS_REQUIRED)
         || error.starts_with(NIGHTLY_PROTOCOL)
         || error.starts_with("--automation-")
         || error.starts_with("flag --automation-")
@@ -269,6 +271,41 @@ pub fn subcommand_usage(cmd: &str) -> Option<String> {
     (!out.is_empty()).then(|| format!("USAGE:{out}"))
 }
 
+/// The options a subcommand reads, beyond `--plugins`, which every one takes. `None` for a name
+/// that is no subcommand.
+fn options_of(cmd: &str) -> Option<&'static [&'static str]> {
+    Some(match cmd {
+        "render" => &["out", "frame", "scale"],
+        "render-seq" => &["out-dir", "from", "to", "scale"],
+        "gif" => &["out", "from", "to", "scale", "overwrite"],
+        "apng" | "webp" => &["out", "from", "to", "scale", "overwrite", "loop", "background"],
+        "export" => &["format", "out", "from", "to", "frame", "options", "overwrite"],
+        "run" | "exec" => &["save"],
+        "new" => &["out", "width", "height", "fps"],
+        "guide" => &["out", "limit", "json"],
+        "bench" => &["layers", "shapes", "frames", "check", "stroke", "stroke-file"],
+        "serve" => &["automation-read-root", "automation-write-root"],
+        "mcp" => &["automation-read-root", "automation-write-root", "bridge"],
+        "info" | "formats" | "commands" | "version" | "--version" | "-V" => &[],
+        _ => return None,
+    })
+}
+
+/// How the error starts when a subcommand is given an option it doesn't read.
+const UNKNOWN_OPTION: &str = "unknown ";
+
+/// Refuses an option the subcommand doesn't read, before anything is opened or written: a
+/// mistyped `--frmae 12` was dropped, and frame 1 written as if it had been asked for.
+fn check_options(cmd: &str, a: &Args) -> Result<(), String> {
+    let Some(known) = options_of(cmd) else { return Ok(()) };
+    match a.flags.iter().find(|(key, _)| key != "plugins" && !known.contains(&key.as_str())) {
+        Some((key, _)) => Err(format!("{UNKNOWN_OPTION}{cmd} option --{key}
+
+{}", subcommand_usage(cmd).unwrap_or_default())),
+        None => Ok(()),
+    }
+}
+
 /// Runs the CLI; returns the text to print on success.
 pub fn run(argv: &[String]) -> Result<String, String> {
     if let Some(argument) = nightly_protocol_argument(argv) {
@@ -287,6 +324,7 @@ pub fn run(argv: &[String]) -> Result<String, String> {
         return subcommand_usage(cmd).ok_or_else(|| format!("unknown subcommand '{cmd}'\n\n{USAGE}"));
     }
     let a = Args::parse(rest)?;
+    check_options(cmd, &a)?;
     let src = a.positional.first().map(String::as_str);
     match cmd.as_str() {
         // The release packaging smoke-tests every build with this (packaging/, ADR 0026).
@@ -533,7 +571,7 @@ fn export(a: &Args, src: Option<&str>) -> Result<String, String> {
         return Err(format!("no export format '{id}' (formats: {}; exporter plug-ins load with --plugins <folder>)", ids.join(", ")));
     };
     let (cmd, target, plugin) = (f["command"].as_str().unwrap_or(""), f["target"].as_str().unwrap_or("path"), f["plugin"] == true);
-    let mut p = json!({ target: out });
+    let mut p = json!({});
     let options: Option<Value> = a.flag("options").map(|t| serde_json::from_str(t).map_err(|e| format!("--options is not JSON: {e}"))).transpose()?;
     if plugin {
         p["format"] = json!(id);
@@ -547,6 +585,7 @@ fn export(a: &Args, src: Option<&str>) -> Result<String, String> {
     } else if options.is_some() {
         return Err("--options must be a JSON object".into());
     }
+    p[target] = json!(out);
     if matches!(id, "png" | "svg") {
         if let Some(f) = one_based(a, "frame")? {
             p["frame"] = json!(f);
@@ -839,14 +878,15 @@ pub fn serve_in<R: BufRead, W: Write>(s: &mut Session, roots: Option<&Arc<Roots>
             }
             Line::Text(l) => l,
         };
+        let line = line.trim_start_matches('\u{feff}');
         if line.trim().is_empty() {
             continue;
         }
-        if line.contains("\"quit\"") && serde_json::from_str::<Value>(&line).ok().and_then(|v| v.get("cmd").cloned()) == Some(json!("quit")) {
+        if line.contains("\"quit\"") && serde_json::from_str::<Value>(line).ok().and_then(|v| v.get("cmd").cloned()) == Some(json!("quit")) {
             writeln!(out, "{}", json!({"ok": true, "bye": true}))?;
             break;
         }
-        let resp = handle_request_in(s, roots, &line);
+        let resp = handle_request_in(s, roots, line);
         writeln!(out, "{resp}")?;
         out.flush()?;
     }
@@ -1004,7 +1044,7 @@ pub(crate) mod tests {
     #[test]
     fn serve_round_trip() {
         let mut s = Session::default();
-        let input = b"\xef\xbb\xbf{\"id\":1,\"cmd\":\"draw.rect\",\"params\":{\"x\":1,\"y\":1,\"w\":5,\"h\":5}}\nnot json\n{\"id\":3,\"cmd\":\"nope\"}\n{\"cmd\":\"quit\"}\n{\"id\":4,\"cmd\":\"edit.undo\"}\n";
+        let input = b"\xef\xbb\xbf{\"id\":1,\"cmd\":\"draw.rect\",\"params\":{\"x\":1,\"y\":1,\"w\":5,\"h\":5}}\nnot json\n{\"id\":3,\"cmd\":\"nope\"}\n\xef\xbb\xbf{\"cmd\":\"quit\"}\n{\"id\":4,\"cmd\":\"edit.undo\"}\n";
         let mut out = Vec::new();
         serve(&mut s, &input[..], &mut out).unwrap();
         let lines: Vec<Value> = String::from_utf8(out).unwrap().lines().map(|l| serde_json::from_str(l).unwrap()).collect();
@@ -1045,6 +1085,49 @@ pub(crate) mod tests {
         for flag in ["--version", "-V", "version"] {
             assert_eq!(run(&[flag.to_string()]).unwrap(), format!("anicraft-cli {}", env!("CARGO_PKG_VERSION")));
         }
+    }
+
+    #[test]
+    fn render_rejects_unknown_options_before_opening_the_document() {
+        let argv = ["render", "missing.anicraft", "--frmae", "12"].map(str::to_owned);
+        let e = run(&argv).unwrap_err();
+        assert!(e.starts_with("unknown render option --frmae
+"), "{e}");
+        assert!(e.contains("[--frame N]"), "the error shows what render takes: {e}");
+        assert_eq!(exit_code(&e), USAGE_EXIT);
+    }
+
+    /// Every subcommand refuses an option it would drop, and none refuses one its usage names.
+    #[test]
+    fn every_subcommand_refuses_an_option_it_does_not_read() {
+        let named = |cmd: &str| -> Vec<String> {
+            let usage = subcommand_usage(cmd).unwrap_or_else(|| panic!("{cmd} has a usage entry"));
+            // `--release` is cargo's, in the note on how to run the benchmark.
+            let mut found: Vec<String> = Vec::new();
+            // The entry lines and the bracketed lines under them; the notes beside them are prose.
+            let syntax = usage.lines().filter(|l| l.starts_with("  anicraft-cli ") || l.trim_start().starts_with("[--"));
+            for word in syntax.flat_map(|l| l.split(|c: char| !(c.is_ascii_alphanumeric() || c == '-'))) {
+                if let Some(name) = word.strip_prefix("--").filter(|n| !n.is_empty() && !matches!(*n, "sample" | "plugins" | "version" | "release"))
+                    && !found.iter().any(|f| f == name)
+                {
+                    found.push(name.to_string());
+                }
+            }
+            found
+        };
+        for cmd in ["info", "render", "render-seq", "gif", "apng", "webp", "export", "formats", "commands", "run", "exec", "new", "guide", "bench", "serve", "mcp"] {
+            let known = options_of(cmd).unwrap_or_else(|| panic!("{cmd} is a subcommand"));
+            for name in named(cmd) {
+                assert!(known.contains(&name.as_str()), "{cmd} --{name} is in the usage but would be refused");
+            }
+            for name in known {
+                assert!(named(cmd).iter().any(|n| n == name), "{cmd} takes --{name}, which its usage doesn't name");
+            }
+            let argv = [cmd, "--no-such-option", "1", "--plugins", "nowhere"].map(str::to_owned);
+            let e = run(&argv).unwrap_err();
+            assert!(e.starts_with(&format!("unknown {cmd} option --no-such-option")), "{cmd}: {e}");
+        }
+        assert!(run(&["nope".to_string(), "--x".into(), "1".into()]).unwrap_err().starts_with("unknown subcommand"), "a wrong name is still the error for a wrong name");
     }
 
     #[test]
@@ -1200,6 +1283,26 @@ pub(crate) mod tests {
         let err = run(&argv(&["export", "--sample", "--format", "org.test.count", "--out", out.to_str().unwrap()])).unwrap_err();
         assert!(err.contains("lottie") && err.contains("--plugins"), "{err}");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn export_prefers_out_over_a_destination_in_options() {
+        use anicraft_engine::vfs;
+
+        vfs::use_memory();
+        let export = |format: &str, out: &str, options: &str| {
+            let argv = ["export", "--sample", "--format", format, "--out", out, "--options", options].map(str::to_string);
+            serde_json::from_str::<Value>(&run(&argv).unwrap()).unwrap()
+        };
+        let written_paths = || vfs::take_written().into_iter().map(|(path, _)| path).collect::<Vec<_>>();
+
+        let svg = export("svg", "chosen.svg", r#"{"path":"preset.svg","frame":2}"#);
+        assert_eq!(svg["frame"], 2);
+        assert_eq!(written_paths(), [PathBuf::from("chosen.svg")]);
+
+        let sequence = export("png-sequence", "chosen-frames", r#"{"dir":"preset-frames","from":0,"to":0,"scale":0.05}"#);
+        assert_eq!(sequence["frames"], 1);
+        assert_eq!(written_paths(), [PathBuf::from("chosen-frames").join("frame_00001.png")]);
     }
 
     #[test]
