@@ -68,6 +68,82 @@ fn in_group(mut i: DisplayItem, g: u32) -> DisplayItem {
     i
 }
 
+#[test]
+fn a_scratch_fence_timeout_falls_back_and_keeps_the_timed_out_submission_charged() {
+    let mut flight = FilteredFlight::new(100);
+    flight.submitted(1, 20);
+    flight.submitted(2, 50);
+    let mut waited = Vec::new();
+    let result = flight.make_room(70, |index| {
+        waited.push(*index);
+        if *index == 1 { Ok(()) } else { Err(wgpu::PollError::Timeout) }
+    });
+    assert!(matches!(result, Err(GpuError::TooLarge(_))));
+    assert_eq!(waited, [1, 2]);
+    assert_eq!(flight.bytes, 50, "only the completed fence releases its charge");
+
+    waited.clear();
+    flight.make_room(70, |index| {
+        waited.push(*index);
+        Ok(())
+    }).unwrap();
+    assert_eq!(waited, [2], "a later render retries the outstanding fence");
+    assert_eq!(flight.bytes, 0);
+}
+
+#[test]
+fn an_oom_with_a_device_error_lowers_the_budget_and_reports_the_device_error() {
+    fn cause() -> wgpu::ErrorSource {
+        Box::new(std::io::Error::other("test GPU error"))
+    }
+    let oom = || wgpu::Error::OutOfMemory { source: cause() };
+    for error in [
+        wgpu::Error::Validation { source: cause(), description: "invalid binding".into() },
+        wgpu::Error::Internal { source: cause(), description: "internal error".into() },
+    ] {
+        let description = describe(&error);
+        let flight = Mutex::new(FilteredFlight::<u32>::new(SHARED_FILTER_BYTES));
+        assert!(matches!(
+            render_scope_result((Some(oom()), Some(error)), &flight),
+            Err(GpuError::Device(message)) if message == description
+        ));
+        let mut flight = flight.into_inner().unwrap();
+        assert!(matches!(
+            flight.make_room(SHARED_FILTER_BYTES, |_| panic!("an over-budget render must fall back before waiting")),
+            Err(GpuError::TooLarge(_))
+        ));
+    }
+
+    let flight = Mutex::new(FilteredFlight::<u32>::new(DISCRETE_FILTER_BYTES));
+    assert!(matches!(render_scope_result((Some(oom()), None), &flight), Err(GpuError::TooLarge(_))));
+    assert!(flight.into_inner().unwrap().limit < DISCRETE_FILTER_BYTES);
+}
+
+#[test]
+fn filtered_scratch_counts_the_extra_allocations_for_higher_filter_quality() {
+    use anicraft_doc::{Filter, FilterParam};
+
+    let v = view(24, 24, None);
+    let bin = || binning::bin(&prepare_scene(&list(vec![]), &v).unwrap().0, v.width, v.height).unwrap();
+    let mut job = Job { binned: bin(), layers: vec![] };
+    let cost = |job: &Job| {
+        let mut cost = Cost::default();
+        job.cost(&mut cost);
+        cost.filtered_scratch()
+    };
+    assert_eq!(cost(&job), 0, "unfiltered frames bypass the scratch allowance");
+    let mut shadow = Filter::new("drop_shadow").unwrap();
+    shadow.set_param(FilterParam::Quality, 1.0);
+    job.layers.push(LayerJob {
+        at: 0, job: Box::new(Job { binned: bin(), layers: vec![] }), view: v,
+        ops: vec![anicraft_render::filters::resolve(&shadow, 1.0)],
+    });
+    let low_quality = cost(&job);
+    shadow.set_param(FilterParam::Quality, 3.0);
+    job.layers[0].ops[0] = anicraft_render::filters::resolve(&shadow, 1.0);
+    assert!(cost(&job) > low_quality, "extra passes have scratch costs at the same layer size");
+}
+
 /// Analytic scenes: each stresses one part of the coverage or paint model.
 fn scenes() -> Vec<(&'static str, DisplayList, View)> {
     let red = Rgba::new(0.9, 0.1, 0.1, 1.0);
