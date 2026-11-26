@@ -182,6 +182,18 @@ fn fit_in_window_shows_the_whole_large_stage_below_the_manual_zoom_limit() {
         assert_eq!(app.zoom_text.is_some(), editing, "the field receives and then loses focus");
         assert_eq!(app.view.zoom, fitted, "leaving the unedited field keeps the fitted zoom");
     }
+
+    for event in [Event::PointerMoved(field.center()), button(field.center(), true, Modifiers::NONE), button(field.center(), false, Modifiers::NONE)] {
+        sized_frame(&ctx, &mut app, size, vec![event], Modifiers::NONE);
+    }
+    assert!(app.zoom_text.as_ref().is_some_and(|draft| !draft.edited), "the field is focused and still untouched");
+    for pressed in [true, false] {
+        let event = Event::Key { key: egui::Key::Enter, physical_key: None, pressed, repeat: false, modifiers: Modifiers::NONE };
+        sized_frame(&ctx, &mut app, size, vec![event], Modifiers::NONE);
+    }
+    assert!(app.zoom_text.is_none(), "Enter submits the field");
+    assert!(!app.view.fit, "Enter changes fit to manual zoom");
+    assert!((app.view.zoom * scale - 0.05).abs() < 1e-6, "the submitted value uses the manual 5% minimum");
 }
 
 #[test]

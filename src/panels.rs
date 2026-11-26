@@ -426,7 +426,7 @@ pub fn edit_bar(app: &mut App, ui: &mut egui::Ui) {
             crate::icons::paint(ui.painter(), Rect::from_center_size(arrow.response.rect.center(), vec2(12.0, 12.0)), Icon::ChevronDown, if arrow.response.hovered() { T.icon_hot } else { T.icon });
             arrow.response.set_name(tr!("Zoom presets"));
             ui.ctx().data_mut(|d| d.insert_temp(egui::Id::unique("zoom_arrow"), arrow.response.rect));
-            // The percentage itself is typed here: Enter or focus loss applies edits.
+            // Enter submits the displayed percentage; other focus loss applies only edits.
             let was_editing = app.zoom_text.is_some();
             let mut draft = app.zoom_text.take().unwrap_or_else(|| ZoomDraft { text: format!("{:>4.0}%", z * 100.0), edited: false });
             let field = with_type(ui, Type::Data, |ui| {
@@ -438,11 +438,11 @@ pub fn edit_bar(app: &mut App, ui: &mut egui::Ui) {
                 draft.text = format!("{:.0}", z * 100.0);
             }
             draft.edited |= field.changed();
-            let enter = ui.input(|i| i.key_pressed(egui::Key::Enter));
-            if field.lost_focus() || (enter && field.has_focus()) {
+            let enter = (field.has_focus() || (was_editing && field.lost_focus())) && ui.input(|i| i.key_pressed(egui::Key::Enter));
+            if field.lost_focus() || enter {
                 let typed = draft.text.trim();
                 let typed = typed.strip_suffix('%').unwrap_or(typed).trim();
-                if draft.edited
+                if (draft.edited || enter)
                     && let Ok(pct) = typed.parse::<f32>()
                     && pct.is_finite()
                 {
