@@ -240,8 +240,8 @@ fn an_output_never_replaces_its_input_unless_in_place_is_given() {
 }
 
 /// A path that is not valid Unicode reaches the command: a document is read from it, and the
-/// engine's JSON-valued commands say so by name.
-#[cfg(unix)]
+/// engine's JSON-valued commands say so by name. (macOS refuses such a file name, so it runs elsewhere.)
+#[cfg(all(unix, not(target_os = "macos")))]
 #[test]
 fn a_path_that_is_not_unicode_is_a_path_not_a_panic() {
     use std::ffi::OsString;
