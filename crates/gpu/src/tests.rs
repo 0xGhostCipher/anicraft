@@ -1117,6 +1117,49 @@ fn filtered_group(filters: Vec<anicraft_doc::Filter>) -> Group {
     Group { parent: None, alpha: 1.0, blend: BlendMode::Normal, filters: Arc::from(filters), clip: None }
 }
 
+#[test]
+fn failed_filtered_renders_keep_uploads_charged_until_the_queue_fence() {
+    let g = match GpuRenderer::new().or_else(|_| GpuRenderer::software()) {
+        Ok(g) => g,
+        Err(e) => {
+            eprintln!("skipping the failed filtered render test: {e}");
+            return;
+        }
+    };
+    let oversized = Arc::new(anicraft_doc::Pixels {
+        width: g.limits.max_texture_dimension_2d + 1,
+        height: 1,
+        rgba: Vec::new(),
+    });
+    let mut items = symbol_items(0);
+    items.push(bitmap_item(Path::rect(52.0, 6.0, 10.0, 10.0), &oversized, true, Affine::IDENTITY));
+    let mut dl = list(items);
+    dl.groups.push(filtered_group(vec![anicraft_doc::Filter::Blur { blur_x: 4.0, blur_y: 4.0, quality: 1 }]));
+    let view = view(64, 64, None);
+    let (job, _, _, _) = g.prepare(&dl, &view, Binning::Cpu).unwrap();
+    assert!(!job.layers.is_empty(), "the filtered child must be recorded before the oversized bitmap");
+    eprintln!("failed filtered render test on {}", g.adapter);
+
+    for texture in [true, false] {
+        let result = if texture {
+            g.render_texture_with(&dl, &view, Binning::Cpu).map(|_| ())
+        } else {
+            g.render_with(&dl, &view, Output::Premul8, Binning::Cpu).map(|_| ())
+        };
+        assert!(matches!(result, Err(GpuError::NeedsFull(NeedsFull::Bitmaps))), "{result:?}");
+        assert!(g.broken().is_none());
+
+        let mut flight = g.filtered_flight.lock().unwrap();
+        let limit = flight.limit;
+        assert!(matches!(flight.make_room(limit, |_| Err(wgpu::PollError::Timeout)), Err(GpuError::TooLarge(_))),
+            "a later render must wait for the abandoned frame's uploads");
+        flight.make_room(limit, |index| g.device.poll(wgpu::PollType::Wait {
+            submission_index: Some(index.clone()),
+            timeout: Some(std::time::Duration::from_secs(2)),
+        }).map(|_| ())).unwrap();
+    }
+}
+
 /// Every filter, its sides and switches, on a small symbol: a red square with a translucent
 /// blue circle over it.
 fn filters_to_test() -> Vec<(&'static str, anicraft_doc::Filter)> {

@@ -692,9 +692,8 @@ impl GpuRenderer {
             let recorded = self.record(&mut enc, &job, view, Output::Premul8, Target::Texture(&tex_view));
             // Pop the scopes whatever happened while recording (they are this thread's).
             if let Err(e) = recorded {
-                drop((enc, tex_view, texture, reservation));
-                self.pop(scopes)?;
-                return Err(e);
+                drop((enc, tex_view, texture));
+                return Err(self.abort_recording(scopes, reservation, e));
             }
             self.submit_frame(enc.finish(), reservation);
             self.pop(scopes)?;
@@ -716,7 +715,7 @@ impl GpuRenderer {
                 wgpu::TexelCopyBufferInfo { buffer: &read, layout: wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(row), rows_per_image: Some(t.height) } },
                 wgpu::Extent3d { width: t.width, height: t.height, depth_or_array_layers: 1 },
             );
-            self.submit(enc.finish());
+            self.submit([enc.finish()]);
             let bytes = self.map(&read, scopes)?;
             let mut out = Vec::with_capacity(t.width as usize * t.height as usize * 4);
             for r in bytes.chunks(row as usize) {
@@ -743,18 +742,38 @@ impl GpuRenderer {
     }
 
     fn submit_frame(&self, commands: wgpu::CommandBuffer, reservation: Option<FilterReservation<'_>>) {
-        let index = self.submit(commands);
+        let index = self.submit([commands]);
         if let Some(mut reservation) = reservation {
             reservation.flight.submitted(index, reservation.bytes);
         }
     }
 
+    fn abort_recording(&self, scopes: Scopes, reservation: Option<FilterReservation<'_>>, error: GpuError) -> GpuError {
+        let recording_errors = scopes.pop_split();
+        if let Some(mut reservation) = reservation
+            && self.broken().is_none()
+        {
+            // Queue uploads survive dropping the encoder. This fence covers them
+            // even if another caller submitted them first.
+            let flush_scopes = Scopes::push(&self.device);
+            let index = self.submit([]);
+            if let Some(e) = flush_scopes.pop() {
+                // A failed submit does not give us a usable fence. Stop admitting
+                // work, but keep the recording's error as this frame's result.
+                self.mark_broken(&format!("could not submit pending GPU uploads: {}", describe(&e)));
+            } else {
+                reservation.flight.submitted(index, reservation.bytes);
+            }
+        }
+        render_scope_result(recording_errors, &self.filtered_flight).err().unwrap_or(error)
+    }
+
     /// Hands finished commands to the queue: on a window's device only while its gate is open
     /// (a window can't reconfigure its surface while work is being submitted, ADR 0105).
-    fn submit(&self, commands: wgpu::CommandBuffer) -> wgpu::SubmissionIndex {
+    fn submit<const N: usize>(&self, commands: [wgpu::CommandBuffer; N]) -> wgpu::SubmissionIndex {
         match &self.gate {
-            Some(gate) => gate.run(|| self.queue.submit([commands])),
-            None => self.queue.submit([commands]),
+            Some(gate) => gate.run(|| self.queue.submit(commands)),
+            None => self.queue.submit(commands),
         }
     }
 
@@ -970,9 +989,8 @@ impl GpuRenderer {
         let read = self.device.create_buffer(&wgpu::BufferDescriptor { label: Some("readback"), size: out_bytes, usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false });
         let mut enc = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("anicraft-fine") });
         if let Err(e) = self.record(&mut enc, job, view, output, Target::Buffer(&obuf, out_bytes)) {
-            drop((enc, obuf, read, reservation));
-            self.pop(scopes)?;
-            return Err(e);
+            drop((enc, obuf, read));
+            return Err(self.abort_recording(scopes, reservation, e));
         }
         enc.copy_buffer_to_buffer(&obuf, 0, &read, 0, out_bytes);
         self.submit_frame(enc.finish(), reservation);
@@ -1006,7 +1024,7 @@ impl GpuRenderer {
         let read = self.device.create_buffer(&wgpu::BufferDescriptor { label: Some("readback"), size: isize + gsize, usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false });
         enc.copy_buffer_to_buffer(&ibuf, 0, &read, 0, isize);
         enc.copy_buffer_to_buffer(&gbuf, 0, &read, isize, gsize);
-        self.submit(enc.finish());
+        self.submit([enc.finish()]);
         let bytes = self.map(&read, scopes)?;
         let words: Vec<u32> = bytes.as_chunks::<4>().0.iter().map(|w| u32::from_le_bytes(*w)).collect();
         let n = isize as usize / 4;
