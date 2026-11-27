@@ -1126,37 +1126,69 @@ fn failed_filtered_renders_keep_uploads_charged_until_the_queue_fence() {
             return;
         }
     };
+    let wait = |index: &wgpu::SubmissionIndex| g.device.poll(wgpu::PollType::Wait {
+        submission_index: Some(index.clone()),
+        timeout: Some(std::time::Duration::from_secs(2)),
+    }).map(|_| ());
+    // Only the failed render should have a charge when we test the fence.
+    {
+        let mut flight = g.filtered_flight.lock().unwrap();
+        let limit = flight.limit;
+        flight.make_room(limit, wait).unwrap();
+    }
     let oversized = Arc::new(anicraft_doc::Pixels {
         width: g.limits.max_texture_dimension_2d + 1,
         height: 1,
         rgba: Vec::new(),
     });
-    let mut items = symbol_items(0);
-    items.push(bitmap_item(Path::rect(52.0, 6.0, 10.0, 10.0), &oversized, true, Affine::IDENTITY));
-    let mut dl = list(items);
-    dl.groups.push(filtered_group(vec![anicraft_doc::Filter::Blur { blur_x: 4.0, blur_y: 4.0, quality: 1 }]));
     let view = view(64, 64, None);
-    let (job, _, _, _) = g.prepare(&dl, &view, Binning::Cpu).unwrap();
-    assert!(!job.layers.is_empty(), "the filtered child must be recorded before the oversized bitmap");
-    eprintln!("failed filtered render test on {}", g.adapter);
+    for (binning, texture) in [(Binning::Gpu, false), (Binning::Cpu, true), (Binning::Cpu, false)] {
+        if matches!(binning, Binning::Gpu) && let Some(reason) = g.gpu_binning_off() {
+            eprintln!("skipping GPU binning for the failed filtered render test: {reason}");
+            continue;
+        }
+        let target = if texture { "texture" } else { "readback" };
+        eprintln!("failed filtered render test on {} ({binning:?}, {target})", g.adapter);
+        // A fresh bitmap makes each child queue a texture write before the parent rejects
+        // its oversized bitmap, even when the child uses CPU binning.
+        let bitmap = pixels(1, 1, 1);
+        let mut items = symbol_items(0);
+        items.push(in_group(bitmap_item(Path::rect(16.0, 16.0, 8.0, 8.0), &bitmap, true, Affine::IDENTITY), 0));
+        let mut dl = list(items.clone());
+        dl.items.push(bitmap_item(Path::rect(52.0, 6.0, 10.0, 10.0), &oversized, true, Affine::IDENTITY));
+        dl.groups.push(filtered_group(vec![anicraft_doc::Filter::Blur { blur_x: 4.0, blur_y: 4.0, quality: 1 }]));
+        let (mut job, _, _, _) = g.prepare(&dl, &view, Binning::Cpu).unwrap();
+        let [child] = job.layers.as_mut_slice() else { panic!("expected one filtered child") };
 
-    for texture in [true, false] {
-        let result = if texture {
-            g.render_texture_with(&dl, &view, Binning::Cpu).map(|_| ())
+        let (cached, _) = g.cached_images();
+        let result = if matches!(binning, Binning::Gpu) {
+            // Filter preparation keeps the neutralized group on its fills, which forces CPU
+            // binning. Plan the same child artwork without the group to exercise GPU uploads
+            // through the real readback recording and abort path.
+            for item in &mut items {
+                item.group = None;
+            }
+            *child.job = g.prepare(&list(items), &child.view, binning).unwrap().0;
+            let binned = &child.job.binned;
+            let plan = binned.gpu.as_ref().expect("the filtered child must have a GPU binning plan");
+            assert!(!plan.headers.is_empty() && !binned.op_heads.is_empty(), "the child must upload both index ranges");
+            let mut cost = Cost::default();
+            job.cost(&mut cost);
+            g.run_readback(&job, &view, Output::Premul8, cost.filtered_scratch()).map(|_| ())
+        } else if texture {
+            g.render_texture_with(&dl, &view, binning).map(|_| ())
         } else {
-            g.render_with(&dl, &view, Output::Premul8, Binning::Cpu).map(|_| ())
+            g.render_with(&dl, &view, Output::Premul8, binning).map(|_| ())
         };
         assert!(matches!(result, Err(GpuError::NeedsFull(NeedsFull::Bitmaps))), "{result:?}");
+        assert_eq!(g.cached_images().0, cached + 1, "the child's bitmap must be uploaded before recording fails");
         assert!(g.broken().is_none());
 
         let mut flight = g.filtered_flight.lock().unwrap();
         let limit = flight.limit;
         assert!(matches!(flight.make_room(limit, |_| Err(wgpu::PollError::Timeout)), Err(GpuError::TooLarge(_))),
-            "a later render must wait for the abandoned frame's uploads");
-        flight.make_room(limit, |index| g.device.poll(wgpu::PollType::Wait {
-            submission_index: Some(index.clone()),
-            timeout: Some(std::time::Duration::from_secs(2)),
-        }).map(|_| ())).unwrap();
+            "{binning:?}, {target}: a later render must wait for the abandoned frame's uploads");
+        flight.make_room(limit, wait).unwrap();
     }
 }
 
