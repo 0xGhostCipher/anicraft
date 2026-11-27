@@ -777,11 +777,14 @@ impl RenderService {
     /// back into the cache afterwards.
     pub fn forget_pictures(&self) {
         {
+            // The cache is cleared while the queue is held, so the worker takes a batch either
+            // before the clear (and sees the older count, throwing the batch away) or after it
+            // (and finds the queue empty). Lock order: queue, then cache.
             let mut q = self.queue();
             q.urgent.clear();
             q.prefetch.clear();
+            self.cache().clear();
         }
-        self.cache().clear();
         *self.shared.scene.lock().unwrap_or_else(PoisonError::into_inner) = None;
     }
 
@@ -824,7 +827,7 @@ fn worker_loop(s: &Shared) {
     let mut scenes = Scenes::new();
     loop {
         // Take a whole batch: urgent first, topped up with prefetch work.
-        let jobs: Vec<FrameJob> = {
+        let (jobs, cleared): (Vec<FrameJob>, u64) = {
             let mut q = s.queue.lock().unwrap_or_else(PoisonError::into_inner);
             loop {
                 if q.shutdown {
@@ -844,15 +847,18 @@ fn worker_loop(s: &Shared) {
                     for j in &batch {
                         q.busy.insert(j.key);
                     }
-                    break batch;
+                    // Read while the queue is held, as `forget_pictures` clears the cache: a
+                    // batch taken before a clear is always seen as older than it.
+                    let cleared = s.cache.lock().unwrap_or_else(PoisonError::into_inner).cleared;
+                    break (batch, cleared);
                 }
                 q = s.wake.wait(q).unwrap_or_else(PoisonError::into_inner);
             }
         };
-        let (todo, cleared): (Vec<FrameJob>, u64) = {
+        let todo: Vec<FrameJob> = {
             let cache = s.cache.lock().unwrap_or_else(PoisonError::into_inner);
             // Not what is cached already, nor what the cache would not keep (its set went).
-            (jobs.iter().filter(|j| !cache.contains(j.key) && cache.keeps(j.set)).cloned().collect(), cache.cleared)
+            jobs.iter().filter(|j| !cache.contains(j.key) && cache.keeps(j.set)).cloned().collect()
         };
         let slot = s.raster.lock().unwrap_or_else(PoisonError::into_inner).clone();
         let (imgs, evaluated) = render_batch_from(&todo, &slot, &scenes);
