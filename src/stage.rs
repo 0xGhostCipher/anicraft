@@ -1198,20 +1198,9 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
         };
         if ready < keys.len() {
             let view_rect = [(vis.min.x - st_origin.x) / st_zoom, (vis.min.y - st_origin.y) / st_zoom, (vis.max.x - st_origin.x) / st_zoom, (vis.max.y - st_origin.y) / st_zoom];
-            let overlaps = |a: &[f32; 4], b: &[f32; 4]| a[0] < b[2] && a[2] > b[0] && a[1] < b[3] && a[3] > b[1];
-            let mut stale_opaque = Vec::new();
-            if bg.is_some_and(|color| color.a >= 1.0) {
-                stale_opaque.extend(tiles.iter().filter(|t| t.opaque && !keys.contains(&t.key) && overlaps(&t.rect, &view_rect)));
-                stale_opaque.sort_by_key(|t| t.used);
-            }
-            // Scaled opaque placeholders can cover gaps inside the current stage.
-            let stale_opaque = &stale_opaque[stale_opaque.len().saturating_sub(96)..];
-            let stage_painter = painter.with_clip_rect(stage_rect);
-            for t in stale_opaque {
-                paint_tile(&stage_painter, t);
-            }
+            let overlaps_view = |r: &[f32; 4]| r[0] < view_rect[2] && r[2] > view_rect[0] && r[1] < view_rect[3] && r[3] > view_rect[1];
             let mut scaled_transparent: Vec<_> = if ready == 0 {
-                tiles.iter().filter(|t| !t.opaque && t.scale != z && overlaps(&t.rect, &view_rect)).collect()
+                tiles.iter().filter(|t| !t.opaque && t.scale != z && overlaps_view(&t.rect)).collect()
             } else {
                 Vec::new()
             };
@@ -1225,15 +1214,24 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                     paint_tile(&clipped, t);
                 }
             } else {
-                // Fill missing rectangles once. An opaque fallback already painted over
-                // an interior rectangle takes precedence over its transparent candidate.
+                // Fill missing rectangles once. A ready transparent tile cannot hide stale
+                // pixels beneath it, so only missing tiles can use these placeholders.
                 for (spec, job) in &jobs {
                     if !tiles.iter().any(|t| t.key == job.key)
-                        && (!spec.opaque() || !stale_opaque.iter().any(|t| overlaps(&t.rect, &spec.rect)))
                         && let Some(old) = tiles.iter().filter(|t| !t.opaque && t.rect == spec.rect).max_by_key(|t| t.used)
                     {
                         paint_tile(&painter, old);
                     }
+                }
+            }
+            if bg.is_some_and(|color| color.a >= 1.0) {
+                // Opaque fallbacks cover transparent placeholders only where they overlap.
+                // Keep them inside the stage, clear of any ready transparent pasteboard tiles.
+                let stage_painter = painter.with_clip_rect(stage_rect);
+                let mut stale_opaque: Vec<_> = tiles.iter().filter(|t| t.opaque && !keys.contains(&t.key) && overlaps_view(&t.rect)).collect();
+                stale_opaque.sort_by_key(|t| t.used);
+                for t in stale_opaque.iter().rev().take(96).rev() {
+                    paint_tile(&stage_painter, t);
                 }
             }
         }
@@ -5560,6 +5558,88 @@ mod pasteboard_tests {
         assert!(current.opaque);
         assert_eq!(draws(&partial, current.tex.id()), 1);
         assert_eq!(draws(&partial, old_id) + draws(&partial, duplicate_id), 0, "a ready replacement removes both old candidates");
+    }
+
+    #[test]
+    fn ordinary_stage_composites_pixels_across_partial_fallback_overlap() {
+        let (clear, red, green, blue, white) = (Color32::TRANSPARENT, Color32::RED, Color32::GREEN, Color32::BLUE, Color32::WHITE);
+        for (label, background, opaque_count, replacement, expected) in [
+            ("partial opaque", BG, 1, false, [green, red, red, red]),
+            ("multiple opaque", BG, 2, false, [green, blue, red, red]),
+            ("complete opaque", BG, 4, false, [green, blue, green, blue]),
+            ("ready opaque", BG, 2, true, [white; 4]),
+            ("transparent background", Rgba { a: 0.0, ..BG }, 2, false, [red; 4]),
+            ("ready transparent", Rgba { a: 0.0, ..BG }, 2, true, [blue, clear, clear, clear]),
+        ] {
+            let ctx = egui::Context::default();
+            ctx.options_mut(|o| o.max_passes = std::num::NonZeroUsize::MIN);
+            let mut session = anicraft_engine::Session::default();
+            session.doc.stage.height = 1280;
+            session.doc.stage.background = background;
+            let mut app = App::with_context(&ctx, session, Some(std::path::PathBuf::from("unused.png")));
+            app.prefs.stage_renderer = crate::prefs::StageRenderer::Cpu;
+            app.view.fit = false;
+            app.view.zoom = 0.5;
+            app.view.clip_to_stage = true;
+            // Seed the textures left by an incomplete grid-under zoom. A frame with changed
+            // scale skips render requests, so readiness depends only on the textures we install.
+            app.stage_cache.last_scale = Some(1.0);
+            let mut cache_tile = |key, spec: &TileSpec, pixels: Vec<Color32>| {
+                let size = if pixels.len() == 1 { [1, 1] } else { [2, 2] };
+                let tex = ctx.load_texture("stage overlap fixture", egui::ColorImage::new(size, pixels), egui::TextureOptions::NEAREST);
+                app.stage_cache.tiles.push(TileTex {
+                    key, set: 0, rect: spec.rect, scale: spec.view.transform.m[0], opaque: spec.opaque(),
+                    tex: TileImage::Uploaded(tex), used: key,
+                });
+            };
+            let old = tiles_for(0.5, (640, 640), [0.0, 0.0, 512.0, 512.0], 0, None, false).remove(0);
+            cache_tile(1, &old, vec![red]);
+            // Each old opaque texture covers a quarter of the matching transparent tile.
+            for (i, (x, y, color)) in [(0.0, 0.0, green), (512.0, 0.0, blue), (0.0, 512.0, green), (512.0, 512.0, blue)].into_iter().take(opaque_count).enumerate() {
+                let opaque = tiles_for(1.0, (1280, 1280), [x, y, x + 512.0, y + 512.0], 0, Some(BG), false).remove(0);
+                cache_tile(i as u64 + 2, &opaque, vec![color]);
+            }
+            if replacement {
+                let current = tiles_for(0.5, (640, 640), [0.0, 0.0, 512.0, 512.0], 0, Some(background), false).remove(0);
+                let pic = app.s.stage_picture();
+                let job = make_job_for(0, pic.state, &pic.doc, pic.frame, current.view, None);
+                let pixels = if current.opaque() { vec![white] } else { vec![blue, clear, clear, clear] };
+                cache_tile(job.key, &current, pixels);
+            }
+
+            let input = egui::RawInput { screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(900.0, 900.0))), ..Default::default() };
+            let mut out = ctx.run_ui(input, |ui| show(&mut app, ui));
+            let top_left = app.stage_cache.canvas.center() - vec2(320.0, 320.0);
+            let origin = pos2(top_left.x.round(), top_left.y.round());
+            // Composite the stage texture meshes at four device-pixel centres. The painter
+            // maps the full texture onto each mesh, and the fixture texels are solid or clear.
+            let actual = [vec2(64.5, 64.5), vec2(320.5, 64.5), vec2(64.5, 320.5), vec2(320.5, 320.5)].map(|offset| {
+                let point = origin + offset;
+                let mut pixel = clear;
+                for shape in &out.shapes {
+                    if !shape.clip_rect.contains(point) {
+                        continue;
+                    }
+                    let egui::Shape::Mesh(mesh) = &shape.shape else { continue };
+                    let bounds = mesh.calc_bounds();
+                    if !bounds.contains(point) || !app.stage_cache.tiles.iter().any(|t| t.tex.id() == mesh.texture_id) {
+                        continue;
+                    }
+                    let delta = &out.textures_delta.set[&mesh.texture_id][0];
+                    let egui::ImageData::Color(image) = &delta.image;
+                    let x = ((point.x - bounds.min.x) / bounds.width() * image.width() as f32) as usize;
+                    let y = ((point.y - bounds.min.y) / bounds.height() * image.height() as f32) as usize;
+                    let texel = image[(x, y)];
+                    if texel.is_opaque() {
+                        pixel = texel;
+                    }
+                }
+                pixel
+            });
+            out.textures_delta.clear();
+            assert!(matches!(app.stage_cache.ready, (ready, needed) if ready == usize::from(replacement) && needed > 1));
+            assert_eq!(actual, expected, "{label} tile pixels");
+        }
     }
 
 
