@@ -10,8 +10,10 @@ entries between here and the `.fla` import are the last changes before the relea
 
 * **`anicraft-cli` follows RFC-0018** (#662, #665; storytold/craft-contrib#95): the same exit codes,
   help, errors, completions and man pages as the other Craft CLIs.
-  * **Scripts to check.** A usage error (an unknown flag, a bad number, malformed JSON) now exits 2
-    with the usage on stderr, before anything is opened or written; it was 1, or silently ignored.
+  * **Scripts to check.** A usage error (an unknown flag, a bad number, malformed JSON in `--options`
+    or in `exec`'s parameters) now exits 2 with the usage on stderr, before anything is opened or
+    written; it was 1, or silently ignored. A malformed script file given to `run` still exits 1,
+    after the document is opened.
     A flag the subcommand does not take is refused instead of dropped, a flag given twice is
     refused, and `anicraft-cli` with no arguments prints the help on stderr and exits 2. The
     `version` word is gone; `--version` and `-V` work everywhere.
